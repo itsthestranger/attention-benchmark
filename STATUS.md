@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, end of session 2. 26 of 32 tasks merged; `cpu` tier green on `main` (2,727 tests, about three minutes).
+Last updated: 2026-11-12, during session 3. 26 of 32 tasks merged; `cpu` tier green on `main` (2,727 tests, about three minutes).
 
 ## Done
 
@@ -31,10 +31,31 @@ Last updated: 2026-11-12, end of session 2. 26 of 32 tasks merged; `cpu` tier gr
 - T-11 graph-diff check (#26).
 - T-22 retrieval generators and scorer (#27).
 - T-06 MLA absorbed path for inference (#28).
+- T-23 inference benchmark and training timing pass (#29).
+- T-29 entry points and Kaggle shim (#30).
+- T-28 plots (#31).
+- T-32 controls, noise components and the gate report (#32).
+- T-35 plots 4 and 5 read the controls and the per-budget ladder fits (#33).
+- T-33 LR-sweep rules, sweep report and diverged runs (#34).
+- T-34 Arm B, context use, wall-clock estimate and timing columns (#35).
 
 ## In progress
 
-- Nothing is running. Every worker has stopped and every branch is pushed.
+Session 3 (2026-11-12), state when this note was written; check the worktrees under `/home/user/wt/` and the remote branches before trusting it.
+
+- T-36 command-line gaps (see `TASKS.md`): worker briefed, branch `task/T-36-cli-gaps`.
+- T-30 `RUNBOOK.md`: written with `tests/test_runbook.py`, which parses every command of the runbook with the scripts' own parsers; branch `task/T-30-runbook`. Its test needs T-36 merged first (the runbook uses `--branches` with no label, `make_plots --skip-unfinished` and `--timing-pass-id`).
+- T-21 probes: waits for Phil's two decisions.
+
+## Gaps found in session 3 (tasks T-32 to T-35 added to `TASKS.md`)
+
+The task list reached "analysis done" without these, and the plan needs each of them as generated output (plan §11: nothing typed or computed by hand):
+
+- `primary_test.null_control` and `positive_control` exist, and nothing called them. No report showed σ_data, the test choice, the detectable-effect bound or the seed count. T-32 adds them to `analyse()` and writes `gates.md`; its tests are on `task/T-32-gate-report` (worker briefed). T-32 also makes `analyse()` refuse every cross-variant comparison until the null control exists and is not detected and the positive control exists (plan §8.1, §9.3, §9.4). **For Phil**: that refusal is the loop's reading of the plan.
+- No code applies the edge rule and the tie rule of plan §7.4 or reports a sweep, and a diverged run cannot write a manifest today (a completed manifest needs a finite loss), so "record everything, including divergences" is not met. T-33.
+- No Arm B table (plan §8.3), no command line for the RQ-W estimate (§8.5), no intervals for the context-use gaps (§10.3), and `make_tables.py` cannot read the timing-pass and benchmark files into the headline table. T-34.
+- Plot 5 shows the ladder at 300M only and plot 4 cannot show the null-control verdict, because `analyse()` did not expose them. T-35.
+- MHA's Arm A runs need the 200M branch point as well as the 100M one (plan §12.1: "plus 200M branches on L8"), so their run specs must say `branches: [100M, 200M]` from the start. For `RUNBOOK.md`.
 
 ## Blocked
 
@@ -43,6 +64,10 @@ Last updated: 2026-11-12, end of session 2. 26 of 32 tasks merged; `cpu` tier gr
   - 16 keys and values, 3e-3: 1.0 after 4,000 steps. The same at 6e-3: 0.06 after 3,000.
   - 8 keys and values: 0.06 to 0.11 after 3,000 steps at 3e-3, 6e-3 and 1e-2, and for three init seeds.
   - Deeper models (4 and 8 layers) were slower in the worker's runs. Wider ones were not measured; a head dim of 8 gives RoPE only four frequencies, which may be why "attend to the previous token" is slow to form.
+  Session 3 measurements (scratch script, 2 layers, 8 heads, 64 sequences per step, learning rate 3e-3, held-out accuracy on 1,024 sequences every 250 steps):
+  - Width 128, 64 keys and values, 3,000 steps, 3 seeds each: the layout of the WIP branch (answers fed back as input) sits on the shortcut plateau, token accuracy 0.53, sequence accuracy 0.04 to 0.05. With the answers blanked in the input (the layout of Zoology's own generator, checked in `zoology/data/multiquery_ar.py`: each key queried once, values distinct, the answer only in the labels) it sits at the no-recall level, 0.27. Neither solves. A wider model is not the fix.
+  - Width 64, 16 keys and values, 5,000 steps, 3 seeds each. Answers blanked: a sharp jump from 0.33 to 0.98 token accuracy at steps 3,250, 500 and 1,250; sequence accuracy first 1.0 at 4,250, 2,250 and 3,000; 3 of 3 end at 1.0. Answers fed back: a slow climb from the 0.55 plateau; first 1.0 at 4,500 and 5,000, and one seed ends at 0.998.
+  - One run costs 150 to 190 s here (25 to 75 ms per step on one or two threads).
   So the criterion can be met only by a test of several thousand steps (half a minute to a few minutes on CPU) whose outcome hangs on a phase transition and may differ on CI's CPU. Options: accept one long test after checking it across seeds and thread counts; change the criterion; or change the task. **Not decided.** See also the first open question.
 
 ## Open questions
@@ -121,7 +146,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 2. T-28 plots (W; reuse `tests/fixtures/fake_campaign.py` and `scripts.make_tables.analyse`), T-23 benchmark and timing scripts (W; unblocked by T-06), T-29 entry points and Kaggle shim (W; unblocked by T-17 and T-20).
 3. T-30 `RUNBOOK.md` (O; needs the answer on sweep runs and reruns), then T-31 handover audit by a fresh agent.
 
-Remaining: T-21, T-23, T-28, T-29, T-30, T-31.
+Remaining: T-36 and T-30 (in progress), T-21 (waits for Phil), then T-31.
 
 ## Notes for the next session
 
