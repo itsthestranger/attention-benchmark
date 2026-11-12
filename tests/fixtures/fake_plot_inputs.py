@@ -3,9 +3,6 @@
 Every number in this module is made up with seeded `numpy.random.default_rng`
 generators (never the global RNG):
 
-- Arm N runs that `fake_campaign` does not build: MHA at 100M on data seeds 2
-  and 3 (data-order noise), and the null control (MHA under another name) on
-  init seeds 11-15 (plan §8.1);
 - `final_metrics["val"]` (the per-bucket validation block of
   `src/eval/lm.py`) and `final_metrics["val_curve"]` (the evaluations made
   during a run) added to completed results through `validate_manifest`;
@@ -27,10 +24,7 @@ import numpy as np
 from src.utils import manifest as mf
 from tests.fixtures.fake_manifests import fake_manifest
 
-ARM_N_BASE_LOSS = 3.5  # a 100M standalone run, nats; synthetic
-ARM_N_NOISE = 0.004
-DATA_ORDER_SEEDS = (2, 3)
-NULL_SEEDS = (11, 12, 13, 14, 15)
+# The Arm N runs (data-order runs and the null control) come from fake_campaign since T-32.
 BUCKETS = ((0, 64), (64, 256), (256, 512), (512, 1024))  # plan §10.3
 # Synthetic structure of the per-bucket losses: later context is a little harder.
 BUCKET_OFFSETS = (0.12, 0.07, 0.04, 0.02)
@@ -65,27 +59,6 @@ def budget_tokens(name: str) -> int:
     """The tokens a result ends at: its branch budget, or its run budget."""
     parsed = mf.parse_run_name(name)
     return _tokens(parsed.branch if parsed.branch is not None else parsed.tokens)
-
-
-# --- Arm N runs that fake_campaign does not build ----------------------------------
-
-
-def arm_n_extras() -> list[dict]:
-    """MHA data-order runs (init seed 1, data seeds 2 and 3) and the null control, at 100M."""
-    manifests = []
-    for data_seed in DATA_ORDER_SEEDS:
-        rng = np.random.default_rng([_key("mha-data"), data_seed])
-        loss = ARM_N_BASE_LOSS + ARM_N_NOISE * float(rng.standard_normal())
-        manifests.append(
-            fake_manifest("mha", budget="100M", branches=[], init_seed=1, data_seed=data_seed, val_loss=loss)
-        )
-    for init_seed in NULL_SEEDS:
-        rng = np.random.default_rng([_key("null"), init_seed])
-        loss = ARM_N_BASE_LOSS + ARM_N_NOISE * float(rng.standard_normal())
-        manifests.append(
-            fake_manifest("null", budget="100M", branches=[], init_seed=init_seed, data_seed=1, val_loss=loss)
-        )
-    return manifests
 
 
 # --- Per-bucket and per-curve fields --------------------------------------------------
