@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 2. 14 of 32 tasks merged; `cpu` tier green on `main` (1,148 tests).
+Last updated: 2026-11-12, session 2. 15 of 32 tasks merged; `cpu` tier green on `main` (1,183 tests).
 
 ## Done
 
@@ -19,10 +19,11 @@ Last updated: 2026-11-12, session 2. 14 of 32 tasks merged; `cpu` tier green on 
 - T-05 MLA naive path (#13).
 - T-25 ladder fit, effective-parameter multiplier and seed-count rule (#14).
 - T-20 evaluation with context-bucketed loss (#15).
+- T-19 determinism test and reproducibility measurement (#16).
 
 ## In progress
 
-- **T-18 manifest**, **T-19 determinism**: each implemented by a worker in its worktree under `/home/user/wt/`, committed locally on `task/T-18-manifest`, `task/T-19-determinism`. **Not yet reviewed, not pushed.** T-19 was built before MLA merged: rerun it on current `main`, where the determinism test also covers the two MLA variants.
+- **T-18 manifest**: implemented by a worker in `/home/user/wt/T-18`, committed locally on `task/T-18-manifest`. **Not yet reviewed, not pushed.** The worker raised one open point: a trunk-checkpoint manifest has the same name as its run's manifest, so the two would overwrite each other in one directory.
 
 ## Blocked
 
@@ -41,7 +42,7 @@ These do not block the build. Each is implemented as described and can be change
 - **In-context-learning windows (decision 20).** End points included: 450 ≤ c ≤ 550 and 40 ≤ c ≤ 60.
 - **Top context bucket (decision 95).** c = 1,024 counts in the last bucket, so that bucket is c ≥ 512 and not the half-open [512, 1024) of plan §10.3. Otherwise the bucket-weighted loss cannot equal the aggregate.
 - **Multiplier interval (decisions 87, 88, 92).** The interval of the effective-parameter multiplier is the set of gap / slope ratios the data do not reject, with the noise the 8-layer MHA runs contribute to both counted once. It reports no interval when the ladder slope cannot be told from zero. No simulated coverage test is committed, because `tests/tolerances.py` has no allowance for one; say if you want one and with what allowance.
-- **Reproducibility in `opt` mode (T-19, not yet merged).** Plan §5 asks that two identical runs "land within a measured, recorded tolerance". No tolerance exists before the measurement, so the `gpu` and `t4` tests measure and record the difference and apply no threshold.
+- **Reproducibility in `opt` mode (decision 99).** Plan §5 asks that two identical runs "land within a measured, recorded tolerance". No tolerance exists before the measurement, so the `gpu` and `t4` tests measure and record the difference and apply no threshold.
 - **`configs/data.yaml` (decision 38).** Not frozen. Consider adding it to CODEOWNERS once the hashes are filled in.
 
 ## Deviations from the plan
@@ -52,7 +53,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–97 so far).
+All decisions are in `docs/decisions.md` (rows 1–100 so far).
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
@@ -62,6 +63,8 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 - `gpu`, trainer (`test_trainer.py`): fp16 training with unscaled gradient norms, a skipped step with scaler back-off, scaler growth, refusal without scaler settings, the backend restriction. **The fp16, GradScaler and backend code in the trainer has never executed.**
 - `gpu`: causal leak under fp16 (`test_causality.py`), `ref`/`opt` agreement under fp16 (`test_reference.py`), `opt` decode peak memory at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
+- `gpu`, determinism (`test_determinism.py`): `ref` mode in fp16 bit-identical over 100 steps twice, for all seven variants. Needs `CUBLAS_WORKSPACE_CONFIG=:4096:8` in the environment before pytest starts.
+- `gpu` and `t4`, reproducibility (`test_determinism.py`): the `opt` measurement in fp16 for all seven variants; it records differences and applies no threshold.
 - `gpu`, evaluation (`test_eval_lm.py`): fp16 evaluation on CUDA against fp32.
 - `gpu`, sliding window (`test_sliding_window.py`): both `opt` paths against `ref` in fp32 and fp16, including compiled FlexAttention.
 - `t4`: `opt` decode time at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
@@ -89,7 +92,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. Review and merge T-18 and T-19 (see "In progress").
+1. Review and merge T-18 (see "In progress").
 2. T-06 MLA absorbed path (O+W), T-10 step-0 logit scale (O), T-16 checkpoint and resume (O+W).
 3. T-08 properties and FLOPs (W), T-26 wall-clock estimate (W, after T-18), T-27 tables (W, after T-18).
 
