@@ -21,6 +21,7 @@ from typing import Mapping, Sequence
 
 from analysis import ladder_fit as lf
 from analysis import primary_test as pt
+from analysis.lr_sweep import STEPS_TAKEN_PARITY  # plan §7.3, §13.6: defined once, there
 from src import config
 from src.model import build_model
 from src.utils import manifest as mf
@@ -28,8 +29,6 @@ from src.utils import manifest as mf
 HEADLINE_VARIANTS = ("mha", "gqa4", "mqa", "mla192", "gqa2", "mla96", "swa256")
 BLANK = "—"
 ARM = "iso_token"
-# Plan §7.3 and §13.6: a difference above 0.5% of the steps invalidates the comparison.
-STEPS_TAKEN_PARITY = 0.005
 LEFT_ARM = "left Arm A (seed-count rule)"
 COLUMNS = (
     "variant",
