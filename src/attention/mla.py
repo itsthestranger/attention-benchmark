@@ -141,6 +141,32 @@ class LatentAttention(AttnBase):
             raise ValueError(f"capacity must be a non-negative int or None, got {capacity!r}")
         return LatentCache(None, 0, self.d_c + self._rope_dim, capacity or 0)
 
+    def _project(self, x, freqs):
+        """The cached pair and the queries: c_KV (B, T, d_c), k_R (B, T, r) rotated and shared
+        by the heads, q_C (B, H, T, dh), q_R (B, H, T, r) rotated."""
+        B, T, _ = x.shape
+        H, dh, r = self.n_heads, self.head_dim, self._rope_dim
+        c_kv = self.norm_kv(self.w_dkv(x))
+        k_r = apply_rope(self.w_kr(x), freqs)
+        c_q = self.norm_q(self.w_dq(x))
+        q_c = self.w_uq(c_q).view(B, T, H, dh).transpose(1, 2)
+        q_r = apply_rope(self.w_qr(c_q).view(B, T, H, r).transpose(1, 2), freqs)
+        return c_kv, k_r, q_c, q_r
+
+    def _content_keys(self, latents):
+        """k_C (B, H, S, dh) from the latents (B, S, d_c)."""
+        B, S, _ = latents.shape
+        return self.w_uk(latents).view(B, S, self.n_heads, self.head_dim).transpose(1, 2)
+
+    def _logits(self, q_c, q_r, k_c, k_r):
+        """Content plus positional scores (B, H, n, S), divided by sqrt(d_h + d_h^R)."""
+        score = q_c @ k_c.transpose(-1, -2) + q_r @ k_r[:, None].transpose(-1, -2)
+        return score / math.sqrt(self.head_dim + self._rope_dim)
+
+    def attention_logits(self, x, freqs):
+        c_kv, k_r, q_c, q_r = self._project(x, freqs)
+        return self._logits(q_c, q_r, self._content_keys(c_kv), k_r)
+
     def forward(self, x, freqs, cache=None, *, mode="ref"):
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
@@ -151,11 +177,7 @@ class LatentAttention(AttnBase):
         B, T, _ = x.shape
         H, dh, r = self.n_heads, self.head_dim, self._rope_dim
 
-        c_kv = self.norm_kv(self.w_dkv(x))                    # (B, T, d_c), cached
-        k_r = apply_rope(self.w_kr(x), freqs)                 # (B, T, r), cached, shared by heads
-        c_q = self.norm_q(self.w_dq(x))
-        q_c = self.w_uq(c_q).view(B, T, H, dh).transpose(1, 2)
-        q_r = apply_rope(self.w_qr(c_q).view(B, T, H, r).transpose(1, 2), freqs)
+        c_kv, k_r, q_c, q_r = self._project(x, freqs)
 
         if cache is None:
             past, new_cache = 0, None
@@ -166,14 +188,12 @@ class LatentAttention(AttnBase):
             latents, positional = new_cache.c_kv, new_cache.k_r
         S = latents.shape[1]
 
-        k_c = self.w_uk(latents).view(B, S, H, dh).transpose(1, 2)
+        k_c = self._content_keys(latents)
         v = self.w_uv(latents).view(B, S, H, dh).transpose(1, 2)
         allowed = _allowed(past, T, S, x.device)
 
         if mode == "ref":
-            score = (q_c @ k_c.transpose(-1, -2) + q_r @ positional[:, None].transpose(-1, -2))
-            score = score / math.sqrt(dh + r)
-            score = score.masked_fill(~allowed, float("-inf"))
+            score = self._logits(q_c, q_r, k_c, positional).masked_fill(~allowed, float("-inf"))
             y = torch.softmax(score, dim=-1) @ v
         else:
             q = torch.cat([q_c, q_r], dim=-1)
