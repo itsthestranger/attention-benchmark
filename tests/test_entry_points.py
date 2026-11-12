@@ -790,3 +790,136 @@ def test_cuda_fp16_cold_start_and_resume_record_the_enforced_backend_and_scale(s
     assert m["completed"] is True and m["resume_count"] == 1
     assert m["backend"] == "efficient" and m["precision"] == "fp16"
     assert isinstance(m["scaler"]["final_scale"], float) and m["scaler"]["final_scale"] > 0
+
+
+# --- T-36: command-line gaps. --branches with no label, and the timing pass of Arm C -----------------
+# SYNTHETIC data and tiny configs, as above. The real configs are used wherever a test only resolves.
+
+ARM_C_STEPS = 8             # a short Arm C run; the step count normally comes from the timing pass
+TIMING_PASS = "tp-synthetic"
+
+
+def _parse_train(argv: list[str]):
+    return train_script.build_parser().parse_args(argv)
+
+
+def _tiny_overrides(vocab: int, *, steps: int, label: str) -> dict:
+    """The tiny overrides without the run.* keys: a run spec that sets run.steps, run.budget or run.branches
+    through overrides would win over the flags that give them."""
+    return {k: v for k, v in _tiny(vocab, steps=steps, label=label, branches=[]).items() if not k.startswith("run.")}
+
+
+def _arm_spec(path: Path, vocab: int, **doc) -> Path:
+    base = {"variant": "mha", "arm": "iso_token", "init_seed": 1, "data_seed": 1, "peak_lr": PEAK_LR,
+            "steps": ARM_C_STEPS, "branches": [],
+            "overrides": _tiny_overrides(vocab, steps=ARM_C_STEPS, label=TRUNK_LABEL)}
+    base.update(doc)
+    path.write_text(yaml.safe_dump(base), encoding="utf-8")
+    return path
+
+
+def test_branches_with_no_label_is_a_standalone_100M_run_of_the_real_config():
+    args = _parse_train(["--variant", "mha", "--init-seed", "1", "--peak-lr", "1e-3", "--budget", "100M",
+                         "--branches", "--data", "D", "--out", "O"])
+    spec = rc.build_spec(args)
+    assert spec["branches"] == []
+    resolved = rc.resolve_spec(spec)
+    assert resolved["run"]["steps"] == 1526 == config.load_recipe()["budgets"]["100M"]
+    assert resolved["run"]["branches"] == [] and resolved["run"]["budget"] == "100M"
+    assert mf.run_name(resolved) == "mha-isoparam-100M-lr1e3-s1-d1"
+
+
+def test_without_the_flag_the_arm_default_branch_stays_and_a_100M_run_is_refused(tmp_path, capsys):
+    args = _parse_train(["--variant", "mha", "--init-seed", "1", "--peak-lr", "1e-3", "--budget", "100M",
+                         "--data", "D", "--out", "O"])
+    assert rc.build_spec(args)["branches"] is None
+    out = tmp_path / "refused"
+    assert train_script.main(["--variant", "mha", "--init-seed", "1", "--peak-lr", "1e-3", "--budget", "100M",
+                              "--data", str(tmp_path), "--out", str(out), "--device", "cpu"]) == 2
+    assert not out.exists()
+    assert "must be shorter than the run" in capsys.readouterr().err
+
+
+def test_branches_with_no_label_overrides_a_spec_file_that_lists_branches(tmp_path):
+    spec = tmp_path / "with_branches.yaml"
+    spec.write_text(yaml.safe_dump({"variant": "mha", "init_seed": 1, "peak_lr": 1e-3,
+                                    "budget": "300M", "branches": ["100M"]}), encoding="utf-8")
+    kept = rc.resolve_spec(rc.build_spec(_parse_train([str(spec), "--data", "D", "--out", "O"])))
+    assert kept["run"]["branches"] == ["100M"]
+    overridden = rc.resolve_spec(rc.build_spec(_parse_train([str(spec), "--branches", "--data", "D", "--out", "O"])))
+    assert overridden["run"]["branches"] == []
+    assert mf.run_name(overridden) == "mha-isoparam-300M-lr1e3-s1-d1"
+
+
+def test_a_standalone_run_started_with_branches_and_no_label_completes_with_no_branch(synthetic, tmp_path):
+    # The spec takes the arm's branch (100M) and its overrides leave run.branches alone: the flag must win.
+    overrides = _tiny(synthetic.vocab, steps=TRUNK_STEPS, label=TRUNK_LABEL, branches=[])
+    del overrides["run.branches"]
+    spec = _write_spec(tmp_path / "trunk_arm_branches.yaml", overrides)
+    assert rc.resolve_spec(rc.load_run_spec(spec))["run"]["branches"] == ["100M"]
+    out = tmp_path / "standalone"
+    assert run_train(spec, out, synthetic.root, extra=("--branches",)) == 0
+    m = manifest_of(out, "opt", "mha-isoparam-32M-lr3e3-s1-d1")
+    assert mf.validate_manifest(m) == []
+    assert m["completed"] is True and m["kind"] == "run" and m["branch"] is None
+    assert m["resolved"]["run"]["branches"] == []
+    assert m["steps"]["total"] == TRUNK_STEPS
+
+
+def test_an_arm_c_run_with_a_timing_pass_id_completes_and_its_manifest_carries_it(synthetic, tmp_path):
+    spec = _arm_spec(tmp_path / "arm_c.yaml", synthetic.vocab)
+    out = tmp_path / "arm_c"
+    assert run_train(spec, out, synthetic.root, extra=("--arm", "iso_wallclock", "--timing-pass-id", TIMING_PASS)) == 0
+    names = [p.name for p in (out / "manifests" / "opt").iterdir()]
+    assert len(names) == 1
+    m = mf.read_manifest(out / "manifests" / "opt" / names[0])
+    assert mf.validate_manifest(m) == []
+    assert m["resolved"]["arm"] == "iso_wallclock" and m["timing_pass_id"] == TIMING_PASS
+    assert m["completed"] is True and m["steps"]["total"] == ARM_C_STEPS and m["steps"]["attempted"] == ARM_C_STEPS
+
+
+def test_an_arm_c_run_without_a_timing_pass_id_is_refused_before_any_work(synthetic, tmp_path, capsys):
+    spec = _arm_spec(tmp_path / "arm_c_no_flag.yaml", synthetic.vocab)
+    out = tmp_path / "arm_c_no_flag"
+    assert run_train(spec, out, synthetic.root, extra=("--arm", "iso_wallclock")) == 2
+    assert not out.exists()
+    assert "--timing-pass-id is required" in capsys.readouterr().err
+
+
+def test_the_timing_pass_flag_on_an_arm_a_run_is_refused_before_any_work(specs, synthetic, tmp_path, capsys):
+    out = tmp_path / "arm_a_with_flag"
+    assert run_train(specs.trunk, out, synthetic.root, extra=("--timing-pass-id", TIMING_PASS)) == 2
+    assert not out.exists()
+    err = capsys.readouterr().err
+    assert "--timing-pass-id is refused" in err and "iso_token" in err
+
+
+def test_the_timing_pass_run_spec_key_works_like_the_flag(synthetic, tmp_path):
+    spec = _arm_spec(tmp_path / "arm_c_key.yaml", synthetic.vocab, arm="iso_wallclock", timing_pass_id=TIMING_PASS)
+    out = tmp_path / "arm_c_key"
+    assert run_train(spec, out, synthetic.root) == 0
+    names = [p.name for p in (out / "manifests" / "opt").iterdir()]
+    assert len(names) == 1
+    assert mf.read_manifest(out / "manifests" / "opt" / names[0])["timing_pass_id"] == TIMING_PASS
+
+
+def test_the_timing_pass_run_spec_key_on_an_arm_a_spec_is_refused_before_any_work(synthetic, tmp_path, capsys):
+    spec = _arm_spec(tmp_path / "arm_a_key.yaml", synthetic.vocab, timing_pass_id=TIMING_PASS)
+    out = tmp_path / "arm_a_key"
+    assert run_train(spec, out, synthetic.root) == 2
+    assert not out.exists()
+    assert "--timing-pass-id is refused" in capsys.readouterr().err
+
+
+def test_evaluate_accepts_the_timing_pass_key_and_does_not_use_it(reference, specs, synthetic, tmp_path):
+    doc = yaml.safe_load(specs.trunk.read_text(encoding="utf-8"))
+    doc["timing_pass_id"] = TIMING_PASS
+    spec = tmp_path / "trunk_with_timing_key.yaml"
+    spec.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    out = reference("opt")
+    before = snapshot(out)
+    result_path = tmp_path / "val_with_key.json"
+    assert evaluate_script.main([str(spec), "--out", str(out), "--data", str(synthetic.root), "--split", "val",
+                                 "--json", str(result_path), "--device", "cpu", *pin()]) == 0
+    assert json.loads(result_path.read_text(encoding="utf-8"))["is_final"] is True
+    assert snapshot(out) == before
