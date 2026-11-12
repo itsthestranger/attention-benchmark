@@ -687,6 +687,43 @@ def test_branch_file_is_named_with_its_suffix(tmp_path):
     assert mf.read_manifest(path) == BRANCH
 
 
+def test_a_trunk_checkpoint_never_shares_a_file_with_its_run(tmp_path):
+    """Added in review. A trunk checkpoint has its run's name; its file carries the step."""
+    trunk = fake_manifest("mha", kind="trunk_checkpoint", completed=False)
+    unfinished = fake_manifest("mha", completed=False)
+    assert trunk["name"] == unfinished["name"] == RUN["name"]
+    trunk_path = mf.write_manifest(trunk, tmp_path)
+    run_path = mf.write_manifest(unfinished, tmp_path)
+    assert trunk_path.name == "mha-isoparam-300M-lr1e3-s1-d1.trunk3662.json"
+    assert run_path.name == "mha-isoparam-300M-lr1e3-s1-d1.json"
+    assert mf.read_manifest(trunk_path) == trunk
+    assert mf.read_manifest(run_path) == unfinished
+    # The run finishes: its manifest is replaced, the trunk checkpoint's is untouched.
+    assert mf.write_manifest(RUN, tmp_path) == run_path
+    assert mf.read_manifest(trunk_path) == trunk and mf.read_manifest(run_path) == RUN
+    # A trunk checkpoint stored under its run's file name is refused.
+    disguised = tmp_path / "other" / run_path.name
+    disguised.parent.mkdir()
+    disguised.write_text(trunk_path.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(ManifestError, match="trunk3662"):
+        mf.read_manifest(disguised)
+
+
+def test_rule_4_branch_steps_are_the_budgets_steps():
+    """Added in review: the message for this rule itself, not a neighbouring one."""
+    manifest = copy.deepcopy(BRANCH)
+    assert manifest["branch"]["steps"] == 1526
+    manifest["branch"]["steps"] = 1527
+    assert any(p.startswith("branch.steps:") for p in mf.validate_manifest(manifest))
+
+
+def test_rule_4_a_branchs_total_steps_are_its_branch_steps():
+    """Added in review: the message for this rule itself, not a neighbouring one."""
+    manifest = copy.deepcopy(BRANCH)
+    manifest["steps"]["total"] = 1527
+    assert any(p.startswith("steps.total: a branch") for p in mf.validate_manifest(manifest))
+
+
 def test_file_is_sorted_keys_with_indent_one(tmp_path):
     path = mf.write_manifest(RUN, tmp_path)
     expected = json.dumps(RUN, sort_keys=True, indent=1, allow_nan=False) + "\n"

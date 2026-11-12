@@ -721,14 +721,25 @@ def _optional(check):
 # --- Files -------------------------------------------------------------------
 
 
+def manifest_filename(manifest: dict) -> str:
+    """`{name}.json`, or `{name}.trunk{step}.json` for a trunk checkpoint.
+
+    A trunk checkpoint has its run's name. The step in its file name keeps it
+    from replacing, or being read as, the run's own manifest.
+    """
+    if manifest["kind"] == "trunk_checkpoint":
+        return f"{manifest['name']}.trunk{manifest['steps']['attempted']}.json"
+    return f"{manifest['name']}.json"
+
+
 def write_manifest(manifest: dict, directory: str | Path) -> Path:
-    """Write `{name}.json` atomically. Refuses to replace a completed manifest."""
+    """Write the manifest atomically under `manifest_filename`. Refuses to replace a completed one."""
     problems = validate_manifest(manifest)
     if problems:
         raise ManifestError(_listing("refusing to write an invalid manifest", problems))
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{manifest['name']}.json"
+    path = directory / manifest_filename(manifest)
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
@@ -757,7 +768,7 @@ def _reject_constant(token: str) -> float:
 
 
 def read_manifest(path: str | Path) -> dict:
-    """Load and validate a manifest. The file must be named `{name}.json`."""
+    """Load and validate a manifest. The file must carry the name `manifest_filename` gives."""
     path = Path(path)
     try:
         text = path.read_text(encoding="utf-8")
@@ -768,9 +779,8 @@ def read_manifest(path: str | Path) -> dict:
     except ValueError as exc:
         raise ManifestError(f"{path} is not a valid JSON manifest: {exc}") from exc
     problems = validate_manifest(manifest)
-    if isinstance(manifest, dict) and isinstance(manifest.get("name"), str):
-        if path.name != f"{manifest['name']}.json":
-            problems.append(f"file name {path.name!r} is not '{manifest['name']}.json'")
+    if not problems and path.name != manifest_filename(manifest):
+        problems.append(f"file name {path.name!r} is not {manifest_filename(manifest)!r}")
     if problems:
         raise ManifestError(_listing(f"{path} is invalid", problems))
     return manifest
