@@ -103,17 +103,23 @@ def test_a_piece_is_causal_inside_itself(case, mode):
     assert not torch.equal(a[:, 30:], b[:, 30:])
 
 
+@pytest.mark.parametrize("capacity", [None, 64], ids=["grown", "roomy"])
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
-def test_caches_are_values(case, mode):
-    """Branching twice from one state: neither branch disturbs the other or the state."""
+def test_caches_are_values(case, mode, capacity):
+    """Branching twice from one state: neither branch disturbs the other or the state.
+
+    With spare capacity both branches could write the same slot of shared
+    storage; the second one must copy instead.
+    """
     model = tiny_model(case, sharpen=6.0, dtype=torch.float64)
     idx = tokens(2, 24, seed=15)
     other = (idx + 3) % VOCAB
     with torch.no_grad():
         full_a, _ = model(idx, mode=mode)
         full_b, _ = model(torch.cat([idx[:, :10], other[:, 10:]], dim=1), mode=mode)
-        _, shared = model(idx[:, :10], mode=mode, state=model.init_state())
+        start = model.init_state() if capacity is None else model.init_state(capacity=capacity)
+        _, shared = model(idx[:, :10], mode=mode, state=start)
         assert shared.pos == 10 and all(c.length == 10 for c in shared.caches)
 
         a1, state_a = model(idx[:, 10:11], mode=mode, state=shared)
