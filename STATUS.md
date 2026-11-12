@@ -14,10 +14,11 @@ Last updated: 2026-11-12, session 1.
 - T-14 WSD schedule and optimizer parameter groups (#7).
 - T-12 recurrence anchor (#8).
 - T-04 grouped attention: MHA, GQA, MQA (#9).
+- T-15 trainer (#10).
 
 ## In progress
 
-- Nothing.
+- T-07 sliding-window attention, branch `task/T-07-sliding-window`: implemented, in review.
 
 ## Blocked
 
@@ -45,12 +46,13 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–65 so far).
+All decisions are in `docs/decisions.md` (rows 1–72 so far).
 
 ## Hardware tests written, never run
 
 These skip without the hardware. A skip is not a pass. List them with `pytest --collect-only -q -m "gpu or t4"`.
 
+- `gpu`, trainer (`test_trainer.py`): fp16 training with unscaled gradient norms, a skipped step with scaler back-off, scaler growth, refusal without scaler settings, the backend restriction. **The fp16, GradScaler and backend code in the trainer has never executed.**
 - `gpu`: causal leak under fp16 (`test_causality.py`), `ref`/`opt` agreement under fp16 (`test_reference.py`), `opt` decode peak memory at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
 - `t4`: `opt` decode time at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
 
