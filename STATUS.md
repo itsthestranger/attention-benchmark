@@ -33,12 +33,12 @@ Last updated: 2026-11-12, during session 3. 26 of 32 tasks merged; `cpu` tier gr
 - T-06 MLA absorbed path for inference (#28).
 - T-23 inference benchmark and training timing pass (#29).
 - T-29 entry points and Kaggle shim (#30).
+- T-28 plots (#31).
 
 ## In progress
 
 Session 3 (2026-11-12), state when this note was written; check the worktrees under `/home/user/wt/` and the remote branches before trusting it.
 
-- T-28 plots: worker briefed, branch `task/T-28-plots`.
 - Contracts fixed in those briefs: `final_metrics` carries `val_loss`, `test_loss`, `train_loss`, `val`, `test` (the `evaluate` dicts) and `val_curve` (`step`, `tokens`, `val_loss`); `scripts/bench.py` writes one `bench/1` JSON per variant and mode; `scripts/timing_pass.py` writes one `timing_pass/1` JSON; operational settings (checkpoint and eval cadence) live in a new, unfrozen `configs/ops.yaml` and stay out of the config hash.
 
 ## Gaps found in session 3 (tasks T-32 to T-35 added to `TASKS.md`)
