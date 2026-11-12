@@ -23,6 +23,7 @@ from typing import Mapping, NamedTuple, Sequence
 
 from analysis import ladder_fit as lf
 from analysis import primary_test as pt
+from analysis.lr_sweep import STEPS_TAKEN_PARITY  # plan §7.3, §13.6: defined once, there
 from src import config
 from src.model import build_model
 from src.utils import manifest as mf
@@ -39,8 +40,6 @@ MID_BUDGET = "200M"
 # seeds 2 and 3 are standalone 100M runs at MHA's learning rate. Not in prereg.yaml.
 DATA_ORDER_INIT_SEED = 1
 DATA_ORDER_EXTRA_SEEDS = (2, 3)
-# Plan §7.3 and §13.6: a difference above 0.5% of the steps invalidates the comparison.
-STEPS_TAKEN_PARITY = 0.005
 LEFT_ARM = "left Arm A (seed-count rule)"
 COLUMNS = (
     "variant",
