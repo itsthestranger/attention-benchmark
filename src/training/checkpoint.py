@@ -34,6 +34,7 @@ Guarantees
 from __future__ import annotations
 
 import contextlib
+import copy
 import dataclasses
 import math
 import os
@@ -334,10 +335,12 @@ def restore(trainer, state: dict) -> None:
     records = _records_from(state["records"], state["step"])
     cuda_rng = _cuda_rng_for(trainer, state)
 
+    # Deep copies: load_state_dict may keep the tensors it is handed, and the optimizer then
+    # updates them in place. The loaded state must stay a value that can be restored again.
     trainer.model.load_state_dict(state["model"])
-    trainer.optimizer.load_state_dict(state["optimizer"])
+    trainer.optimizer.load_state_dict(copy.deepcopy(state["optimizer"]))
     if trainer.scaler is not None:
-        trainer.scaler.load_state_dict(state["scaler"])
+        trainer.scaler.load_state_dict(copy.deepcopy(state["scaler"]))
     trainer.step = state["step"]
     trainer.steps_taken = state["steps_taken"]
     trainer.records = records

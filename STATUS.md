@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 2. 22 of 32 tasks merged; `cpu` tier green on `main` (2,332 tests, about two and a half minutes).
+Last updated: 2026-11-12, session 2. 23 of 32 tasks merged; `cpu` tier green on `main` (2,358 tests, about three minutes).
 
 ## Done
 
@@ -27,6 +27,7 @@ Last updated: 2026-11-12, session 2. 22 of 32 tasks merged; `cpu` tier green on 
 - T-09 config solver and exact parameter counts (#22).
 - T-26 computed wall-clock estimate (#23).
 - T-27 headline table with refusal gates (#24).
+- T-17 WSD decay branches (#25).
 
 ## In progress
 
@@ -64,7 +65,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–129 so far).
+All decisions are in `docs/decisions.md` (rows 1–134 so far).
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
@@ -76,6 +77,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 - `gpu`: causal leak under fp16 (`test_causality.py`), `ref`/`opt` agreement under fp16 (`test_reference.py`), `opt` decode peak memory at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
 - `gpu`, determinism (`test_determinism.py`): `ref` mode in fp16 bit-identical over 100 steps twice, for all seven variants. Needs `CUBLAS_WORKSPACE_CONFIG=:4096:8` in the environment before pytest starts.
 - `gpu` and `t4`, reproducibility (`test_determinism.py`): the `opt` measurement in fp16 for all seven variants; it records differences and applies no threshold.
+- `gpu`, branches (`test_wsd_branch.py`): branch fidelity in fp16 for all seven variants, with the scaler state carried over.
 - `gpu`, checkpoint (`test_checkpoint.py`): GradScaler state after a resume, resume fidelity in fp16 for all seven variants, a checkpoint saved and restored on CUDA.
 - `gpu`, evaluation (`test_eval_lm.py`): fp16 evaluation on CUDA against fp32.
 - `gpu`, sliding window (`test_sliding_window.py`): both `opt` paths against `ref` in fp32 and fp16, including compiled FlexAttention.
@@ -105,7 +107,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 ## Next
 
 1. Review and merge T-11, T-21 and T-22 (see "In progress").
-2. T-17 branch (O+W): write `tests/test_wsd_branch.py` first. T-06 MLA absorbed path (O+W): write `tests/test_mla_absorbed.py` first.
+2. T-06 MLA absorbed path (O+W): write `tests/test_mla_absorbed.py` first.
 3. T-28 plots (W, unblocked by T-27; reuse `tests/fixtures/fake_campaign.py` and `scripts.make_tables.analyse`), then T-23, T-29, T-30, T-31.
 
 ## Notes for the next session
@@ -121,6 +123,5 @@ How the loop has been run:
 Designs already worked out for tasks not yet started:
 
 - **T-06 absorbed MLA.** Replaces `opt` decode in `mla.py`; the cache already holds only the latent and the positional key.
-- **T-17 branch.** A branch restores a `trunk-step*.pt` checkpoint (`src/training/checkpoint.py`) into a trainer whose config has the branch's step count, then decays. `restore` refuses another config hash, so `branch.py` needs its own entry that checks the parent's hash and the branch step (`decay_start` of the branch budget) instead. Its manifest is `kind: branch` with the parent's resolved config (decision 102).
-- **T-29 entry points.** Give `ref` and `opt` their own checkpoint roots (decision 115). Record the trainer's enforced backend on the attention modules with `set_sdpa_backend` and write it to the manifest (decision 110).
+- **T-29 entry points.** `scripts/branch.py` belongs here (decision 133): it calls `branch.start_or_resume_branch` and writes a `kind: branch` manifest with `branch.branch_manifest_block`; `train.py` gives its `Checkpointer` the steps from `branch.branch_steps`. Give `ref` and `opt` their own checkpoint roots (decision 115). Record the trainer's enforced backend on the attention modules with `set_sdpa_backend` and write it to the manifest (decision 110).
 - **T-23 benchmark.** Compare sliding-window memory with its cap, not with per-token growth (decision 77).
