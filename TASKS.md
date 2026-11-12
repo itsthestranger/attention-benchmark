@@ -28,7 +28,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | T-02 ✅ | Backbone: RMSNorm, SwiGLU, RoPE, tied embeddings, pre-norm blocks, attention registry | W | T-01 | §3.1, §4.2 | Shape tests pass; non-attention parameter counts match the formula |
 | T-03 ✅ | Per-parameter seeded init and the init rule | O+W | T-02 | §3.1, §4.5 | Same-name, same-shape tensors are identical across variants; different seeds differ; stds and depth scaling match the rule |
 | T-04 ✅ | `grouped.py`: MHA/GQA/MQA, `ref` and `opt`, KV cache, grouped-query decode | O+W | T-02 | §2.3, §4.4, §5 | Causal leak, GQA limits, `ref`/`opt` agreement and KV-cache decode at ctx 1024 pass; K/V never expanded in `opt` decode; `gpu` and `t4` tests written |
-| T-05 | `mla.py` naive path: decoupled RoPE, latent norms, softmax scale, factor init | O+W | T-03 | §3.2, §3.3 | 562,560 params per layer at d_c 192; scale is 1/√72; causal leak and KV-cache decode pass; cache holds 216 values per token per layer |
+| T-05 ✅ | `mla.py` naive path: decoupled RoPE, latent norms, softmax scale, factor init | O+W | T-03 | §3.2, §3.3 | 562,560 params per layer at d_c 192; scale is 1/√72; causal leak and KV-cache decode pass; cache holds 216 values per token per layer |
 | T-06 | MLA absorbed path for inference | O+W | T-05 | §3.3 | Matches the naive path to 1e-4 |
 | T-07 ✅ | `sliding_window.py`: `ref`, chunked `opt`, FlexAttention path behind an availability check | O+W | T-02 | §2.3 | Weights outside the window are exactly zero, boundaries included; `ref`/`opt` agree; chunked path scores at most 512 keys per query; `t4` timing test written |
 | T-08 | `AttnBase` properties and `utils/flops.py` | W | T-04, T-05, T-07 | §3.1, §3.2, §4.2 | KV bytes match §3.2 for every variant; attention FLOP shares at ctx 512/1,024/2,048 are 8/15/27% causal and 15/27/42% dense, within one point |
@@ -63,7 +63,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
 | T-24 ✅ | `primary_test.py` reading `prereg.yaml`, and `test_primary_stats.py` | O | T-01 | §1.2, §1.3 | Simulated nulls give family-wise error ≤ 5% with the test switch and both seed counts; the §1.3 table is reproduced within 0.05; no other code emits a verdict |
-| T-25 | `ladder_fit.py` with the seed-count rule | O | T-24 | §1.4, §8.4 | A known slope is recovered; the multiplier interval carries both uncertainties; the rule returns 5 or 8 on constructed cases |
+| T-25 ✅ | `ladder_fit.py` with the seed-count rule | O | T-24 | §1.4, §8.4 | A known slope is recovered; the multiplier interval carries both uncertainties; the rule returns 5 or 8 on constructed cases |
 | T-26 | `rqw_estimate.py` | W | T-18 | §8.5 | Interpolation is correct on constructed manifests; a variant missing from Arm A reports its step-time ratio only |
 | T-27 | `make_tables.py` with its refusal gates | W | T-18, T-24 | §8.7, §10.1 | The headline table builds from fake manifests; each refusal (steps, backend, versions, trunk checkpoint) has a test |
 | T-28 | Plots | W | T-27 | §10.5 | All ten build from fake manifests and build blank; every seed is a visible dot |

@@ -20,13 +20,14 @@ class Case(NamedTuple):
     name: str  # a variant file under configs/variants/
     n_kv_heads: int | None  # KV heads for grouped attention, None otherwise
     window: int | None = None  # sliding-window size used in the tiny model; None if dense
+    latent: int | None = None  # MLA latent width (d_c = d_c_q) used in the tiny model
 
     def held(self, n_tokens: int) -> int:
         """Tokens a KV cache holds after `n_tokens`: all of them, or the last window."""
         return n_tokens if self.window is None else min(n_tokens, self.window)
 
 
-# T-04: the grouped family. T-07: sliding window. MLA cases join in T-05.
+# T-04: the grouped family. T-07: sliding window. T-05: MLA.
 GROUPED_CASES = (
     Case("mha", 8),
     Case("gqa4", 4),
@@ -37,7 +38,11 @@ GROUPED_CASES = (
 # cross several windows; tests that need the real window replace it.
 SWA_CASES = (Case("swa256", 8, 16),)
 REAL_WINDOW = 256  # plan §3.2
-CASES = GROUPED_CASES + SWA_CASES
+# The plan's MLA has latents of d_model / 2 and d_model / 4 and a RoPE key of
+# head_dim / 2; the tiny models keep those proportions.
+MLA_CASES = (Case("mla192", None, latent=32), Case("mla96", None, latent=16))
+MLA_ROPE_DIM = 4
+CASES = GROUPED_CASES + SWA_CASES + MLA_CASES
 
 # Tiny dimensions that keep the plan's 8 query heads.
 D_MODEL, N_HEADS, HEAD_DIM, N_LAYERS, D_FF, VOCAB = 64, 8, 8, 2, 96, 128
@@ -60,6 +65,13 @@ def tiny_resolved(case: Case, *, init_seed: int = 1, context_length: int = 64, *
             "n_kv_heads": case.n_kv_heads,
             "window": case.window,
         }
+    if case.latent is not None:
+        dims["model.attention"] = {
+            "type": "mla",
+            "d_c": case.latent,
+            "d_c_q": case.latent,
+            "rope_dim": MLA_ROPE_DIM,
+        }
     dims.update(overrides)
     return config.resolve(case.name, init_seed=init_seed, peak_lr=1e-3, overrides=dims)
 
@@ -74,16 +86,17 @@ def tiny_model(
 ) -> Transformer:
     """A tiny model with the project's own initialisation.
 
-    `sharpen` multiplies every attention parameter whose local name starts with
-    "w_q" or "w_k". At initialisation attention is nearly uniform, which hides
-    masking and indexing errors; a factor of a few makes it peaked.
+    `sharpen` multiplies every attention parameter that produces queries or
+    keys: local names starting with "w_q", "w_k", "w_uq" or "w_uk". At
+    initialisation attention is nearly uniform, which hides masking and
+    indexing errors; a factor of a few makes it peaked.
     """
     model = build_model(tiny_resolved(case, init_seed=init_seed, **overrides))
     if sharpen != 1.0:
         with torch.no_grad():
             for layer in model.layers:
                 for name, p in layer.attn.named_parameters():
-                    if name.startswith(("w_q", "w_k")):
+                    if name.startswith(("w_q", "w_k", "w_uq", "w_uk")):
                         p.mul_(sharpen)
     return model.to(dtype).eval()
 
