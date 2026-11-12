@@ -403,3 +403,20 @@ def _keys(value) -> set[str]:
             out |= _keys(v)
         return out
     return set()
+
+
+def test_the_reference_is_mha_at_the_variants_own_seeds():
+    """Added in review. MHA has five seeds, the variant three: the comparison uses MHA's
+    100M branches for those three seeds only, not every MHA run on offer."""
+    mha_low = {1: 3.50, 2: 3.60, 3: 3.70, 4: 9.00, 5: 9.50}
+    manifests = []
+    for seed, loss in mha_low.items():
+        manifests += [arm_a("mha", seed, 3.0), branch("mha", seed, loss)]
+    for seed in (1, 2, 3):
+        manifests += [arm_a("mla192", seed, 2.9 + 0.1 * seed), branch("mla192", seed, 3.3 + 0.1 * seed)]
+    result = rq.estimate(manifests, {"mha": 100.0, "swa256": 100.0, "mla192": 100.0})
+    mla = by_name(result, "mla192")
+    assert mla.seeds == (1, 2, 3)
+    assert mla.reference_loss_per_seed == (3.50, 3.60, 3.70)
+    assert scale_relative_error(mla.reference_loss, 3.60) <= FLOAT64_IDENTITY
+    assert scale_relative_error(mla.gap, mla.loss - 3.60) <= FLOAT64_IDENTITY
