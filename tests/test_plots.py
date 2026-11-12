@@ -985,3 +985,80 @@ def test_a_trunk_checkpoint_is_refused_with_and_without_the_flag(campaign, tmp_p
     assert m.main([*common, "--skip-unfinished"]) == 1
     assert "trunk checkpoint" in capsys.readouterr().err
     assert not (tmp_path / "cli_out").exists()
+
+
+# --- F5 (T-37): with the gate shut, plots 1, 2 and 3 draw no variant dot ----------------------
+
+WITHHELD = " ".join(m.WITHHELD_CAPTION.split())
+SHUT_CASES = {
+    "no null control": dict(gaps={"mqa": 0.05}, without=("null",)),
+    "a detected null control": dict(gaps={"mqa": 0.05}, null_gap=0.5),
+}
+
+
+def dots_by_variant(ax) -> dict[str, int]:
+    """The seed dots of an axes, counted by the colour each variant is drawn in (the colours are fixed)."""
+    names = [*mt.HEADLINE_VARIANTS, *config.ladder_names(), "null"]
+    counts = {name: 0 for name in names}
+    for collection in dot_collections(ax):
+        colours = collection.get_facecolor()
+        if len(colours) == 0:
+            continue
+        for name in names:
+            if np.allclose(colours[0][:3], to_rgb(m._colour(name)), atol=1e-6):
+                counts[name] += len(collection.get_offsets())
+    return counts
+
+
+def _caption_says_withheld(figure) -> bool:
+    return any(WITHHELD in text for text in all_texts(figure))
+
+
+@pytest.fixture(params=sorted(SHUT_CASES))
+def shut(request):
+    inputs_ = m.make_inputs(
+        fpi.with_eval_fields(fake_campaign(**SHUT_CASES[request.param])),
+        fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records(),
+    )
+    assert inputs_.analysis.comparisons_allowed is False
+    return inputs_
+
+
+def test_the_dot_counter_sees_variant_dots_when_the_gate_is_open(inputs):
+    counts = dots_by_variant(m.plot_inference_frontier(inputs).axes[0])
+    assert counts["mqa"] == len(inputs.analysis.losses["mqa"]) > 0
+    assert not _caption_says_withheld(m.plot_inference_frontier(inputs))
+
+
+def test_with_the_gate_shut_plot_2_draws_mha_and_no_other_variant(shut):
+    figure = m.plot_inference_frontier(shut)
+    counts = dots_by_variant(figure.axes[0])
+    assert counts["mha"] == len(shut.analysis.losses["mha"]) > 0
+    assert {name: c for name, c in counts.items() if name != "mha"} == {n: 0 for n in counts if n != "mha"}
+    assert _caption_says_withheld(figure)
+
+
+def test_with_the_gate_shut_plot_3_draws_mha_and_no_other_variant(shut):
+    figure = m.plot_memory_frontier(shut)
+    counts = dots_by_variant(figure.axes[0])
+    assert counts["mha"] == len(shut.analysis.losses["mha"]) > 0
+    assert {name: c for name, c in counts.items() if name != "mha"} == {n: 0 for n in counts if n != "mha"}
+    assert _caption_says_withheld(figure)
+
+
+def test_with_the_gate_shut_plot_1_draws_no_dot_and_says_the_variant_runs_are_withheld(shut):
+    figure = m.plot_primary_gaps(shut)
+    assert dot_count(figure) == 0
+    assert _caption_says_withheld(figure)
+
+
+def test_plot_1_draws_the_variant_dots_when_the_gate_is_open(inputs):
+    figure = m.plot_primary_gaps(inputs)
+    assert dot_count(figure) > 0
+    assert not _caption_says_withheld(figure)
+
+
+def test_the_withheld_caption_is_absent_when_no_variant_run_exists():
+    blank = m.make_inputs([])
+    for builder in (m.plot_primary_gaps, m.plot_inference_frontier, m.plot_memory_frontier):
+        assert not _caption_says_withheld(builder(blank)), builder.__name__

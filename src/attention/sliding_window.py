@@ -5,7 +5,8 @@ Projections, RoPE, scale, head order and KV grouping are those of
 differs.
 
 `ref` is plain tensor code with an explicit mask. `opt` skips the work outside
-the window, in one of two ways (`set_opt_path`):
+the window, in one of two ways. The path is the option `opt_path` of the variant's
+`attention` block (set at construction; `set_opt_path` changes it afterwards):
 
 * "chunked" (default): queries in chunks of at most W tokens; a chunk's keys are
   the W tokens before it plus its own. One `F.scaled_dot_product_attention` call
@@ -27,6 +28,7 @@ from src.attention.grouped import GroupedAttention
 from src.transformer import apply_rope
 
 OPT_PATHS = ("chunked", "flex")
+DEFAULT_OPT_PATH = "chunked"
 _COMPILED_FLEX = None
 
 
@@ -37,6 +39,27 @@ def flex_compiled_available() -> bool:
     except ImportError:
         return False
     return bool(torch.cuda.is_available())
+
+
+def _flex_importable() -> bool:
+    """True when this PyTorch provides FlexAttention (CUDA is not needed to build the path)."""
+    try:
+        import torch.nn.attention.flex_attention  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _checked_opt_path(name) -> str:
+    """The name of an opt path this module knows and can build here; ValueError otherwise."""
+    if name not in OPT_PATHS:
+        raise ValueError(f"opt_path must be one of {OPT_PATHS}, got {name!r}")
+    if name == "flex" and not _flex_importable():
+        raise ValueError(
+            "opt_path 'flex' needs torch.nn.attention.flex_attention, which this PyTorch does not "
+            "provide; use opt_path 'chunked'"
+        )
+    return name
 
 
 def _compiled_flex_attention():
@@ -150,7 +173,8 @@ class SlidingWindowAttention(GroupedAttention):
         if isinstance(W, bool) or not isinstance(W, int) or W < 1:
             raise ValueError(f"window must be an int >= 1, got {W!r}")
         self.window = W
-        self.opt_path = "chunked"
+        # The variant's `attention.opt_path` (plan §2.3): part of the resolved config and the hash.
+        self.opt_path = _checked_opt_path(cfg.options.get("opt_path", DEFAULT_OPT_PATH))
         self._block_masks = {}
 
     @property
@@ -164,9 +188,7 @@ class SlidingWindowAttention(GroupedAttention):
         )
 
     def set_opt_path(self, name):
-        if name not in OPT_PATHS:
-            raise ValueError(f"opt path must be one of {OPT_PATHS}, got {name!r}")
-        self.opt_path = name
+        self.opt_path = _checked_opt_path(name)
 
     def init_cache(self, capacity: int | None = None) -> WindowCache:
         if capacity is not None and (isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0):

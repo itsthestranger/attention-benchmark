@@ -609,3 +609,31 @@ def test_seeds_outside_the_registered_sets_are_shown_but_never_tested(campaign, 
     assert "s4 1.0000" in new_rows["gqa2"]["val loss, every seed"]
     assert any("gqa4" in n and "[6]" in n for n in with_extra.notes)
     assert any("gqa2" in n and "[4]" in n for n in with_extra.notes)
+
+
+# --- F8 (T-37): the disclosures of plan §13.1 to §13.5 end every headline table ----------------
+
+DISCLOSURE_SECTIONS = ("§13.2", "§13.3", "§13.4", "§13.5", "§13.1")
+
+
+def test_each_disclosure_is_one_line_naming_its_plan_section_in_the_fixed_order():
+    assert len(mt.DISCLOSURES) == len(DISCLOSURE_SECTIONS)
+    found = [line[line.rindex("(plan ") + len("(plan "):].rstrip(".)") for line in mt.DISCLOSURES]
+    assert found == list(DISCLOSURE_SECTIONS)
+
+
+def test_the_disclosures_end_the_headline_after_the_notes_for_blank_full_and_gate_shut_tables(analysis):
+    cases = {
+        "blank": mt.analyse([]),
+        "full campaign": analysis,
+        "gate shut": mt.analyse(fake_campaign(gaps={"mqa": 0.05}, without=("null",))),
+    }
+    assert cases["blank"].notes and cases["gate shut"].notes  # so that "after the notes" is checked
+    for label, a in cases.items():
+        text = mt.render_markdown(mt.headline_rows(a), a.notes)
+        positions = [text.index(f"- {line}\n") for line in mt.DISCLOSURES]
+        assert positions == sorted(positions), label
+        assert text.count("Disclosures:") == 1, label
+        assert text.endswith(f"- {mt.DISCLOSURES[-1]}\n"), label
+        if a.notes:
+            assert text.index("\nNotes:\n") < positions[0], label

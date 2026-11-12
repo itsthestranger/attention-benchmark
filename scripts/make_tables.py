@@ -197,8 +197,28 @@ def _field(*path: str):
     return read
 
 
-def check_comparable(results: Sequence[dict]) -> None:
-    """Raise TableError listing every reason these runs cannot be compared together."""
+def _steps_problems(runs: Sequence[dict]) -> list[str]:
+    """Plan §7.3, §13.6: the steps taken must agree within STEPS_TAKEN_PARITY, per total step count."""
+    problems: list[str] = []
+    by_total: dict[int, list[dict]] = {}
+    for manifest in runs:
+        by_total.setdefault(manifest["steps"]["total"], []).append(manifest)
+    for total in sorted(by_total):
+        group = by_total[total]
+        low = min(group, key=lambda m: m["steps"]["taken"])
+        high = max(group, key=lambda m: m["steps"]["taken"])
+        diff = high["steps"]["taken"] - low["steps"]["taken"]
+        if diff > STEPS_TAKEN_PARITY * total:
+            problems.append(
+                f"steps taken differ by {diff} at {total} total steps: {low['name']} took "
+                f"{low['steps']['taken']}, {high['name']} took {high['steps']['taken']}; "
+                f"the limit is {STEPS_TAKEN_PARITY * total:g}"
+            )
+    return problems
+
+
+def _comparability_problems(results: Sequence[dict]) -> list[str]:
+    """Every refusal of plan §7.2 and §10.6 except steps-taken parity, which `_steps_problems` owns."""
     problems: list[str] = []
 
     not_results = [m["name"] for m in results if not mf.is_result(m)]
@@ -219,22 +239,16 @@ def check_comparable(results: Sequence[dict]) -> None:
         line = _distinct(results, label, getter)
         if line is not None:
             problems.append(line)
+    return problems
 
-    by_total: dict[int, list[dict]] = {}
-    for manifest in results:
-        by_total.setdefault(manifest["steps"]["total"], []).append(manifest)
-    for total in sorted(by_total):
-        group = by_total[total]
-        low = min(group, key=lambda m: m["steps"]["taken"])
-        high = max(group, key=lambda m: m["steps"]["taken"])
-        diff = high["steps"]["taken"] - low["steps"]["taken"]
-        if diff > STEPS_TAKEN_PARITY * total:
-            problems.append(
-                f"steps taken differ by {diff} at {total} total steps: {low['name']} took "
-                f"{low['steps']['taken']}, {high['name']} took {high['steps']['taken']}; "
-                f"the limit is {STEPS_TAKEN_PARITY * total:g}"
-            )
 
+def check_comparable(results: Sequence[dict]) -> None:
+    """Raise TableError listing every reason these runs cannot be compared together.
+
+    Over every run given, steps-taken parity included. `analyse` applies the parity check to
+    the runs the analysis reads only (plan §13.6: the rule invalidates a comparison).
+    """
+    problems = _comparability_problems(results) + _steps_problems(results)
     if problems:
         raise TableError(_listing("the runs are not comparable", problems))
 
@@ -289,6 +303,9 @@ class Analysis:
     comparisons_allowed: bool  # the gate: both controls computed, the null not detected
     arm_b: dict  # {variant: ArmBResult}, every variant of the arm in its order (plan §8.3)
     context_use: dict  # {variant: ContextUse}, headline order, no MHA (plan §10.3)
+    # The 300M ladder fit over the REGISTERED seeds only (plan §1.4): what seed_count_rule reads.
+    # None whenever `fit` is None. With five MHA seeds it equals `fit`.
+    rule_fit: object = None  # ladder_fit.LadderFit or None
 
 
 class _Collected(NamedTuple):
@@ -301,6 +318,7 @@ class _Collected(NamedTuple):
     data_order_100m: dict
     context: dict  # {variant: {init_seed: {"late_context": x or None, "icl": y or None}}}, 300M
     peak_lr: dict  # {variant: peak learning rate of its 300M and 100M runs (Arm A)}
+    read: tuple  # every manifest whose loss is put into a field above: the runs the analysis reads
 
 
 # The number of non-embedding parameters of each manifest's configuration, by
@@ -363,6 +381,8 @@ def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
     # One manifest per variant, for its parameter count. Every run of a variant has the
     # same model, so the first one read will do.
     examples: dict[str, dict] = {}
+    read: list[dict] = []  # every manifest whose loss is stored below (the steps-parity scope)
+    reproducibility_seeds = set(prereg["test_selection"]["reproducibility_pairs"]["init_seeds"])
     for manifest, parsed in selected:
         loss = float(manifest["final_metrics"]["val_loss"])
         variant = parsed.variant
@@ -370,17 +390,22 @@ def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
         if parsed.branch is None and parsed.tokens == budget:
             losses.setdefault(variant, {})[parsed.init_seed] = loss
             context.setdefault(variant, {})[parsed.init_seed] = _context_values(manifest)
+            read.append(manifest)
         elif parsed.branch == small and parsed.tokens == budget and parsed.peak_lr == lr.get(variant):
             losses_100m.setdefault(variant, {})[parsed.init_seed] = loss
+            read.append(manifest)
         elif parsed.branch == MID_BUDGET and parsed.tokens == budget and parsed.peak_lr == lr.get(variant):
             losses_200m.setdefault(variant, {})[parsed.init_seed] = loss
+            read.append(manifest)
         elif (
             variant == "mha"
             and parsed.branch is None
             and parsed.tokens == small
             and parsed.peak_lr == lr.get("mha")
+            and parsed.init_seed in reproducibility_seeds  # the registered reruns only (plan §8.1)
         ):
             reruns[parsed.init_seed] = loss
+            read.append(manifest)
 
     # The null control and the data-order runs are not in `selected`: the null variant is
     # not a headline variant, and the data-order runs carry other data seeds (plan §8.1).
@@ -401,6 +426,7 @@ def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
             and parsed.peak_lr == lr.get("mha")
         ):
             null_100m[parsed.init_seed] = loss
+            read.append(manifest)
         elif (
             parsed.variant == "mha"
             and parsed.tokens == small
@@ -409,12 +435,14 @@ def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
             and parsed.peak_lr == lr.get("mha")
         ):
             data_order[parsed.data_seed] = loss
+            read.append(manifest)
     # Data seed 1 is the Arm A data seed: its value is the 100M branch of the same init seed.
     branch_100m = losses_100m.get("mha", {})
     if DATA_ORDER_INIT_SEED in branch_100m:
         data_order[arm["data_seed"]] = branch_100m[DATA_ORDER_INIT_SEED]
     return _Collected(
-        losses, losses_100m, losses_200m, reruns, examples, null_100m, data_order, context, lr
+        losses, losses_100m, losses_200m, reruns, examples, null_100m, data_order, context, lr,
+        tuple(read),
     )
 
 
@@ -457,6 +485,24 @@ def _ladder_fit(by_name: Mapping, examples: Mapping, *, budget: str, prefix: str
     except lf.LadderError as exc:
         notes.append(f"{prefix}: {exc}")
         return None
+
+
+def _rule_fit(losses: Mapping, examples: Mapping, prereg: Mapping, notes: list[str]):
+    """The 300M ladder fit over the registered seeds only (plan §1.4): the input of the seed-count rule.
+
+    MHA on `seed_count.base_seeds`, mha_L6 on `positive_control.init_seeds`, mha_L10 on every seed
+    present (the plan registers no seeds for it). Keeping the rule's input fixed means that adding
+    the seeds the rule asked for cannot change the rule's decision.
+    """
+    base = set(prereg["seed_count"]["base_seeds"])
+    l6 = set(prereg["positive_control"]["init_seeds"])
+    by_name = {
+        "mha": {s: v for s, v in losses.get("mha", {}).items() if s in base},
+        "mha_L6": {s: v for s, v in losses.get("mha_L6", {}).items() if s in l6},
+    }
+    if losses.get("mha_L10"):
+        by_name["mha_L10"] = losses["mha_L10"]
+    return _ladder_fit(by_name, examples, budget="300M", prefix="ladder fit on the registered seeds", notes=notes)
 
 
 def _null_control(null_100m: Mapping, mha_100: Mapping, selection, prereg: Mapping, notes: list[str]):
@@ -520,9 +566,15 @@ def _positive_control(losses: Mapping, selection, prereg: Mapping, notes: list[s
         return None
 
 
-def _collect_arm_b(results: Sequence[dict], arm: Mapping) -> tuple[dict, dict, dict]:
-    """Arm B's standalone runs: ({variant: {init_seed: loss}} on the registered seeds, {variant: [seeds]} outside them,
-    {variant: peak learning rate}).
+class _ArmBCollected(NamedTuple):
+    runs: dict  # {variant: {init_seed: loss}} on the registered seeds
+    outside: dict  # {variant: [init seeds outside the registered seeds]}, not used
+    rates: dict  # {variant: peak learning rate}
+    read: tuple  # the manifests whose losses are in `runs`
+
+
+def _collect_arm_b(results: Sequence[dict], arm: Mapping) -> _ArmBCollected:
+    """Arm B's standalone runs on the registered seeds, the seeds outside them, and the peak rates.
 
     Raises TableError when one variant's Arm B runs were trained at two peak learning rates.
     """
@@ -531,6 +583,7 @@ def _collect_arm_b(results: Sequence[dict], arm: Mapping) -> tuple[dict, dict, d
     lr_runs: dict[str, dict[float, list[str]]] = {}
     losses: dict[str, dict[int, float]] = {}
     outside: dict[str, list[int]] = {}
+    read: list[dict] = []
     for manifest in results:
         parsed = mf.parse_run_name(manifest["name"])
         if parsed.arm != arm["tag"] or parsed.data_seed != arm["data_seed"] or parsed.variant not in variants:
@@ -540,6 +593,7 @@ def _collect_arm_b(results: Sequence[dict], arm: Mapping) -> tuple[dict, dict, d
         lr_runs.setdefault(parsed.variant, {}).setdefault(parsed.peak_lr, []).append(manifest["name"])
         if parsed.init_seed in seeds:
             losses.setdefault(parsed.variant, {})[parsed.init_seed] = float(manifest["final_metrics"]["val_loss"])
+            read.append(manifest)
         else:
             outside.setdefault(parsed.variant, []).append(parsed.init_seed)
     problems = []
@@ -552,7 +606,12 @@ def _collect_arm_b(results: Sequence[dict], arm: Mapping) -> tuple[dict, dict, d
     if problems:
         raise TableError(_listing("two learning rates of one variant cannot be mixed", problems))
     rates = {variant: next(iter(by_lr)) for variant, by_lr in lr_runs.items()}
-    return losses, {variant: sorted(found) for variant, found in outside.items()}, rates
+    return _ArmBCollected(
+        runs=losses,
+        outside={variant: sorted(found) for variant, found in outside.items()},
+        rates=rates,
+        read=tuple(read),
+    )
 
 
 def _arm_b_comparisons(
@@ -606,7 +665,7 @@ def _arm_b_comparisons(
 
 
 def _arm_b_results(
-    results: Sequence[dict], losses_100m: Mapping, arm_a_lr: Mapping, *, selection, comparing: bool,
+    collected: _ArmBCollected, losses_100m: Mapping, arm_a_lr: Mapping, *, selection, comparing: bool,
     prereg: Mapping, notes: list[str],
 ) -> dict:
     """{variant: ArmBResult} in the arm file's order (plan §8.3). Comparisons only when `comparing`.
@@ -616,7 +675,7 @@ def _arm_b_results(
     """
     arm = config.load_arm(ARM_B)
     seeds = tuple(arm["init_seeds"])
-    runs, outside, rates = _collect_arm_b(results, arm)
+    runs, outside, rates = collected.runs, collected.outside, collected.rates
     # An arm that has not been run at all is not a missing input of this analysis: arm_b.md says
     # so by its blanks, and the shared notes stay as they are. Once any run exists, a variant
     # without one is noted.
@@ -732,10 +791,18 @@ def _context_use(
 
 def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
     """Every number of the table, computed in the pre-registered order. Refuses incomparable runs."""
-    check_comparable(results)
+    problems = _comparability_problems(results)
+    if problems:
+        raise TableError(_listing("the runs are not comparable", problems))
     if prereg is None:
         prereg = config.load_prereg()
     collected = _collect(results, prereg)
+    arm_b_collected = _collect_arm_b(results, config.load_arm(ARM_B))
+    # Plan §13.6: steps-taken parity invalidates a COMPARISON, so it is checked on the runs that
+    # some comparison reads. A run nothing reads (a sweep point, an unregistered run) is left out.
+    problems = _steps_problems(collected.read + arm_b_collected.read)
+    if problems:
+        raise TableError(_listing("the runs are not comparable", problems))
     losses = collected.losses
     losses_100m = collected.losses_100m
     reruns = collected.reruns
@@ -771,6 +838,7 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
     # 2. Ladder fit at 300M (plan §8.4).
     mha_300 = losses.get("mha", {})
     fit = _ladder_fit(losses, examples, budget="300M", prefix="ladder fit", notes=notes)
+    rule_fit = _rule_fit(losses, examples, prereg, notes) if fit is not None else None
 
     # 2b. The positive control (plan §8.4, §9.4): L6 against L8 at 300M.
     positive_control = _positive_control(losses, selection, prereg, notes)
@@ -804,14 +872,16 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
         notes.append("seed count rule skipped: no test selection")
     if fit is None:
         notes.append("seed count rule skipped: no ladder fit")
-    if selection is not None and fit is not None:
+    elif rule_fit is None:
+        notes.append("seed count rule skipped: no ladder fit on the registered seeds")
+    if selection is not None and rule_fit is not None:
         miss = _missing(base, mha_300)
         if miss:
             notes.append(f"seed count rule: MHA 300M results for seeds {miss} are missing")
         else:
             try:
                 decision = lf.seed_count_rule(
-                    {s: mha_300[s] for s in base}, fit, test=selection.test, prereg=prereg
+                    {s: mha_300[s] for s in base}, rule_fit, test=selection.test, prereg=prereg
                 )
             except lf.LadderError as exc:
                 notes.append(f"seed count rule: {exc}")
@@ -835,6 +905,15 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
         notes.append(
             "positive control not detected: the pipeline cannot see an effect of the size of a 25% "
             "capacity cut, so every null in this report is uninformative (plan §8.4)"
+        )
+
+    # Plan §8.1: while the gate is shut, no variant's loss is shown beside MHA's. Say so once, and
+    # only when there is such a loss to withhold.
+    withheld = [v for v in HEADLINE_VARIANTS if v != "mha" and losses.get(v)]
+    if not gate_open and withheld:
+        notes.append(
+            "variant runs are withheld until the controls pass (plan §8.1): the losses, gaps and "
+            "verdicts of " + ", ".join(withheld) + " are not shown in the headline table"
         )
 
     # 4. The three primary comparisons, Holm-corrected together (plan §1.2).
@@ -927,7 +1006,8 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
     # while the gate is shut; the comparisons wait for it.
     comparing = gate_open and selection is not None
     arm_b = _arm_b_results(
-        results, losses_100m, collected.peak_lr, selection=selection, comparing=comparing, prereg=prereg, notes=notes
+        arm_b_collected, losses_100m, collected.peak_lr, selection=selection, comparing=comparing,
+        prereg=prereg, notes=notes,
     )
 
     # 8. Context use (plan §10.3): secondary, at 300M, every headline variant but MHA.
@@ -956,6 +1036,7 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
         comparisons_allowed=gate_open,
         arm_b=arm_b,
         context_use=context_use,
+        rule_fit=rule_fit,
     )
 
 
@@ -1018,6 +1099,9 @@ def headline_rows(
     rows = []
     for variant in HEADLINE_VARIANTS:
         static = static_columns(variant)
+        # Plan §8.1: while the gate is shut, no cross-variant number is computed or viewed. Only
+        # MHA's losses and the static and timing columns are shown; the rest of a variant's row waits.
+        withheld = variant != reference and not analysis.comparisons_allowed
         cells = {
             "variant": variant,
             "params": static["params"],
@@ -1025,7 +1109,7 @@ def headline_rows(
             "KV bytes/token/layer": static["KV bytes/token/layer"],
             "train ms/step": _timing(train_ms_per_step, variant),
             "decode tok/s (batch 32, cache 4k)": _timing(decode_tok_per_s, variant),
-            "val loss, every seed": _losses_cell(analysis.losses.get(variant, {})),
+            "val loss, every seed": BLANK if withheld else _losses_cell(analysis.losses.get(variant, {})),
         }
         if variant == reference:
             if reference_present:
@@ -1036,6 +1120,10 @@ def headline_rows(
                 cells["gap vs MHA [95% CI]"] = BLANK
                 cells["effective-param multiplier"] = BLANK
                 cells["verdict"] = BLANK
+        elif withheld:
+            cells["gap vs MHA [95% CI]"] = BLANK
+            cells["effective-param multiplier"] = BLANK
+            cells["verdict"] = BLANK
         else:
             decision = analysis.decision
             comparison = analysis.comparisons.get(variant)
@@ -1058,6 +1146,24 @@ def _cell(text: str) -> str:
     return str(text).replace("|", "\\|")
 
 
+# Plan §13.1 to §13.5: the confounds the study must disclose. Fixed text, the same in every
+# headline table, in the plan's order (13.2 to 13.5 first, then 13.1 as it is the one about matching).
+DISCLOSURES = (
+    "MLA bundles two changes, low-rank KV compression and decoupled RoPE; they cannot be fully "
+    "separated, and compression alone was not measured (plan §13.2).",
+    "Kernel maturity is not architecture: MHA, GQA and MQA use a mature fused kernel, while SWA's "
+    "block-skipping path and MLA's absorbed path are newer or hand-written, so any SWA or MLA timing "
+    "gap is partly implementation (plan §13.3).",
+    "Hardware: every number here is from a T4 (sm75) with the memory-efficient kernel, not "
+    "FlashAttention-2 and no fp8; rankings may differ on Ampere and later (plan §13.4).",
+    "Scale: 17M parameters, context 1,024, 300M tokens, one corpus and one tokenizer; nothing here "
+    "extrapolates to production scale (plan §13.5).",
+    "Parameter matching moves capacity into the MLP: iso-parameter variants spend their KV-projection "
+    "savings on a wider MLP, so iso-parameter does not isolate attention; see the Arm B table "
+    "(plan §13.1).",
+)
+
+
 def render_markdown(rows: Sequence[Mapping[str, str]], notes: Sequence[str] = ()) -> str:
     lines = [
         "| " + " | ".join(COLUMNS) + " |",
@@ -1068,6 +1174,7 @@ def render_markdown(rows: Sequence[Mapping[str, str]], notes: Sequence[str] = ()
     text = "\n".join(lines) + "\n"
     if notes:
         text += "\nNotes:\n\n" + "".join(f"- {_cell(note)}\n" for note in notes)
+    text += "\nDisclosures:\n\n" + "".join(f"- {line}\n" for line in DISCLOSURES)
     return text
 
 
@@ -1126,7 +1233,6 @@ def _attr(obj, name: str):
 def gate_values(analysis: Analysis) -> dict[str, dict[str, object]]:
     """The raw value of every row of the gate report, from the analysis objects. No rounding."""
     sel, nc, pc, d = analysis.selection, analysis.null_control, analysis.positive_control, analysis.decision
-    fit = analysis.fit
     null_interval = None if nc is None else (nc.ci_low, nc.ci_high)
     control_interval = None if pc is None else (pc.ci_low, pc.ci_high)
     leaves = None if d is None else (d.leaves_arm_a if d.extended else ())
@@ -1157,7 +1263,7 @@ def gate_values(analysis: Analysis) -> dict[str, dict[str, object]]:
         },
         "Seed count and detectable effect": {
             "sigma_init at 300M, MHA seeds 1-5": _attr(d, "sigma_init"),
-            "ladder slope b at 300M": _attr(fit, "b"),
+            "ladder slope b at 300M": _attr(analysis.rule_fit, "b"),
             "5-seed detectable gap, nats": _attr(d, "detectable_gap"),
             "undetectable parameter fraction at 5 seeds": _attr(d, "undetectable_param_fraction"),
             "threshold": _attr(d, "threshold"),
