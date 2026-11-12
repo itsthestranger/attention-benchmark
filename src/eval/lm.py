@@ -1,4 +1,4 @@
-"""Validation loss, and the same loss split by context value (plan §8.4, prereg `context_use`).
+"""Validation loss, and the same loss split by context value (plan §6, §10.3; prereg `context_use`).
 
 The loss is computed as the trainer computes it: the forward pass in `mode`, under
 fp16 autocast on CUDA when the precision is fp16, and cross-entropy in float32 from
@@ -112,9 +112,11 @@ def evaluate(
     late_min = spec.late_context_min
     n_windows = 0
 
-    autocast = (
-        torch.autocast("cuda", dtype=torch.float16) if precision == "fp16" else contextlib.nullcontext()
-    )
+    def autocast():
+        if precision == "fp16":
+            return torch.autocast("cuda", dtype=torch.float16)
+        return contextlib.nullcontext()
+
     modes = [(m, m.training) for m in model.modules()]
     try:
         model.eval()
@@ -124,7 +126,7 @@ def evaluate(
                     break
                 keep = min(x.shape[0], limit - first)
                 x, y = x[:keep], y[:keep]
-                with autocast:
+                with autocast():
                     logits, _ = model(x.to(dev), mode=mode)
                 loss = F.cross_entropy(
                     logits.float().flatten(0, 1), y.flatten().to(dev), reduction="none"

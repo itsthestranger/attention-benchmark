@@ -1,4 +1,4 @@
-"""Context values and context buckets for the evaluation (plan §8.4, prereg `context_use`).
+"""Context values and context buckets for the evaluation (plan §6, §10.3; prereg `context_use`).
 
 For a target token at global offset g in window w (window start ws = w * T), the
 context value is the number of tokens of the same document that precede it inside

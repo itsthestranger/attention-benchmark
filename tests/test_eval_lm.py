@@ -336,6 +336,38 @@ def test_restores_each_submodule_mode_and_no_grad_inside_forward():
     assert torch.is_grad_enabled()
 
 
+class RecordingStub(PositionStub):
+    """Also records how each forward was called."""
+
+    def __init__(self, T: int, vocab: int, target: int):
+        super().__init__(T, vocab, target)
+        self.seen_training: list[bool] = []
+        self.seen_mode: list[str] = []
+
+    def forward(self, idx, *, mode="opt"):
+        self.seen_training.append(self.training)
+        self.seen_mode.append(mode)
+        return super().forward(idx, mode=mode)
+
+
+@pytest.mark.parametrize("start_training", [True, False])
+def test_the_forward_runs_in_eval_mode(start_training):
+    """Added in review: the model is evaluated in eval mode whatever state it arrives in."""
+    stub = RecordingStub(8, 16, TARGET)
+    stub.train(start_training)
+    evaluate(stub, constant_split(HAND_DOC_STARTS, TARGET), context_length=8, batch_size=2, spec=HAND_SPEC)
+    assert stub.seen_training and not any(stub.seen_training)
+    assert stub.training is start_training
+
+
+@pytest.mark.parametrize("mode", ["ref", "opt"])
+def test_the_requested_mode_reaches_the_model(mode):
+    """Added in review: `ref` and `opt` agree numerically, so only the call shows which ran."""
+    stub = RecordingStub(8, 16, TARGET)
+    evaluate(stub, constant_split(HAND_DOC_STARTS, TARGET), context_length=8, batch_size=2, spec=HAND_SPEC, mode=mode)
+    assert stub.seen_mode and set(stub.seen_mode) == {mode}
+
+
 def test_mode_restored_when_evaluation_raises():
     stub = NaNStub(T8, 8, TARGET, marker=7)
     stub.train()
