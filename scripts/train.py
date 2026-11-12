@@ -3,9 +3,15 @@
     python -m scripts.train RUN_SPEC --data DIR --out DIR [--mode opt|ref] [--device cpu|cuda]
         [--gpu-shared yes|no] [--expected-backend NAME] [--until STEP]
         [--variant V] [--arm A] [--init-seed N] [--data-seed N] [--peak-lr X] [--budget L]
-        [--steps N] [--branches L ...] [--lr-source RUN] [--override PATH=VALUE ...]
-        [--data-config PATH] [--checkpoint-every-seconds S] [--checkpoint-every-steps N] [--eval-every-steps N]
-        [--eval-curve-windows N] [--eval-batch-size N] [--keep-checkpoints N]
+        [--steps N] [--branches [L ...]] [--lr-source RUN] [--override PATH=VALUE ...]
+        [--timing-pass-id ID] [--data-config PATH] [--checkpoint-every-seconds S]
+        [--checkpoint-every-steps N] [--eval-every-steps N] [--eval-curve-windows N]
+        [--eval-batch-size N] [--keep-checkpoints N]
+
+--branches with no label starts a run with no branch (a standalone 100M run). The arm
+iso_wallclock (Arm C) needs --timing-pass-id (or the run-spec key timing_pass_id), the
+timing pass whose step count it runs; every other arm refuses it. Both checks come
+before any work.
 
 One invocation is one run (a trunk with its final decay), started or resumed. A
 second invocation after completion changes nothing and exits 0. A run whose loss is
@@ -48,6 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--expected-backend", dest="expected_backend", choices=sorted(rc.SDPA_BACKENDS),
                    help="required on CUDA: the fused kernel the trainer enforces inside the loop")
     p.add_argument("--until", type=int, metavar="STEP", help="stop after this step (for session limits and tests)")
+    p.add_argument("--timing-pass-id", dest="timing_pass_id", metavar="ID",
+                   help="required for arm iso_wallclock (Arm C), refused for every other arm: the timing pass "
+                        "whose step count the run uses (also the run-spec key timing_pass_id)")
     rc.ops_arguments(p)
     return p
 
@@ -55,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _train(args) -> int:
     spec = rc.build_spec(args)
     resolved = rc.resolve_spec(spec)
+    timing_pass_id = rc.check_timing_pass(resolved, spec["timing_pass_id"])
     config.require_complete(resolved)
     ops = rc.load_ops(args)
     device = rc.choose_device(args.device)
@@ -107,6 +117,7 @@ def _train(args) -> int:
         branch=None,
         until=args.until,
         branch_points=tuple(br.branch_steps(resolved).values()),
+        timing_pass_id=timing_pass_id,
     )
     return rc.run_job(trainer, job)
 

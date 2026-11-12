@@ -494,6 +494,47 @@ def test_exploratory_has_an_interval_and_no_claim(test, n_mha):
         pt.exploratory("gqa2", {1: 3.9, 2: 3.95}, mha, test=test, prereg=PREREG)
 
 
+@pytest.mark.parametrize("test", pt.TESTS)
+@pytest.mark.parametrize("n_mha", SEED_COUNTS)
+def test_secondary_has_an_interval_and_no_claim(test, n_mha):
+    mha = {s: 3.0 + MHA_SPREAD[i] for i, s in enumerate(range(1, n_mha + 1))}
+    mqa = {1: 3.9, 2: 3.95, 3: 3.85}  # a gap no test would miss; a primary variant is allowed here
+    c = pt.secondary("mqa", mqa, mha, reference="mha", seeds=[1, 2, 3], test=test)
+    assert c.verdict == pt.VERDICT_EXPLORATORY and c.kind == "secondary"
+    assert c.name == "mqa" and c.reference == "mha"
+    assert c.p is None and c.p_adjusted is None and c.t is None and c.alpha is None
+    assert c.ruled_out_above is None
+    assert c.ci_low < c.mean_gap < c.ci_high and c.seeds == (1, 2, 3)
+    assert c.reference_seeds == ((1, 2, 3) if test == pt.PAIRED else tuple(range(1, n_mha + 1)))
+
+
+@pytest.mark.parametrize("test", pt.TESTS)
+def test_secondary_agrees_with_the_test_it_names(test):
+    mha = {s: 3.0 + MHA_SPREAD[i] for i, s in enumerate(range(1, 6))}
+    gqa4 = {s: 3.02 + 0.5 * MHA_SPREAD[i] for i, s in enumerate(range(1, 6))}
+    c = pt.secondary("gqa4", gqa4, mha, reference="mha", seeds=[1, 2, 3, 4, 5], test=test)
+    v = np.array([gqa4[s] for s in range(1, 6)])
+    r = np.array([mha[s] for s in range(1, 6)])
+    res = pt.run_test(test, v, r)
+    assert (c.mean_gap, c.ci_low, c.ci_high, c.df) == (float(res.mean_gap), float(res.ci_low), float(res.ci_high), float(res.df))
+    assert (c.differences is not None) == (test == pt.PAIRED)
+
+
+def test_secondary_refuses_seed_sets_it_was_not_given():
+    mha = {1: 3.0, 2: 3.1, 3: 3.05, 4: 3.02}
+    values = {1: 3.2, 2: 3.3, 3: 3.25}
+    with pytest.raises(pt.PreregError):  # an extra variant seed is not silently dropped
+        pt.secondary("mqa", {**values, 4: 3.4}, mha, reference="mha", seeds=[1, 2, 3], test=pt.PAIRED)
+    with pytest.raises(pt.PreregError):  # a missing variant seed
+        pt.secondary("mqa", {1: 3.2, 2: 3.3}, mha, reference="mha", seeds=[1, 2, 3], test=pt.WELCH)
+    with pytest.raises(pt.PreregError):  # pairing needs the same reference seeds
+        pt.secondary("mqa", values, {1: 3.0, 2: 3.1}, reference="mha", seeds=[1, 2, 3], test=pt.PAIRED)
+    with pytest.raises(pt.PreregError):
+        pt.secondary("mqa", values, mha, reference="mha", seeds=[], test=pt.PAIRED)
+    with pytest.raises(pt.PreregError):
+        pt.secondary("mqa", values, mha, reference="mha", seeds=[1, 2, 3], test="mann-whitney")
+
+
 # --- Detectable effect (plan §1.3) -------------------------------------------------
 
 POOLED = pt.WELCH_POOLED_DF

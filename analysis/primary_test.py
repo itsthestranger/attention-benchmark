@@ -308,7 +308,7 @@ def select_test(
 class Comparison:
     name: str
     reference: str
-    kind: str  # "primary" | "null_control" | "positive_control" | "exploratory"
+    kind: str  # "primary" | "null_control" | "positive_control" | "exploratory" | "secondary"
     test: str
     seeds: tuple[int, ...]  # variant seeds, in order
     reference_seeds: tuple[int, ...]
@@ -479,3 +479,45 @@ def exploratory(
         name, reference, "exploratory", test, seeds, ref_seeds, v, r, res, None, None,
         VERDICT_EXPLORATORY,
     )
+
+
+def secondary(
+    name: str,
+    variant_values: Mapping[int, float],
+    reference_values: Mapping[int, float],
+    *,
+    reference: str,
+    seeds: Sequence[int],
+    test: str,
+) -> Comparison:
+    """A gap with its interval and no detection claim, for what the plan reports without a verdict.
+
+    Used for Arm B (plan §8.3: "Exploratory; no detection claims") and for the
+    context-use metrics (plan §10.3: "secondary: no detection claim is made on
+    them"). The values may be any per-seed metric, not only the final loss.
+
+    `seeds` are the variant's seeds, given by the caller from the registered
+    sets; any other seed set in `variant_values` is an error. Under the paired
+    test the reference needs the same seeds and only those are used; under
+    Welch's test every offered reference value is used. The result carries no
+    p-value and the verdict is VERDICT_EXPLORATORY.
+    """
+    seeds = list(seeds)
+    if not seeds:
+        raise PreregError(f"{name}: a secondary comparison needs at least one seed")
+    v = ordered_losses(variant_values, seeds, name)
+    if test == PAIRED:
+        if not set(seeds) <= set(reference_values):
+            raise PreregError(f"{reference}: values for seeds {seeds} are needed to pair with {name}")
+        ref_seeds = seeds
+    elif test == WELCH:
+        ref_seeds = sorted(reference_values)
+    else:
+        raise PreregError(f"unknown test {test!r}; expected one of {TESTS}")
+    r = ordered_losses({s: reference_values[s] for s in ref_seeds}, ref_seeds, reference)
+    res = run_test(test, v, r)
+    return _comparison(
+        name, reference, "secondary", test, seeds, ref_seeds, v, r, res, None, None,
+        VERDICT_EXPLORATORY,
+    )
+

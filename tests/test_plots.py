@@ -910,3 +910,78 @@ def test_the_command_line_refuses_incomparable_manifests(tmp_path, campaign, cap
     assert m.main(["--manifests", str(manifests), "--out", str(tmp_path / "out")]) == 1
     assert "torch version" in capsys.readouterr().err
     assert not (tmp_path / "out").exists()
+
+
+# --- T-36: unfinished runs left out of the plots, by name (plan §8.1, §10.6) -------------------------
+
+
+def _unfinished_run() -> dict:
+    """A SYNTHETIC standalone 100M MHA run that has not finished: it would be a dot on plot 4."""
+    return fake_manifest("mha", budget="100M", branches=[], init_seed=9, completed=False)
+
+
+def _trunk_checkpoint() -> dict:
+    """A SYNTHETIC trunk checkpoint, which no plot may report as a result."""
+    return fake_manifest("mha", kind="trunk_checkpoint", completed=False, init_seed=9)
+
+
+def test_an_unfinished_run_refuses_the_plots_without_the_flag(campaign, tmp_path):
+    with pytest.raises(mt.TableError, match="unfinished"):
+        m.build_all([*campaign, _unfinished_run()], fpi.bench_records(), fpi.probe_records(),
+                    fpi.retrieval_records(), tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+
+
+def test_with_the_flag_all_ten_plots_build_and_the_unfinished_run_draws_no_dot(campaign, tmp_path):
+    unfinished = _unfinished_run()
+    bench, probes, retrieval = fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records()
+    paths = m.build_all([*campaign, unfinished], bench, probes, retrieval, tmp_path / "out", skip_unfinished=True)
+    assert [p.name for p in paths] == list(EXPECTED_FILES)
+    assert all(p.exists() for p in paths)
+    base = m.make_inputs(campaign, bench, probes, retrieval)
+    skipping = m.make_inputs([*campaign, unfinished], bench, probes, retrieval, skip_unfinished=True)
+    assert skipping.skipped == (unfinished["name"],)
+    for name, builder in m.PLOTS:
+        assert dot_count(builder(skipping)) == dot_count(builder(base)), name
+
+
+def test_plot_4_names_the_unfinished_runs_left_out_and_only_when_some_were(campaign):
+    unfinished = _unfinished_run()
+    builder = dict(m.PLOTS)["04_noise_floor.png"]
+    fig = builder(m.make_inputs([*campaign, unfinished], skip_unfinished=True))
+    assert any(f"unfinished runs left out: {unfinished['name']}" in text for text in all_texts(fig))
+    plain = builder(m.make_inputs(campaign))
+    assert not any("unfinished runs left out" in text for text in all_texts(plain))
+
+
+def test_the_command_line_refuses_unfinished_runs_without_the_flag_and_builds_with_it(campaign, tmp_path, capsys):
+    manifests = tmp_path / "manifests"
+    for manifest in [*campaign, _unfinished_run()]:
+        mf.write_manifest(manifest, manifests)
+    none = tmp_path / "none"
+    common = ["--manifests", str(manifests), "--bench", str(none), "--probes", str(none / "p.json"),
+              "--retrieval", str(none / "r.json")]
+    assert m.main([*common, "--out", str(tmp_path / "refused")]) == 1
+    assert "unfinished" in capsys.readouterr().err
+    assert not (tmp_path / "refused").exists()
+    assert m.main([*common, "--out", str(tmp_path / "built"), "--skip-unfinished"]) == 0
+    assert sorted(os.listdir(tmp_path / "built")) == sorted(EXPECTED_FILES)
+
+
+def test_a_trunk_checkpoint_is_refused_with_and_without_the_flag(campaign, tmp_path, capsys):
+    manifests = [*campaign, _trunk_checkpoint()]
+    bench, probes, retrieval = fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records()
+    for skip in (False, True):
+        with pytest.raises(mt.TableError, match="trunk checkpoint"):
+            m.build_all(manifests, bench, probes, retrieval, tmp_path / "out", skip_unfinished=skip)
+    assert not (tmp_path / "out").exists()
+    trunk_dir = tmp_path / "trunk_manifests"
+    for manifest in manifests:
+        mf.write_manifest(manifest, trunk_dir)
+    none = tmp_path / "none"
+    common = ["--manifests", str(trunk_dir), "--bench", str(none), "--probes", str(none / "p.json"),
+              "--retrieval", str(none / "r.json"), "--out", str(tmp_path / "cli_out")]
+    assert m.main(common) == 1
+    assert m.main([*common, "--skip-unfinished"]) == 1
+    assert "trunk checkpoint" in capsys.readouterr().err
+    assert not (tmp_path / "cli_out").exists()

@@ -108,6 +108,7 @@ class PlotInputs:
     probes: tuple  # {variant, task, difficulty, init_seed, accuracy}
     retrieval: tuple  # {variant, task, mode, length, n_distractors, init_seed, accuracy}
     prereg: Mapping
+    skipped: tuple = ()  # names of unfinished runs left out (--skip-unfinished); empty when none
 
 
 # --- Inputs ------------------------------------------------------------------------
@@ -139,10 +140,15 @@ def _checked_bench(records) -> tuple:
     return tuple(out)
 
 
-def make_inputs(manifests, bench=(), probes=(), retrieval=(), *, prereg: Mapping | None = None) -> PlotInputs:
-    """Select, analyse and check the inputs. TableError from the table propagates."""
+def make_inputs(manifests, bench=(), probes=(), retrieval=(), *, prereg: Mapping | None = None,
+                skip_unfinished: bool = False) -> PlotInputs:
+    """Select, analyse and check the inputs. TableError from the table propagates.
+
+    With skip_unfinished, unfinished runs are left out by name (as in make_tables); the names
+    are kept on the inputs so that the plots that draw manifests can say which were left out.
+    """
     prereg = config.load_prereg() if prereg is None else prereg
-    results, _ = mt.select_results(list(manifests))
+    results, skipped = mt.select_results(list(manifests), skip_unfinished=skip_unfinished)
     analysis = mt.analyse(results, prereg)
     return PlotInputs(
         results=tuple(results),
@@ -155,6 +161,7 @@ def make_inputs(manifests, bench=(), probes=(), retrieval=(), *, prereg: Mapping
             "retrieval",
         ),
         prereg=prereg,
+        skipped=tuple(skipped),
     )
 
 
@@ -271,6 +278,11 @@ def _notes_part(notes: Sequence[str]) -> str | None:
     return ("Notes from the analysis: " + "; ".join(notes)) if notes else None
 
 
+def _left_out_part(skipped: Sequence[str]) -> str | None:
+    """One caption line naming the unfinished runs left out by --skip-unfinished, or None."""
+    return ("unfinished runs left out: " + ", ".join(skipped)) if skipped else None
+
+
 def _ladder_fit_usable(analysis: mt.Analysis) -> bool:
     return analysis.fit is not None and analysis.fit.b > 0.0
 
@@ -380,6 +392,7 @@ def plot_primary_gaps(inp: PlotInputs) -> Figure:
             "Bottom row, exploratory (plan §1.2): intervals only, no detection claim, no band.",
             SWA_CAVEAT,
             _notes_part(a.notes),
+            _left_out_part(inp.skipped),
         ],
     )
     for row, names in enumerate([primary, exploratory]):
@@ -442,6 +455,7 @@ def plot_inference_frontier(inp: PlotInputs) -> Figure:
             SWA_CAVEAT,
             ("Missing: " + "; ".join(missing) + ".") if missing else None,
             _notes_part(a.notes),
+            _left_out_part(inp.skipped),
         ],
     )
     ax = panels[0][0]
@@ -475,6 +489,7 @@ def plot_memory_frontier(inp: PlotInputs) -> Figure:
             "the diamond is the seed mean.",
             SWA_CAVEAT,
             _notes_part(a.notes),
+            _left_out_part(inp.skipped),
         ],
     )
     ax = panels[0][0]
@@ -558,6 +573,7 @@ def plot_noise_floor(inp: PlotInputs) -> Figure:
             f"{sel_text} {sigma_text}",
             _null_control_text(a),
             _notes_part(a.notes),
+            _left_out_part(inp.skipped),
         ],
     )
     ax = panels[0][0]
@@ -627,6 +643,7 @@ def plot_ladder(inp: PlotInputs) -> Figure:
             "b is in the panel title. The 300M fit is the primary one; the 100M and 200M fits are the same "
             "conversion along the token axis (plan §8.4). Nothing is refitted here.",
             _notes_part(a.notes),
+            _left_out_part(inp.skipped),
         ],
     )
     for col, budget in enumerate(mt.LADDER_BUDGETS):
@@ -707,6 +724,7 @@ def plot_context_gap(inp: PlotInputs) -> Figure:
             "Positive means worse than MHA. Secondary metrics: no detection claim.",
             SWA_CAVEAT,
             _notes_part(a.notes),
+            _left_out_part(inp.skipped),
         ],
     )
     ax = panels[0][0]
@@ -758,6 +776,7 @@ def plot_training_curves(inp: PlotInputs) -> Figure:
             "and are never drawn as dots.",
             SWA_CAVEAT,
             _notes_part(a.notes),
+            _left_out_part(inp.skipped),
         ],
     )
     ax = panels[0][0]
@@ -1000,9 +1019,12 @@ PLOTS: tuple[tuple[str, Callable[[PlotInputs], Figure]], ...] = (
 )
 
 
-def build_all(manifests, bench, probes, retrieval, out_dir) -> list[Path]:
-    """Write the ten PNG files, in plan order, into `out_dir`. Returns their paths."""
-    inputs = make_inputs(manifests, bench, probes, retrieval)
+def build_all(manifests, bench, probes, retrieval, out_dir, *, skip_unfinished: bool = False) -> list[Path]:
+    """Write the ten PNG files, in plan order, into `out_dir`. Returns their paths.
+
+    Unfinished runs are refused unless skip_unfinished leaves them out, by name (plan §10.6).
+    """
+    inputs = make_inputs(manifests, bench, probes, retrieval, skip_unfinished=skip_unfinished)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     paths = []
@@ -1037,6 +1059,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--retrieval", default="results/retrieval.json", help="retrieval records (JSON list)")
     parser.add_argument("--out", default="results/plots", help="directory to write the PNG files to")
     parser.add_argument("--blank", action="store_true", help="ignore every input; build the blank plots")
+    parser.add_argument(
+        "--skip-unfinished", action="store_true", help="leave unfinished runs out, by name"
+    )
     args = parser.parse_args(argv)
     try:
         if args.blank:
@@ -1048,6 +1073,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 load_records(args.probes),
                 load_records(args.retrieval),
                 args.out,
+                skip_unfinished=args.skip_unfinished,
             )
     except (mt.TableError, mf.ManifestError, PlotError, json.JSONDecodeError) as exc:
         print(exc, file=sys.stderr)
