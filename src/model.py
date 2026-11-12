@@ -10,6 +10,14 @@ import torch.nn.functional as F
 
 from src.attention.base import MODES, AttnConfig
 from src.transformer import Block, RMSNorm, rope_freqs
+from src.utils.seeding import init_model
+
+REQUIRED_INIT = {
+    "distribution": "normal",
+    "residual_output_scale": "inverse_sqrt_two_layers",
+    "norm_gain": 1.0,
+    "seeding": "per_parameter",
+}
 
 
 @dataclass
@@ -41,6 +49,7 @@ class Transformer(nn.Module):
         attn_cfg = AttnConfig.from_resolved(resolved)
         self.n_layers = m["n_layers"]
         self.rope_theta = m["rope_theta"]
+        self.init_std = resolved["init"]["std"]
         self.embed = nn.Embedding(m["vocab_size"], m["d_model"])
         self.layers = nn.ModuleList(Block(attn_cfg, m["d_ff"]) for _ in range(self.n_layers))
         self.norm_f = RMSNorm(m["d_model"])
@@ -92,3 +101,14 @@ class Transformer(nn.Module):
     def n_non_attention_params(self) -> int:
         attn_params = sum(layer.attn.n_params for layer in self.layers)
         return self.n_params - attn_params
+
+
+def build_model(resolved: dict) -> Transformer:
+    """The only supported way to get a model for training or evaluation."""
+    for key, expected in REQUIRED_INIT.items():
+        value = resolved["init"][key]
+        if value != expected:
+            raise ValueError(f"init.{key} must be {expected!r} to match the init rule, got {value!r}")
+    model = Transformer(resolved)
+    init_model(model, resolved["run"]["init_seed"])
+    return model

@@ -70,6 +70,14 @@ class AttnBase(nn.Module):
         """Width RoPE is applied over. Even."""
         raise NotImplementedError
 
+    def residual_output_params(self) -> set[str]:
+        """Local names (e.g. "o.weight") of the weights that write to the residual stream."""
+        raise NotImplementedError
+
+    def init_std_multipliers(self) -> dict[str, float]:
+        """Local name -> multiplier on the base init std. Empty by default."""
+        return {}
+
     @property
     def n_params(self) -> int:
         return sum(p.numel() for p in self.parameters())
