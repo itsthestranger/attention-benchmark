@@ -121,3 +121,4 @@ def build_model(resolved: dict) -> Transformer:
 # Registers "grouped". Imported here, not in src/attention/__init__.py: that would
 # import src.transformer while it is still initialising (circular import).
 import src.attention.grouped  # noqa: E402,F401
+import src.attention.sliding_window  # noqa: E402,F401

@@ -20,6 +20,9 @@ The cache contract (every attention module with a per-token cache)
 - Without a capacity hint, storage grows geometrically, so decoding N tokens
   allocates O(log N) buffers, not N.
 - A cache exposes `length` (tokens held) and `capacity` (tokens it has room for).
+- A sliding-window cache holds the last `window` tokens only: `length` never
+  exceeds `window`, `capacity` never exceeds 2 * `window` whatever the hint, and
+  `k` and `v` are the held tokens in order. It is a value like any other cache.
 """
 
 import math
@@ -28,7 +31,7 @@ import pytest
 import torch
 
 from tests.tolerances import AGREEMENT_FP64, KV_CACHE_DECODE_FP32, scale_relative_error
-from tests.variants import CASES, MODES, VOCAB, tiny_model, tokens
+from tests.variants import CASES, MODES, REAL_WINDOW, VOCAB, tiny_model, tokens
 
 CTX = 1024  # plan §3.1
 
@@ -48,6 +51,8 @@ def decode(model, idx, mode, pieces, capacity=None):
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
 def test_token_by_token_decode_matches_the_full_forward_at_ctx_1024(case, mode):
+    if case.window is not None:
+        case = case._replace(window=REAL_WINDOW)  # the plan's window at the plan's context
     model = tiny_model(case, sharpen=6.0, context_length=CTX)
     idx = tokens(1, CTX, seed=11)
     with torch.no_grad():
@@ -57,7 +62,7 @@ def test_token_by_token_decode_matches_the_full_forward_at_ctx_1024(case, mode):
     assert scale_relative_error(cached, full) <= KV_CACHE_DECODE_FP32
     # Not only on average: the last position, which reads the longest cache.
     assert scale_relative_error(cached[:, -1], full[:, -1]) <= KV_CACHE_DECODE_FP32
-    assert all(cache.length == CTX for cache in state.caches)
+    assert all(cache.length == case.held(CTX) for cache in state.caches)
 
 
 @pytest.mark.parametrize("decode_mode", MODES)
@@ -146,9 +151,11 @@ def test_storage_grows_geometrically_without_a_hint(case):
             _, state = model(idx[:, t : t + 1], mode="opt", state=state)
             states.append(state)  # keep every cache alive so addresses are not reused
             cache = state.caches[0]
-            assert cache.length == t + 1 and cache.capacity >= cache.length
+            assert cache.length == case.held(t + 1) and cache.capacity >= cache.length
             seen.add(cache.capacity)
     assert len(seen) <= math.ceil(math.log2(n)) + 1
+    if case.window is not None:
+        assert max(seen) <= 2 * case.window
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)
@@ -164,7 +171,10 @@ def test_capacity_hint_allocates_once(case):
             seen.add(state.caches[0].capacity)
         hinted, _ = decode(model, idx, "opt", [1] * n, capacity=n)
         plain, _ = decode(model, idx, "opt", [1] * n)
-    assert seen == {n}
+    if case.window is None:
+        assert seen == {n}
+    else:
+        assert len(seen) == 1 and max(seen) <= 2 * case.window  # a window needs no more
     assert torch.equal(hinted, plain)  # the hint changes storage, not results
 
 
