@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 1.
+Last updated: 2026-11-12, end of session 1. 11 of 32 tasks merged; `cpu` tier green on `main` (819 tests).
 
 ## Done
 
@@ -19,7 +19,7 @@ Last updated: 2026-11-12, session 1.
 
 ## In progress
 
-- Nothing.
+- **T-05 MLA naive path**, branch `task/T-05-mla` (pushed). The acceptance tests are committed and final (`tests/test_mla.py`, plus MLA cases in `tests/variants.py`). The last commit is the worker's implementation exactly as it stood when the session ended: **unreviewed**. `tests/test_mla.py` passed on it (39 tests); the full suite was not run. Still to do: run the full `cpu` tier, review the diff (it adds `src/attention/token_cache.py` and refactors `grouped.py`), break it on purpose, add bookkeeping, open the pull request.
 
 ## Blocked
 
@@ -80,6 +80,25 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. T-05 MLA naive path (O+W): tests first. T-16 checkpoint and resume (O+W).
-2. T-18 manifest (W), T-20 evaluation (W), T-19 determinism (W).
-3. T-25 ladder fit (O), waits for Phil's two answers.
+1. Finish T-05 (see "In progress"). Then T-06 MLA absorbed path (O+W) and T-10 step-0 logit scale (O).
+2. T-18 manifest (W), T-20 evaluation (W), T-16 checkpoint and resume (O+W): all unblocked, none started.
+3. T-19 determinism (W), T-08 properties and FLOPs (W, after T-05), T-25 ladder fit (O, waits for Phil's two answers).
+
+## Notes for the next session
+
+How the loop has been run:
+
+- Workers are Haiku subagents in git worktrees under `/home/user/wt/`, one task each. They commit locally; the orchestrator reviews, pushes and opens the pull request, then squash-merges on green CI.
+- Review includes breaking the source on purpose, one change at a time, and checking that a test fails. Every miss so far was a gap in a test, fixed by adding a test.
+- Run one pytest process at a time. The container has 4 cores, and two suites at once made runs ten times slower.
+- A branch stacked on an unmerged branch conflicts after the squash-merge; resolve with `git checkout --ours` on the files the stacked branch changed.
+- The container needs `pip install torch numpy scipy pyyaml tokenizers pyarrow pytest` from PyPI; download.pytorch.org is blocked.
+
+Designs already worked out for tasks not yet started:
+
+- **T-18 manifest.** Run names: `{variant}-{arm tag}-{tokens}-lr{lr}-s{init}-d{data}[-b{branch}]`, with the learning rate in shortest scientific notation and the exponent's minus sign dropped (1e-3 is `lr1e3`, 1.2e-3 is `lr1.2e3`), a ladder name such as `mha_L6` in the variant field, and `{steps}steps` in the tokens field for runs defined by steps. Manifest: one JSON per run or branch with `kind` in run / branch / trunk_checkpoint, a `completed` flag, steps attempted / taken / skipped, scaler scale, versions, GPU, hashes of dataset, tokenizer and data order, the step-time series, `final_metrics` with at least `val_loss`, and the branch's parent run, checkpoint and step. `validate_manifest` reports every problem at once.
+- **T-20 evaluation.** The context value c belongs to the predicted token: the number of tokens of its document that precede it inside the window, from the document-offset sidecar. Buckets [0, 64), [64, 256), [256, 512) and c ≥ 512; the last one must include c = 1,024, which the final target of a single-document window reaches, or the bucket-weighted loss cannot equal the aggregate. Sum per-token losses in float64.
+- **T-10 logit scale.** Needs a common way to read pre-softmax scores from every attention module; only the sliding-window module exposes weights so far.
+- **T-06 absorbed MLA.** Replaces `opt` decode in `mla.py`; the cache already holds only the latent and the positional key.
+- **T-16 checkpoint.** The trainer keeps no hidden position: data and schedule are functions of `trainer.step`. A checkpoint needs the model, the optimizer, the scaler, `step`, `steps_taken` and the step records.
+- **T-23 benchmark.** Compare sliding-window memory with its cap, not with per-token growth (decision 77).
