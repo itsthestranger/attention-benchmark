@@ -1,0 +1,68 @@
+# Pre-registered decision rule (plan §1.2, §1.4, §8.4, §10.3).
+# FROZEN (plan §17.3): changes only through a pull request that Phil approves.
+# Two thresholds are PROPOSALS (plan §0, decisions 20 and 21). Phil confirms or
+# changes them before the pre-registration commit. They are marked below.
+
+primary:
+  reference: mha
+  comparisons: [gqa4, mqa, mla192]
+  metric: final_val_loss
+  budget: 300M
+  two_sided: true
+  family_alpha: 0.05
+  correction: holm
+
+test_selection:
+  # Decided from MHA runs only, after Arm N.
+  sigma_init:
+    variant: mha
+    init_seeds: [1, 2, 3, 4, 5]
+    budget: 100M
+  # s_rep = sqrt(mean(delta^2) / 2) over the reproducibility pairs.
+  reproducibility_pairs:
+    variant: mha
+    init_seeds: [1, 2, 3]
+    budget: 100M
+  # PROPOSED (decision 20): paired test if s_rep < 0.6 * sigma_init.
+  paired_if_s_rep_ratio_below: 0.6
+  otherwise: welch
+
+seed_count:
+  # Applied once, from MHA runs only, after Arm N and the ladder.
+  base_seeds: [1, 2, 3, 4, 5]
+  added_seeds: [6, 7, 8]
+  power: 0.80
+  # PROPOSED (decision 21): with m = exp(-gap / b) for the 5-seed detectable
+  # gap, run 8 seeds if 1 - m exceeds this value.
+  max_undetectable_param_fraction: 0.05
+  leave_arm_a_if_extended: [mla96, swa256]
+
+exploratory:
+  variants: [gqa2, mla96, swa256]
+  init_seeds: [1, 2, 3]
+
+positive_control:
+  # L6 against L8, a single test with the test chosen above.
+  small: mha_L6
+  reference: mha
+  init_seeds: [1, 2, 3, 4, 5]
+  budget: 300M
+  alpha: 0.05
+
+null_control:
+  variant: "null"
+  reference: mha
+  init_seeds: [11, 12, 13, 14, 15]
+  data_seed: 1
+  budget: 100M
+
+context_use:
+  # c = tokens of the same document that precede a token inside the window.
+  # Buckets are half-open: [low, high).
+  buckets: [[0, 64], [64, 256], [256, 512], [512, 1024]]
+  late_context_min: 512
+  # In-context-learning score: mean loss at c in `late` minus mean loss at c
+  # in `early`.
+  icl_score:
+    late: [450, 550]
+    early: [40, 60]

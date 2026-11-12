@@ -1,0 +1,7 @@
+# MHA under another name (plan §8.1). Must stay identical to mha.yaml
+# except for the name.
+name: "null"
+attention:
+  type: grouped
+  n_kv_heads: 8
+d_ff: 1024

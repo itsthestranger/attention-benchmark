@@ -1,0 +1,7 @@
+name: mla96
+attention:
+  type: mla
+  d_c: 96           # KV latent
+  d_c_q: 96         # query latent
+  rope_dim: 24      # d_h^R, RoPE key shared across heads
+d_ff: 1224

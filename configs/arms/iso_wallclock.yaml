@@ -1,0 +1,14 @@
+# Arm C: iso-wall-clock (plan §8.5). Optional, first on the cut list.
+# Each variant gets S_v = round(B / t_v) steps, where B is MHA's measured time
+# for `reference_steps` and t_v the variant's step time from the timing pass.
+name: iso_wallclock
+tag: isowallclock
+d_ff: from_variant
+variants: [mha, swa256, mla192]
+init_seeds: [1, 2, 3]
+budget: from_timing_pass
+reference_steps: 1526
+branches: []
+data_seed: 1
+timing: true             # alone on the box, one session, round-robin
+max_elapsed_deviation: 0.03

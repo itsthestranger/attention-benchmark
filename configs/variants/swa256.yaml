@@ -1,0 +1,6 @@
+name: swa256
+attention:
+  type: sliding_window
+  n_kv_heads: 8
+  window: 256
+d_ff: 1024

@@ -1,0 +1,5 @@
+# Calibration ladder, 1.25x (plan §8.4). MHA with only the layer count changed.
+name: mha_L10
+variant: mha
+model:
+  n_layers: 10

@@ -1,0 +1,5 @@
+name: gqa4
+attention:
+  type: grouped
+  n_kv_heads: 4
+d_ff: 1152
