@@ -21,6 +21,8 @@ import contextlib
 import json
 from pathlib import Path
 
+import yaml
+
 from src import config
 from src.data.loader import TrainStream, open_dataset
 from src.model import build_model
@@ -99,7 +101,13 @@ def main(argv=None) -> int:
         n_tokens = args.steps * batch["sequences_per_step"] * context + 1
         split = synthetic_split(n_tokens, SYNTHETIC_VOCAB, seed=0)
     else:
-        split = open_dataset(args.data_dir, expected_dataset_sha256=None, expected_tokenizer_sha256=None)["train"]
+        # The hashes registered in configs/data.yaml are enforced, as for a training run (plan §6).
+        data_cfg = yaml.safe_load((config.CONFIG_DIR / "data.yaml").read_text(encoding="utf-8"))
+        split = open_dataset(
+            args.data_dir,
+            expected_dataset_sha256=data_cfg["dataset_sha256"],
+            expected_tokenizer_sha256=data_cfg["tokenizer"]["sha256"],
+        )["train"]
     stream = TrainStream(
         split,
         context_length=context,
@@ -107,11 +115,11 @@ def main(argv=None) -> int:
         data_seed=resolved["run"]["data_seed"],
     )
 
-    built: list[Trainer] = []
+    ran: dict = {}  # what the trainers actually ran with, for the record
 
     def build_run() -> Trainer:
         trainer = Trainer(build_model(resolved), resolved, stream, device=args.device, mode=args.mode)
-        built.append(trainer)
+        ran["mode"], ran["precision"] = trainer.mode, trainer.precision
         return trainer
 
     scope = deterministic_algorithms(device=args.device) if args.mode == "ref" else contextlib.nullcontext()
@@ -120,14 +128,15 @@ def main(argv=None) -> int:
     record = reproducibility_record(
         measurement,
         resolved=resolved,
-        mode=args.mode,
-        precision=built[0].precision,
+        mode=ran["mode"],
+        precision=ran["precision"],
         device=args.device,
     )
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(record, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+    # allow_nan=False: a run whose loss is not finite has no reproducibility to record.
+    out.write_text(json.dumps(record, sort_keys=True, indent=1, allow_nan=False) + "\n", encoding="utf-8")
 
     print(
         f"steps={measurement['n_steps']} pairs={measurement['n_pairs']} "

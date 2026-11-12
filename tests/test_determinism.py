@@ -19,7 +19,6 @@ import math
 import pytest
 import torch
 
-from src import config
 from src.data.loader import TrainStream
 from src.model import build_model
 from src.training.trainer import Trainer
@@ -33,7 +32,7 @@ from src.utils.reproducibility import (
 )
 from scripts.measure_reproducibility import main as measure_main
 from tests.fixtures.synthetic_tokens import rule_split
-from tests.variants import CASES, D_MODEL, D_FF, HEAD_DIM, N_HEADS, N_LAYERS, VOCAB
+from tests.variants import CASES, VOCAB, tiny_resolved
 
 T, B, MICRO = 16, 4, 2  # context length, sequences per step, micro-batch
 STEPS = 100  # plan §5.1: 100 steps
@@ -44,28 +43,17 @@ SCALER = {"recipe.grad_scaler.init_scale": 65536.0, "recipe.grad_scaler.growth_i
 
 
 def resolved_for(case, *, steps=STEPS, init_seed=1, **overrides):
-    """The variant's real config, shrunk as tests/variants.py does, with one run's steps."""
-    dims = {
-        "model.d_model": D_MODEL,
-        "model.n_heads": N_HEADS,
-        "model.head_dim": HEAD_DIM,
-        "model.n_layers": N_LAYERS,
-        "model.d_ff": D_FF,
-        "model.vocab_size": VOCAB,
-        "model.context_length": T,
+    """The tiny model of tests/variants.py for this case, with a small batch and one run's steps."""
+    extra = {
         "recipe.batch.sequences_per_step": B,
         "recipe.batch.sequence_length": T,
         "recipe.batch.tokens_per_step": B * T,
         "recipe.batch.micro_batch": MICRO,
+        "run.steps": steps,
+        "run.branches": [],
     }
-    if case.window is not None:
-        dims["model.attention"] = {
-            "type": "sliding_window",
-            "n_kv_heads": case.n_kv_heads,
-            "window": case.window,
-        }
-    dims.update(overrides)
-    return config.resolve(case.name, init_seed=init_seed, peak_lr=1e-3, steps=steps, branches=[], overrides=dims)
+    extra.update(overrides)
+    return tiny_resolved(case, init_seed=init_seed, context_length=T, **extra)
 
 
 def stream_for(steps=STEPS, data_seed=1):
@@ -244,6 +232,60 @@ def test_measure_reproducibility_structure_on_cpu(determinism_state):
     assert measurement["bit_identical"] == all(p["bit_identical"] for p in measurement["pairs"])
     assert all(p["n_steps"] == 5 for p in measurement["pairs"])
     json.dumps(measurement)
+
+
+class _ScriptedTrainer:
+    """Stands in for a trainer whose losses are written out in the test."""
+
+    def __init__(self, losses):
+        self._losses = losses
+        self.step = 0
+        self.steps_taken = 0
+        self.records = []
+
+    def train(self, until):
+        from src.training.trainer import StepRecord
+
+        for i in range(until):
+            self.records.append(StepRecord(i, 0.1, self._losses[i], 1.0, False, 1.0, 0.0))
+        self.step = self.steps_taken = until
+
+
+def test_measure_reproducibility_compares_every_run_with_the_first():
+    """Added in review. Three scripted runs: the second differs from the first by 0.5
+    at most, the third by 2.0. Both differences must appear, and the maximum is the larger."""
+    scripts = iter([[1.0, 2.0], [1.0, 2.5], [1.0, 4.0]])
+    measurement = measure_reproducibility(lambda: _ScriptedTrainer(next(scripts)), 2, 2)
+    assert [p["max_abs_loss_diff"] for p in measurement["pairs"]] == [0.5, 2.0]
+    assert [p["max_rel_loss_diff"] for p in measurement["pairs"]] == [0.25, 1.0]
+    assert measurement["max_abs_loss_diff"] == 2.0
+    assert measurement["max_rel_loss_diff"] == 1.0
+    assert measurement["bit_identical"] is False
+    assert [p["first_differing_step"] for p in measurement["pairs"]] == [1, 1]
+
+
+@pytest.mark.parametrize("mode", ["opt", "ref"])
+def test_script_runs_ref_deterministically_and_passes_its_mode_on(tmp_path, mode, monkeypatch, determinism_state):
+    """Added in review: `ref` runs inside deterministic_algorithms(), `opt` does not,
+    and the trainer is built in the mode asked for."""
+    import scripts.measure_reproducibility as script
+
+    seen = {}
+    real_trainer = script.Trainer
+
+    def recording_trainer(*args, **kwargs):
+        seen.setdefault("deterministic", []).append(torch.are_deterministic_algorithms_enabled())
+        seen.setdefault("mode", []).append(kwargs["mode"])
+        return real_trainer(*args, **kwargs)
+
+    torch.use_deterministic_algorithms(False)
+    monkeypatch.setattr(script, "Trainer", recording_trainer)
+    out = tmp_path / "r.json"
+    assert script.main(["--steps", "3", "--pairs", "1", "--mode", mode, "--synthetic", "--out", str(out)]) == 0
+    assert seen["mode"] == [mode, mode]
+    assert seen["deterministic"] == [mode == "ref"] * 2
+    assert torch.are_deterministic_algorithms_enabled() is False
+    assert json.loads(out.read_text(encoding="utf-8"))["mode"] == mode
 
 
 def test_record_carries_identity_and_is_json(determinism_state):
