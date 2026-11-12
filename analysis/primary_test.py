@@ -258,7 +258,7 @@ class TestSelection:
     threshold: float
 
 
-def _ordered(losses: Mapping[int, float], seeds: Sequence[int], what: str) -> np.ndarray:
+def ordered_losses(losses: Mapping[int, float], seeds: Sequence[int], what: str) -> np.ndarray:
     """Losses in the order of the registered seeds; any other seed set is an error."""
     if sorted(losses) != sorted(seeds):
         raise PreregError(
@@ -282,7 +282,7 @@ def select_test(
     `repro_pairs`: per init seed, the losses of the two identical runs.
     """
     sel = prereg["test_selection"]
-    sigma_init = float(sample_sd(_ordered(mha_losses, sel["sigma_init"]["init_seeds"], "sigma_init")))
+    sigma_init = float(sample_sd(ordered_losses(mha_losses, sel["sigma_init"]["init_seeds"], "sigma_init")))
     pair_seeds = sel["reproducibility_pairs"]["init_seeds"]
     if sorted(repro_pairs) != sorted(pair_seeds):
         raise PreregError(
@@ -388,8 +388,8 @@ def primary_tests(
     missing = [v for v in [reference, *names] if v not in losses]
     if missing:
         raise PreregError(f"missing losses for {missing}; every primary comparison is required")
-    ref = _ordered(losses[reference], seeds, reference)
-    rows = [_ordered(losses[name], seeds, name) for name in names]
+    ref = ordered_losses(losses[reference], seeds, reference)
+    rows = [ordered_losses(losses[name], seeds, name) for name in names]
     results = [run_test(test, row, ref) for row in rows]
     alpha = primary["family_alpha"]
     reject, adjusted = holm(np.array([float(r.p) for r in results]), alpha)
@@ -425,8 +425,8 @@ def null_control(
     seeds = list(nc["init_seeds"])
     if len(seeds) != len(ref_seeds):
         raise PreregError("null control and reference seed counts differ")
-    v = _ordered(null_losses, seeds, nc["variant"])
-    r = _ordered(mha_losses, ref_seeds, nc["reference"])
+    v = ordered_losses(null_losses, seeds, nc["variant"])
+    r = ordered_losses(mha_losses, ref_seeds, nc["reference"])
     alpha = prereg["primary"]["family_alpha"]
     return _single(nc["variant"], nc["reference"], "null_control", test, seeds, ref_seeds, v, r, alpha)
 
@@ -441,8 +441,8 @@ def positive_control(
     """L6 against L8 as a single test (plan §8.4)."""
     pc = prereg["positive_control"]
     seeds = list(pc["init_seeds"])
-    v = _ordered(small_losses, seeds, pc["small"])
-    r = _ordered(mha_losses, seeds, pc["reference"])
+    v = ordered_losses(small_losses, seeds, pc["small"])
+    r = ordered_losses(mha_losses, seeds, pc["reference"])
     return _single(pc["small"], pc["reference"], "positive_control", test, seeds, seeds, v, r, pc["alpha"])
 
 
@@ -464,7 +464,7 @@ def exploratory(
         raise PreregError(f"{name!r} is not a pre-registered exploratory variant")
     reference = prereg["primary"]["reference"]
     seeds = list(ex["init_seeds"])
-    v = _ordered(variant_losses, seeds, name)
+    v = ordered_losses(variant_losses, seeds, name)
     if test == PAIRED:
         if not set(seeds) <= set(mha_losses):
             raise PreregError(f"{reference}: runs for seeds {seeds} are needed to pair with {name}")
@@ -473,7 +473,7 @@ def exploratory(
         ref_seeds = sorted(mha_losses)
     else:
         raise PreregError(f"unknown test {test!r}; expected one of {TESTS}")
-    r = _ordered({s: mha_losses[s] for s in ref_seeds}, ref_seeds, reference)
+    r = ordered_losses({s: mha_losses[s] for s in ref_seeds}, ref_seeds, reference)
     res = run_test(test, v, r)
     return _comparison(
         name, reference, "exploratory", test, seeds, ref_seeds, v, r, res, None, None,
