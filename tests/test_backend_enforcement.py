@@ -64,8 +64,9 @@ def test_without_an_expected_backend_nothing_is_restricted():
     assert seen and all(flags == before for flags in seen)
 
 
-@pytest.mark.parametrize("backend", ["efficient", "math", "flash"])
+@pytest.mark.parametrize("backend", ["math", "flash"])
 def test_the_expected_backend_alone_is_enabled_during_every_forward(backend):
+    # On this CPU build a call can be served with the math or the flash switch on, so a step completes.
     before = _flags()
     trainer = _trainer("mha", "cpu")
     trainer.expected_backend = backend  # the constructor refuses this off CUDA; see the module docstring
@@ -77,12 +78,31 @@ def test_the_expected_backend_alone_is_enabled_during_every_forward(backend):
     assert _flags() == before, "the restriction must end with the forward pass"
 
 
+def test_a_kernel_that_cannot_serve_the_call_fails_the_step():
+    # The CPU has no memory-efficient kernel. With only that kernel allowed, the step must fail
+    # instead of falling back to math: this is the failure plan §2.3 item 1 asks for.
+    before = _flags()
+    trainer = _trainer("mha", "cpu")
+    trainer.expected_backend = "efficient"
+    with pytest.raises(RuntimeError, match="No viable backend"):
+        trainer.train_step()
+    assert trainer.step == 0 and trainer.steps_taken == 0
+    assert _flags() == before, "the restriction must end even when the step fails"
+
+
+def test_the_ref_track_makes_no_fused_call_and_runs_under_any_restriction():
+    trainer = _trainer("mha", "cpu", mode="ref")
+    trainer.expected_backend = "efficient"
+    trainer.train_step()
+    assert trainer.step == 1
+
+
 def test_the_restriction_is_applied_again_on_every_step():
     trainer = _trainer("gqa4", "cpu")
-    trainer.expected_backend = "efficient"
+    trainer.expected_backend = "math"
     for _ in range(STEPS):
         seen = _flags_seen_during_a_step(trainer)
-        assert seen and all(flags == {"flash": False, "efficient": True, "math": False} for flags in seen)
+        assert seen and all(flags == {"flash": False, "efficient": False, "math": True} for flags in seen)
 
 
 @pytest.mark.gpu
