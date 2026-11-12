@@ -157,8 +157,13 @@ def test_rmsnorm_matches_hand_formula():
         norm.gain.copy_(_randn((16,), seed=2, dtype=torch.float64))
     x = _randn((3, 4, 16), seed=3, dtype=torch.float64)
     ms = x.pow(2).mean(dim=-1, keepdim=True)
-    expected = x / torch.sqrt(ms + RMSNORM_EPS) * norm.gain
+    expected = x / torch.sqrt(ms + 1e-6) * norm.gain
     assert scale_relative_error(norm(x), expected) <= FLOAT64_IDENTITY
+
+
+def test_rmsnorm_epsilon_is_pinned():
+    # A model constant (plan §3.1 numerics), not a tolerance: pinned exactly.
+    assert RMSNORM_EPS == 1e-6
 
 
 def test_rmsnorm_is_scale_invariant_to_tolerance():
@@ -433,15 +438,22 @@ def test_scaling_embedding_changes_logits():
 # --- 10. Non-attention parameter counts, full size --------------------------
 
 
+# toy_causal carries one d x d weight per layer, so the attention parameters are
+# non-zero and n_non_attention_params must subtract them.
+
+
 @pytest.mark.parametrize("variant", config.variant_names())
 def test_non_attention_params_full_size(variant):
     resolved = config.resolve(
-        variant, init_seed=0, peak_lr=1e-3, overrides={"model.attention": {"type": "toy_zero"}}
+        variant, init_seed=0, peak_lr=1e-3, overrides={"model.attention": {"type": "toy_causal"}}
     )
     d_ff = resolved["model"]["d_ff"]
     model = Transformer(resolved)
-    # V=8192, d=384, L=8 from the brief, with the variant's own d_ff.
-    assert model.n_non_attention_params == 8192 * 384 + 8 * (3 * 384 * d_ff + 2 * 384) + 384
+    L = 8
+    # V=8192, d=384, L=8 are literals from the brief; d_ff is the variant's own.
+    non_attention = 8192 * 384 + L * (3 * 384 * d_ff + 2 * 384) + 384
+    assert model.n_non_attention_params == non_attention
+    assert model.n_params == non_attention + L * 384 * 384
     assert model.n_non_embedding_params == model.n_params - 8192 * 384
 
 
@@ -452,13 +464,15 @@ def test_ladder_non_attention_params_full_size(ladder, layers):
         ladder=ladder,
         init_seed=0,
         peak_lr=1e-3,
-        overrides={"model.attention": {"type": "toy_zero"}},
+        overrides={"model.attention": {"type": "toy_causal"}},
     )
     assert resolved["model"]["n_layers"] == layers
     d_ff = resolved["model"]["d_ff"]
     model = Transformer(resolved)
     assert len(model.layers) == layers
-    assert model.n_non_attention_params == 8192 * 384 + layers * (3 * 384 * d_ff + 2 * 384) + 384
+    non_attention = 8192 * 384 + layers * (3 * 384 * d_ff + 2 * 384) + 384
+    assert model.n_non_attention_params == non_attention
+    assert model.n_params == non_attention + layers * 384 * 384
     assert model.n_non_embedding_params == model.n_params - 8192 * 384
 
 
@@ -562,7 +576,16 @@ def test_opt_mode_reaches_attention():
     model = Transformer(_resolved())
     idx = torch.randint(0, 32, (2, 4), generator=_gen(23))
     model(idx, mode="opt")
-    assert all(layer.attn.last_mode == "opt" for layer in model.layers)
+    for i, layer in enumerate(model.layers):
+        assert layer.attn.last_mode == "opt", f"layer {i}, no-state path"
+
+
+def test_opt_mode_reaches_attention_on_decode_path():
+    model = Transformer(_resolved())
+    idx = torch.randint(0, 32, (2, 4), generator=_gen(26))
+    model(idx, mode="opt", state=model.init_state())
+    for i, layer in enumerate(model.layers):
+        assert layer.attn.last_mode == "opt", f"layer {i}, decode path"
 
 
 def test_invalid_mode_raises():
