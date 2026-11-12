@@ -724,6 +724,25 @@ def test_rule_4_a_branchs_total_steps_are_its_branch_steps():
     assert any(p.startswith("steps.total: a branch") for p in mf.validate_manifest(manifest))
 
 
+@pytest.mark.parametrize(
+    "kwargs, name",
+    [
+        (dict(variant="mha", init_seed=2), "mha-isoparam-100M-lr1e3-s2-d1"),  # reproducibility rerun
+        (dict(variant="null", init_seed=11), "null-isoparam-100M-lr1e3-s11-d1"),  # null control
+        (dict(variant="mha", data_seed=3), "mha-isoparam-100M-lr1e3-s1-d3"),  # data-order noise
+        (dict(variant="mha", peak_lr=2.4e-3), "mha-isoparam-100M-lr2.4e3-s1-d1"),  # a sweep point
+    ],
+)
+def test_the_fixture_builds_standalone_100M_runs(kwargs, name):
+    """Plan §8.1, §7.4: runs at the 100M budget that are not branches of a longer run."""
+    manifest = fake_manifest(budget="100M", branches=[], **kwargs)
+    assert manifest["name"] == name and manifest["kind"] == "run" and manifest["branch"] is None
+    assert manifest["steps"]["total"] == 1526 and manifest["resolved"]["run"]["branches"] == []
+    assert mf.is_result(manifest) and mf.validate_manifest(manifest) == []
+    # Its name differs from the 100M branch of the 300M run with the same seeds.
+    assert name != fake_manifest(branch="100M", **kwargs)["name"]
+
+
 def test_file_is_sorted_keys_with_indent_one(tmp_path):
     path = mf.write_manifest(RUN, tmp_path)
     expected = json.dumps(RUN, sort_keys=True, indent=1, allow_nan=False) + "\n"
