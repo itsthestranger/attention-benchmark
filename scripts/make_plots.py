@@ -41,9 +41,6 @@ DPI = 120
 BENCH_SCHEMA = "bench/1"
 FRONTIER_BATCH = 32
 FRONTIER_CACHE = 4096
-# Plan §8.1: init noise is MHA seeds 1-5 at data seed 1; data-order noise is MHA
-# init seed 1 at data seeds 2 and 3, 100M budget.
-DATA_ORDER_SEEDS = (2, 3)
 RETRIEVAL_MODES = ("zero_shot", "trained")
 # The lengths of a blank retrieval panel's axis only; with data, the ticks are the lengths present.
 RETRIEVAL_LENGTHS = (256, 512, 1024, 2048)
@@ -504,32 +501,38 @@ def plot_memory_frontier(inp: PlotInputs) -> Figure:
 # --- Plot 4: noise floor ---------------------------------------------------------------
 
 
-def _standalone_100m(results: Sequence[dict], prereg: Mapping) -> tuple[dict, dict]:
-    """Arm N data-order runs and null-control runs: standalone 100M runs, by run name."""
-    arm = config.load_arm(mt.ARM)
-    small = prereg["test_selection"]["sigma_init"]["budget"]
-    null_variant = prereg["null_control"]["variant"]
-    data_order, null = {}, {}
-    for manifest in results:
-        parsed = mf.parse_run_name(manifest["name"])
-        if parsed.arm != arm["tag"] or parsed.tokens != small or parsed.branch is not None:
-            continue
-        loss = float(manifest["final_metrics"]["val_loss"])
-        if parsed.variant == "mha" and parsed.init_seed == 1 and parsed.data_seed in DATA_ORDER_SEEDS:
-            data_order[manifest["name"]] = loss
-        elif parsed.variant == null_variant:
-            null[manifest["name"]] = loss
-    return data_order, null
+NULL_WARNING = (
+    "NULL CONTROL: verdict {verdict}. The null control must show no effect; if it "
+    "does, pairing, seeding or the pipeline has a bug (plan §9.3). Read no comparison until it is fixed."
+)
+
+
+def _sd_text(value: float | None) -> str:
+    return "not available yet" if value is None else f"{value:.4f} nats"
+
+
+def _verdict_line(comp: pt.Comparison) -> str:
+    return (
+        f"verdict {comp.verdict}; mean gap {comp.mean_gap:+.4f} nats, {comp.confidence:.0%} CI "
+        f"[{comp.ci_low:+.4f}, {comp.ci_high:+.4f}]; {comp.test} test"
+    )
+
+
+def _null_control_text(a: mt.Analysis) -> str:
+    if a.null_control is not None:
+        return f"Null control (plan §8.1): {_verdict_line(a.null_control)}."
+    reason = _reason(a.notes, "null control")
+    tail = f" Reason from the analysis notes: {reason}" if reason else " The analysis notes give no reason."
+    return "Null control (plan §8.1): not computed." + tail
 
 
 def plot_noise_floor(inp: PlotInputs) -> Figure:
     prereg, a = inp.prereg, inp.analysis
-    data_order, null = _standalone_100m(inp.results, prereg)
     rows = [
         ("MHA 100M branches, init seeds (Arm N, data seed 1)", list(a.losses_100m.get("mha", {}).values()), "mha"),
         ("MHA 100M reruns, reproducibility pairs", list(a.reruns_100m.values()), "mha"),
-        ("MHA 100M, data seeds 2 and 3 (data-order noise)", list(data_order.values()), "mha"),
-        ("null control, 100M (MHA under another name)", list(null.values()), "null"),
+        ("MHA init seed 1 at 100M, data seeds 1-3 (data-order noise)", list(a.data_order_100m.values()), "mha"),
+        ("null control, 100M (MHA under another name)", list(a.null_100m.values()), "null"),
     ]
     sel = a.selection
     sel_text = (
@@ -538,17 +541,28 @@ def plot_noise_floor(inp: PlotInputs) -> Figure:
         if sel is not None
         else "Test selection not available yet; see the notes."
     )
+    sigma_text = (
+        f"sigma_init_null (null control seeds) = {_sd_text(a.sigma_init_null)}; "
+        f"sigma_data (MHA init seed 1, data seeds 1-3) = {_sd_text(a.sigma_data)}."
+    )
+    warning = None
+    if a.null_control is not None and a.null_control.verdict == pt.VERDICT_DETECTED:
+        warning = textwrap.fill(NULL_WARNING.format(verdict=a.null_control.verdict), 110)
     fig, panels = _figure(
         (9.5, 5.6),
         title="Noise floor: every Arm N and null-control run (plan §8.1, plot 4)",
         caption=[
             "Every dot is one standalone or branch run at 100M tokens. Diamonds: row means. Nothing else is drawn.",
-            sel_text,
-            "The null-control verdict is not produced by analyse() and is not drawn.",
+            "The data-order row is MHA init seed 1 under data seeds 1, 2 and 3. Data seed 1 is the same run as "
+            "init seed 1's dot in the first row, shown in both rows: it is one run, not two.",
+            f"{sel_text} {sigma_text}",
+            _null_control_text(a),
             _notes_part(a.notes),
         ],
     )
     ax = panels[0][0]
+    if warning is not None:
+        ax.set_title(warning, fontsize=9, color="firebrick", fontweight="bold")
     ax.set_xlabel("validation loss at 100M tokens, nats")
     ax.set_ylabel("run group")
     ax.set_yticks([len(rows) - 1 - i for i in range(len(rows))])
@@ -571,56 +585,89 @@ def plot_noise_floor(inp: PlotInputs) -> Figure:
 
 # --- Plot 5: ladder ---------------------------------------------------------------------
 
+# The analysis reason that explains a missing fit at each budget (its notes start with these).
+FIT_NOTE = {"100M": "ladder fit at 100M", "200M": "ladder fit at 200M", "300M": "ladder fit:"}
+STATUS_WIDTH = 34
+# Short point labels inside the panels; the legend carries the full names.
+LADDER_SHORT = {"mha_L6": "L6", "mha": "MHA", "mha_L10": "L10"}
+
+
+def _positive_control_text(a: mt.Analysis) -> str:
+    if a.positive_control is not None:
+        return f"Positive control (plan §8.4): {_verdict_line(a.positive_control)}."
+    reason = _reason(a.notes, "positive control")
+    tail = f" Reason from the analysis notes: {reason}" if reason else " The analysis notes give no reason."
+    return "Positive control (plan §8.4): not computed." + tail
+
+
+def _fit_text(a: mt.Analysis, budget: str) -> str | None:
+    if a.fits.get(budget) is not None:
+        return None
+    reason = _reason(a.notes, FIT_NOTE[budget])
+    return "No fit line: " + (reason if reason else "the analysis notes give no reason.")
+
 
 def plot_ladder(inp: PlotInputs) -> Figure:
     prereg, a = inp.prereg, inp.analysis
     xs = {name: math.log(_non_embedding(name)) for name in LADDER}
-    fit_text = (
-        f"Line: L = a − b ln N fitted at 300M only (plan §8.4), b = {a.fit.b:.4f} nats per e-fold."
-        if _ladder_fit_usable(a)
-        else "No fit line: the ladder fit needs MHA and L6 at 300M (see the notes)."
-    )
+    by_budget = {"100M": a.losses_100m, "200M": a.losses_200m, "300M": a.losses}
     fig, panels = _figure(
-        (9.0, 6.2),
-        title="Calibration ladder: loss against ln(non-embedding parameters) (plan §8.4, plot 5)",
+        (12.0, 6.0),
+        title="Calibration ladder: loss against ln(non-embedding parameters), one panel per budget (plan §8.4, plot 5)",
+        cols=len(mt.LADDER_BUDGETS),
         handles=[
             Line2D([], [], color=_colour(v), marker="o", linestyle="None", markersize=MEAN_MARKER_SIZE,
                    label=DISPLAY[v])
             for v in LADDER
         ],
         caption=[
-            "Filled circles: 300M runs, every seed. Triangles: 100M branches, every seed, drawn but not fitted. "
-            "The 200M branches are not in analyse() output and are not drawn.",
-            fit_text,
+            "Every dot is one seed's final validation loss at that panel's budget, at x = ln of its "
+            "non-embedding parameter count (ticks show the counts). Each panel has its own y-limits.",
+            "Dashed line: the fit of analyse() at that panel's budget, a − b ln N, drawn from the fit object; "
+            "b is in the panel title. The 300M fit is the primary one; the 100M and 200M fits are the same "
+            "conversion along the token axis (plan §8.4). Nothing is refitted here.",
             _notes_part(a.notes),
         ],
     )
-    ax = panels[0][0]
-    ax.set_xlabel("ln(non-embedding parameters); ticks show the parameter count")
-    ax.set_ylabel("validation loss, nats")
-    ax.set_xticks([xs[v] for v in LADDER])
-    ax.set_xticklabels([f"{_non_embedding(v) / 1e6:.2f}M" for v in LADDER])
-    drawn = 0
-    for variant in LADDER:
-        x = xs[variant]
-        at_300 = a.losses.get(variant, {})
-        at_100 = a.losses_100m.get(variant, {})
-        if at_300:
-            seeds = sorted(at_300)
-            _dots(ax, [x] * len(seeds), [at_300[s] for s in seeds], _colour(variant))
+    for col, budget in enumerate(mt.LADDER_BUDGETS):
+        ax = panels[0][col]
+        losses = by_budget[budget]
+        fit = a.fits.get(budget)
+        title = f"{budget} tokens"
+        title += f"\nfit slope b = {fit.b:.4f} nats per e-fold" if fit is not None else "\nno fit line"
+        ax.set_title(title, fontsize=9)
+        ax.set_xlabel("ln(non-embedding parameters); ticks show the count", fontsize=8)
+        ax.set_ylabel("validation loss, nats", fontsize=8)
+        ax.set_xticks([xs[v] for v in LADDER])
+        ax.set_xticklabels([f"{_non_embedding(v) / 1e6:.2f}M" for v in LADDER], fontsize=7)
+        # The same x range in every panel, with or without runs: the ladder points, and room either side.
+        ax.set_xlim(min(xs.values()) - 0.1, max(xs.values()) + 0.1)
+        drawn = 0
+        for variant in LADDER:
+            at_budget = losses.get(variant, {})
+            if not at_budget:
+                continue
+            seeds = sorted(at_budget)
+            _dots(ax, [xs[variant]] * len(seeds), [at_budget[s] for s in seeds], _colour(variant))
+            ax.annotate(LADDER_SHORT[variant], (xs[variant], max(at_budget.values())), xytext=(0, 8),
+                        textcoords="offset points", ha="center", fontsize=7)
             drawn += len(seeds)
-        if at_100:
-            seeds = sorted(at_100)
-            _dots(ax, [x] * len(seeds), [at_100[s] for s in seeds], _colour(variant), marker="^")
-            drawn += len(seeds)
-        if at_300 or at_100:
-            top = max(list(at_300.values()) + list(at_100.values()))
-            ax.annotate(DISPLAY[variant], (x, top), xytext=(0, 8), textcoords="offset points", ha="center", fontsize=8)
-    if _ladder_fit_usable(a):
-        grid = np.linspace(min(xs.values()) - 0.05, max(xs.values()) + 0.05, 50)
-        ax.plot(grid, [a.fit.a - a.fit.b * g for g in grid], color="black", lw=1.0, ls="--", zorder=1)
-    if drawn == 0:
-        _no_data(ax)
+        if fit is not None:
+            grid = np.linspace(min(xs.values()) - 0.05, max(xs.values()) + 0.05, 50)
+            ax.plot(grid, [fit.predict(math.exp(g)) for g in grid], color="black", lw=1.0, ls="--", zorder=1)
+        status = []
+        if drawn == 0:
+            _no_data(ax, _reason(a.notes, FIT_NOTE[budget]))
+        else:
+            fit_text = _fit_text(a, budget)
+            if fit_text is not None:
+                status.append(fit_text)
+        if budget == "300M":
+            status.append(_positive_control_text(a))
+        if status:
+            text = "\n".join(textwrap.fill(s, STATUS_WIDTH) for s in status)
+            ax.text(0.98, 0.98, text, transform=ax.transAxes, ha="right", va="top", fontsize=7, zorder=5,
+                    bbox=dict(facecolor="white", edgecolor="none", alpha=0.85))
     return fig
 
 

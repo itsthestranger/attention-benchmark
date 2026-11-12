@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import ast
 import copy
+import inspect
+import math
 import os
-import re
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +29,7 @@ from scripts import make_tables as mt
 from src.utils import manifest as mf
 from tests.fixtures import fake_plot_inputs as fpi
 from src import config
-from tests.fixtures.fake_campaign import fake_campaign
+from tests.fixtures.fake_campaign import DATA_ORDER_SEEDS, LADDER_PARAMS, NULL_SEEDS, fake_campaign
 from tests.fixtures.fake_manifests import fake_manifest
 from tests.tolerances import FLOAT64_IDENTITY
 
@@ -282,12 +283,13 @@ def test_plot_3_draws_every_seed_of_every_variant(figures, inputs):
 def test_plot_4_draws_every_arm_n_and_null_run_and_nothing_else(figures, inputs, campaign):
     a = inputs.analysis
     arm_n = _arm_n_losses(campaign)
-    # 5 MHA branches (init seeds 1-5), 3 reruns, 2 data-order runs, 5 null-control runs.
+    # 5 MHA branches (init seeds 1-5), 3 reruns, 2 data-order runs and 5 null-control runs in the
+    # manifests; the data-order row also shows data seed 1, which is init seed 1's branch: 16 dots.
     assert len(a.losses_100m["mha"]) == 5 and len(a.reruns_100m) == 3 and len(arm_n) == 10
     figure = figures["04_noise_floor.png"]
-    assert dot_count(figure) == 15
+    assert dot_count(figure) == 16
     drawn = sorted(x for x, _ in all_points(figure))
-    wanted = sorted(list(a.losses_100m["mha"].values()) + arm_n)
+    wanted = sorted(list(a.losses_100m["mha"].values()) + arm_n + [a.data_order_100m[1]])
     np.testing.assert_allclose(drawn, wanted, rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
 
 
@@ -298,7 +300,8 @@ def test_plot_5_draws_every_ladder_seed_at_300m_and_every_100m_branch(figures, i
     # 300M: L6 (5 seeds), MHA (5), L10 (3). 100M: the MHA branches (5); the fixture has no ladder branches.
     assert (at_300, at_100) == (13, 5)
     assert dot_count(figures["05_ladder.png"]) == at_300 + at_100 == 18
-    assert_visible_dots(figures["05_ladder.png"].axes[0])
+    for ax in _ladder_panels(figures["05_ladder.png"]):
+        assert_visible_dots(ax)
 
 
 def test_plot_6_draws_every_seed_gap_in_every_bucket(figures, inputs, campaign):
@@ -330,6 +333,208 @@ def test_plot_9_draws_every_probe_record_as_a_dot(figures, inputs):
 
 def test_plot_10_draws_every_retrieval_record_as_a_dot(figures, inputs):
     assert dot_count(figures["10_retrieval.png"]) == len(inputs.retrieval)
+
+
+# --- Plots 4 and 5 read the controls and the per-budget ladder fits -----------------------------
+
+# Plot 4's rows, from the top: branches (y = 3), reruns (2), data order (1), null control (0).
+# Dots are staggered by 0.14 around their row, so rounding y recovers the row.
+ROW_DATA_ORDER, ROW_NULL = 1, 0
+LADDER_BUDGET_TITLES = ["100M tokens", "200M tokens", "300M tokens"]
+
+
+def _noise_row_points(figure, row: int) -> list[float]:
+    return sorted(x for x, y in all_points(figure) if round(y) == row)
+
+
+def _ladder_panels(figure) -> list:
+    """Plot 5's three panels: the axes that carry a title (the legend and caption rows have none)."""
+    return [ax for ax in figure.axes if ax.get_title()]
+
+
+def _fit_lines(ax) -> list:
+    return [line for line in ax.lines if line.get_linestyle() == "--"]
+
+
+def _panel_text(ax) -> str:
+    return " ".join(" ".join(t.get_text().split()) for t in ax.texts)
+
+
+def _normalised(text: str) -> str:
+    return " ".join(text.split())
+
+
+@pytest.fixture(scope="module")
+def ladder_inputs():
+    """Every ladder budget: MHA and the ladder points also branch at 200M, so all three fits exist."""
+    campaign_ = fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, ladder_branches=True))
+    return m.make_inputs(campaign_, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records())
+
+
+def test_plot_4_null_and_data_order_rows_are_the_analysis_values(figures, inputs):
+    a = inputs.analysis
+    assert len(a.null_100m) == len(NULL_SEEDS) and set(a.data_order_100m) == {1, *DATA_ORDER_SEEDS}
+    figure = figures["04_noise_floor.png"]
+    for row, values in ((ROW_NULL, a.null_100m), (ROW_DATA_ORDER, a.data_order_100m)):
+        drawn = _noise_row_points(figure, row)
+        assert len(drawn) == len(values)
+        np.testing.assert_allclose(drawn, sorted(values.values()), rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+
+
+def test_plot_4_labels_the_data_order_row_and_says_data_seed_1_is_not_a_second_run(figures):
+    figure = figures["04_noise_floor.png"]
+    labels = [t.get_text() for t in figure.axes[0].get_yticklabels()]
+    assert any("data seeds 1-3" in label for label in labels)
+    assert any("Data seed 1 is the same run as init seed 1's dot" in _normalised(text) for text in all_texts(figure))
+
+
+def test_plot_4_at_gate_two_draws_the_null_and_data_order_rows_from_the_analysis():
+    campaign_ = fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, ladder_branches=True))
+    # Gate 2 (test_gate_report.gate_two_stage): no 300M result of anything, only 100M and 200M branches.
+    stage = [x for x in campaign_ if not (PARSE(x["name"]).tokens == "300M" and PARSE(x["name"]).branch is None)]
+    inp = m.make_inputs(stage)
+    a = inp.analysis
+    assert a.null_control is not None and a.fit is None and a.positive_control is None
+    figure = m.plot_noise_floor(inp)
+    for row, values in ((ROW_NULL, a.null_100m), (ROW_DATA_ORDER, a.data_order_100m)):
+        drawn = _noise_row_points(figure, row)
+        assert len(drawn) == len(values) > 0
+        np.testing.assert_allclose(drawn, sorted(values.values()), rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+
+
+def test_plot_4_shows_the_null_control_verdict_mean_gap_interval_and_test(figures, inputs):
+    comp = inputs.analysis.null_control
+    assert comp is not None
+    texts = _normalised(" ".join(all_texts(figures["04_noise_floor.png"])))
+    assert f"verdict {comp.verdict};" in texts
+    assert f"mean gap {comp.mean_gap:+.4f} nats" in texts
+    assert f"[{comp.ci_low:+.4f}, {comp.ci_high:+.4f}]" in texts
+    assert f"{comp.test} test" in texts
+
+
+def test_plot_4_warns_when_the_null_control_verdict_is_the_detected_one():
+    bad = m.make_inputs(fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, null_gap=0.5)))
+    assert bad.analysis.null_control.verdict == pt.VERDICT_DETECTED
+    figure = m.plot_noise_floor(bad)
+    titles = [_normalised(ax.get_title()) for ax in figure.axes if ax.get_title()]
+    assert len(titles) == 1
+    assert "NULL CONTROL" in titles[0] and "plan §9.3" in titles[0]
+    assert f"verdict {pt.VERDICT_DETECTED}" in titles[0]
+
+
+def test_plot_4_has_no_null_warning_when_the_null_control_is_not_detected(figures, inputs):
+    assert inputs.analysis.null_control.verdict != pt.VERDICT_DETECTED
+    figure = figures["04_noise_floor.png"]
+    assert all("NULL CONTROL" not in ax.get_title() for ax in figure.axes)
+    assert not any("NULL CONTROL" in text for text in all_texts(figure))
+
+
+def test_plot_4_says_the_null_control_is_not_computed_and_draws_no_null_dots():
+    no_null = m.make_inputs(fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, without=("null",))))
+    a = no_null.analysis
+    assert a.null_control is None and a.null_100m == {}
+    figure = m.plot_noise_floor(no_null)
+    assert _noise_row_points(figure, ROW_NULL) == []
+    reason = m._reason(a.notes, "null control")
+    assert reason is not None
+    texts = _normalised(" ".join(all_texts(figure)))
+    assert "Null control (plan §8.1): not computed." in texts
+    assert _normalised(reason) in texts
+
+
+def test_plot_4_reads_the_analysis_and_no_longer_parses_run_names():
+    assert not hasattr(m, "_standalone_100m") and not hasattr(m, "DATA_ORDER_SEEDS")
+    source = inspect.getsource(m.plot_noise_floor)
+    assert "parse_run_name" not in source and '["name"]' not in source
+
+
+def test_plot_5_has_three_panels_for_100m_200m_and_300m_in_that_order(ladder_inputs):
+    panels = _ladder_panels(m.plot_ladder(ladder_inputs))
+    assert [ax.get_title().split("\n")[0] for ax in panels] == LADDER_BUDGET_TITLES
+
+
+def test_plot_5_each_panel_draws_every_ladder_seed_at_its_own_budget(ladder_inputs):
+    a = ladder_inputs.analysis
+    by_budget = {"100M": a.losses_100m, "200M": a.losses_200m, "300M": a.losses}
+    panels = _ladder_panels(m.plot_ladder(ladder_inputs))
+    for ax, budget in zip(panels, ("100M", "200M", "300M")):
+        expected = sorted(
+            (math.log(LADDER_PARAMS[name]), loss)
+            for name in m.LADDER
+            for loss in by_budget[budget].get(name, {}).values()
+        )
+        drawn = sorted(plotted_points(ax))
+        assert len(drawn) == len(expected) == 13, budget
+        np.testing.assert_allclose(np.asarray(drawn), np.asarray(expected), rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+        assert_visible_dots(ax)
+
+
+def test_plot_5_fit_line_of_each_panel_passes_through_the_analysis_fit(ladder_inputs):
+    a = ladder_inputs.analysis
+    panels = _ladder_panels(m.plot_ladder(ladder_inputs))
+    for ax, budget in zip(panels, ("100M", "200M", "300M")):
+        fit = a.fits[budget]
+        assert fit is not None
+        lines = _fit_lines(ax)
+        assert len(lines) == 1
+        xs_line = np.asarray(lines[0].get_xdata(), dtype=float)
+        ys_line = np.asarray(lines[0].get_ydata(), dtype=float)
+        for name in m.LADDER:
+            n = LADDER_PARAMS[name]
+            on_line = np.interp(math.log(n), xs_line, ys_line)
+            np.testing.assert_allclose(on_line, fit.predict(n), rtol=FLOAT64_IDENTITY, atol=0.0)
+        assert f"{fit.b:.4f}" in ax.get_title()
+
+
+def test_plot_5_without_ladder_branches_200m_has_no_data_and_100m_has_dots_but_no_fit(inputs):
+    panels = _ladder_panels(m.plot_ladder(inputs))
+    assert [len(plotted_points(ax)) for ax in panels] == [5, 0, 13]
+    assert _fit_lines(panels[0]) == [] and _fit_lines(panels[1]) == [] and len(_fit_lines(panels[2])) == 1
+    assert "no data yet" in _panel_text(panels[1])
+    reason = m._reason(inputs.analysis.notes, "ladder fit at 100M")
+    assert reason is not None and "mha_L6" in reason
+    assert _normalised("No fit line: " + reason) in _panel_text(panels[0])
+
+
+def test_plot_5_shows_the_positive_control_verdict_on_the_300m_panel_only(ladder_inputs):
+    a = ladder_inputs.analysis
+    assert a.positive_control is not None
+    panels = _ladder_panels(m.plot_ladder(ladder_inputs))
+    text_300 = _panel_text(panels[2])
+    assert f"verdict {a.positive_control.verdict};" in text_300
+    assert f"mean gap {a.positive_control.mean_gap:+.4f} nats" in text_300
+    assert "Positive control" not in _panel_text(panels[0]) and "Positive control" not in _panel_text(panels[1])
+
+
+def test_plot_5_says_the_positive_control_is_not_computed_when_a_seed_is_missing():
+    campaign_ = fake_campaign(gaps={"mqa": 0.05}, ladder_branches=True)
+    dropped = [
+        x for x in campaign_
+        if not (PARSE(x["name"]).variant == "mha_L6" and PARSE(x["name"]).tokens == "300M"
+                and PARSE(x["name"]).branch is None and PARSE(x["name"]).init_seed == 5)
+    ]
+    assert len(dropped) == len(campaign_) - 1
+    inp = m.make_inputs(fpi.with_eval_fields(dropped))
+    assert inp.analysis.positive_control is None
+    reason = m._reason(inp.analysis.notes, "positive control")
+    assert reason is not None
+    text_300 = _panel_text(_ladder_panels(m.plot_ladder(inp))[2])
+    assert "Positive control (plan §8.4): not computed." in text_300
+    assert _normalised(reason) in text_300
+
+
+def test_blank_plot_5_has_three_empty_panels_titled_by_budget(blank_figures):
+    panels = _ladder_panels(blank_figures["05_ladder.png"])
+    assert [ax.get_title().split("\n")[0] for ax in panels] == LADDER_BUDGET_TITLES
+    for ax in panels:
+        assert plotted_points(ax) == []
+        assert "no data yet" in _panel_text(ax)
+        assert ax.get_xlabel() and ax.get_ylabel()
+
+
+def test_plot_5_caption_no_longer_describes_the_200m_branches_as_missing(figures):
+    texts = _normalised(" ".join(all_texts(figures["05_ladder.png"])))
+    assert "not in analyse() output" not in texts and "drawn but not fitted" not in texts
 
 
 def test_every_axes_of_every_plot_keeps_its_dots_visible(figures):
@@ -521,7 +726,10 @@ def test_the_plot_module_contains_no_statistics_of_its_own():
     assert "analysis.ladder_fit" not in imported and "analysis.rqw_estimate" not in imported
     for word in ("ttest", "pvalue", "p_value", "welch_t", "paired_t", "holm(", "run_test("):
         assert word not in source, word
-    assert re.search(r"detected", source, re.IGNORECASE) is None
+    # No verdict string is typed out: no string literal of the module names a verdict. The
+    # constants are compared by name (pt.VERDICT_DETECTED), which is not a string literal.
+    literals = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    assert not [text for text in literals if "detected" in text.lower()]
     assert ".verdict" in source
 
 
@@ -617,8 +825,12 @@ def test_an_arm_n_only_stage_builds_every_plot_and_plot_4_shows_only_arm_n(tmp_p
     figure = m.plot_noise_floor(inp)
     mha_branches = [float(x["final_metrics"]["val_loss"]) for x in stage
                     if PARSE(x["name"]).variant == "mha" and PARSE(x["name"]).branch == "100M"]
-    wanted = sorted(mha_branches + _arm_n_losses(stage))
-    assert len(wanted) == 15
+    # The data-order row also shows data seed 1: init seed 1's branch, a second time (16 dots).
+    seed_1_branch = [float(x["final_metrics"]["val_loss"]) for x in stage
+                     if PARSE(x["name"]).variant == "mha" and PARSE(x["name"]).branch == "100M"
+                     and PARSE(x["name"]).init_seed == 1]
+    wanted = sorted(mha_branches + _arm_n_losses(stage) + seed_1_branch)
+    assert len(wanted) == 16
     drawn = sorted(x for x, _ in all_points(figure))
     np.testing.assert_allclose(drawn, wanted, rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
 
