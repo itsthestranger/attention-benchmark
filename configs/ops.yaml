@@ -1,0 +1,10 @@
+# Operational settings (plan §8.7, §12.3). NOT frozen, and NOT part of the configuration:
+# these values never enter the resolved config or its hash, so a different checkpoint
+# cadence resumes the same run. The scripts record the values each session used next
+# to its manifest. Command-line flags of the same names override them.
+checkpoint_every_seconds: 600   # plan §12.3: lose at most about ten minutes
+checkpoint_every_steps: null    # optional extra step cadence; null = none
+eval_every_steps: 250           # in-run validation point (plan §10.2)
+eval_curve_windows: 256         # validation windows per in-run point
+eval_batch_size: 64
+keep_checkpoints: 2             # plan §12.3: the last two; branch points are never pruned
