@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 2. 23 of 32 tasks merged; `cpu` tier green on `main` (2,358 tests, about three minutes).
+Last updated: 2026-11-12, session 2. 24 of 32 tasks merged; `cpu` tier green on `main` (2,404 tests, about three minutes).
 
 ## Done
 
@@ -28,6 +28,7 @@ Last updated: 2026-11-12, session 2. 23 of 32 tasks merged; `cpu` tier green on 
 - T-26 computed wall-clock estimate (#23).
 - T-27 headline table with refusal gates (#24).
 - T-17 WSD decay branches (#25).
+- T-11 graph-diff check (#26).
 
 ## In progress
 
@@ -65,7 +66,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–134 so far).
+All decisions are in `docs/decisions.md` (rows 1–137 so far).
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
