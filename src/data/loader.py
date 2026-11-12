@@ -18,7 +18,7 @@ from typing import Iterator
 import numpy as np
 import torch
 
-from src.data.packing import _hash_bins
+from src.data.packing import hash_bins
 from src.data.tokenizer import file_sha256
 
 SPLITS = ("train", "val", "test")
@@ -122,7 +122,7 @@ def open_dataset(
         splits[name] = TokenSplit(tokens, starts)
 
     if verify:
-        bin_hashes, dataset_hash = _hash_bins(root)
+        bin_hashes, dataset_hash = hash_bins(root)
         for name in SPLITS:
             sm = meta["splits"][name]
             if bin_hashes[f"{name}.bin"] != sm["sha256"]:
@@ -165,13 +165,23 @@ class TrainStream:
     only on k and the constructor arguments."""
 
     def __init__(self, split: TokenSplit, *, context_length: int, sequences_per_step: int,
-                 data_seed: int):
+                 data_seed: int, limit_tokens: int | None = None):
+        """``limit_tokens``, if given, restricts the stream to windows lying entirely
+        inside the first ``limit_tokens`` tokens (the smoke slice, plan §6). It does
+        not change the order rule: the order is train_order over the limited count."""
         if sequences_per_step <= 0:
             raise ValueError("sequences_per_step must be positive")
+        if limit_tokens is not None:
+            if not isinstance(limit_tokens, int) or isinstance(limit_tokens, bool) or limit_tokens <= 0:
+                raise ValueError(f"limit_tokens must be a positive int, got {limit_tokens!r}")
+            available = min(len(split.tokens), limit_tokens)
+        else:
+            available = len(split.tokens)
+        n_windows = max(0, (available - 1) // context_length)
         self._split = split
         self._context_length = context_length
         self._batch = sequences_per_step
-        self.order = train_order(split.n_windows(context_length), data_seed)
+        self.order = train_order(n_windows, data_seed)
         self.order_sha256 = order_sha256(self.order)
         self.max_steps = len(self.order) // sequences_per_step
 

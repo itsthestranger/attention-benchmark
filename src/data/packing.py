@@ -38,6 +38,7 @@ def pack_dataset(
     sources: list[dict] | None = None,
     allow_short_train: bool = False,
     tokenizer_file: str | Path | None = None,
+    tokenizer_sources: list[dict] | None = None,
 ) -> dict:
     """Write tokenizer.json, {split}.bin, {split}.docs.bin and meta.json to out_dir.
 
@@ -111,6 +112,7 @@ def pack_dataset(
         "dataset_sha256": dataset_hash,
         "splits": splits_meta,
         "sources": list(sources or []),
+        "tokenizer_sources": list(tokenizer_sources or []),
         "versions": {
             "tokenizers": tokenizers.__version__,
             "numpy": np.__version__,
@@ -125,10 +127,10 @@ def pack_dataset(
 
 def dataset_sha256(directory: str | Path) -> str:
     """SHA-256 over the bytes of train.bin, val.bin, test.bin, in that order."""
-    return _hash_bins(Path(directory))[1]
+    return hash_bins(Path(directory))[1]
 
 
-def _hash_bins(directory: Path) -> tuple[dict[str, str], str]:
+def hash_bins(directory: Path) -> tuple[dict[str, str], str]:
     """Per-file SHA-256 of train/val/test .bin, and the combined dataset hash,
     computed in one streaming pass."""
     combined = hashlib.sha256()

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import re
 import shutil
 import types
 from pathlib import Path
@@ -43,6 +44,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 CONTEXT = 16
 VOCAB = 300
+# A requested size the synthetic corpus cannot reach, for the mismatch tests.
+UNREACHED_VOCAB = 1000
 TARGETS = {"val": 300, "test": 300, "train": 4000}
 SPLITS = ("train", "val", "test")
 
@@ -287,6 +290,7 @@ def test_meta_records_matching_hashes(corpus):
     assert meta["eos_id"] == 0
     assert meta["context_length"] == CONTEXT
     assert meta["sources"] == corpus.meta["sources"]
+    assert meta["tokenizer_sources"] == []  # the fixture passes no tokenizer provenance
 
 
 # --- 7. Refusal ------------------------------------------------------------
@@ -518,6 +522,51 @@ def test_batches_are_stateless(corpus):
         assert torch.equal(x, in_order[k][0]) and torch.equal(y, in_order[k][1])
 
 
+# --- 11b. Smoke slice (limit_tokens) ------------------------------------------
+
+LIMIT = 1000  # tokens of the 4000-token train split
+
+
+def test_smoke_limit_restricts_windows_to_the_first_tokens(corpus):
+    split = corpus.splits["train"]
+    tokens = np.asarray(split.tokens)
+    head = tokens[:LIMIT]
+    stream = TrainStream(split, context_length=CONTEXT, sequences_per_step=8, data_seed=3,
+                         limit_tokens=LIMIT)
+    count = (LIMIT - 1) // CONTEXT
+    assert stream.order.numel() == count
+    assert stream.max_steps == count // 8
+    assert sorted(stream.order.tolist()) == list(range(count))
+    assert torch.equal(stream.order, train_order(count, 3))
+    assert int(stream.order.max()) < count
+    for step in range(stream.max_steps):
+        x, y = stream.batch(step)
+        for j, index in enumerate(stream.order[step * 8:(step + 1) * 8].tolist()):
+            start = index * CONTEXT
+            assert start + CONTEXT < LIMIT  # target token lies inside the slice
+            assert torch.equal(x[j], torch.from_numpy(head[start:start + CONTEXT].astype(np.int64)))
+            assert torch.equal(y[j], torch.from_numpy(head[start + 1:start + CONTEXT + 1].astype(np.int64)))
+
+
+def test_smoke_limit_none_and_oversized_limit_match_unlimited(corpus):
+    split = corpus.splits["train"]
+    plain = TrainStream(split, context_length=CONTEXT, sequences_per_step=8, data_seed=3)
+    none = TrainStream(split, context_length=CONTEXT, sequences_per_step=8, data_seed=3, limit_tokens=None)
+    big = TrainStream(split, context_length=CONTEXT, sequences_per_step=8, data_seed=3,
+                      limit_tokens=10**6)
+    assert torch.equal(plain.order, train_order(split.n_windows(CONTEXT), 3))
+    assert torch.equal(none.order, plain.order) and none.order_sha256 == plain.order_sha256
+    assert torch.equal(big.order, plain.order) and big.order_sha256 == plain.order_sha256
+    assert none.max_steps == big.max_steps == plain.max_steps
+
+
+@pytest.mark.parametrize("bad", [0, -5])
+def test_smoke_limit_must_be_positive(corpus, bad):
+    with pytest.raises(ValueError):
+        TrainStream(corpus.splits["train"], context_length=CONTEXT, sequences_per_step=8,
+                    data_seed=3, limit_tokens=bad)
+
+
 # --- 12. Eval windows --------------------------------------------------------
 
 def test_eval_windows_cover_every_window_once_in_order(corpus):
@@ -542,11 +591,15 @@ def test_eval_windows_cover_every_window_once_in_order(corpus):
 
 # --- 13. Command line --------------------------------------------------------
 
-def _prepare_args(corpus, out: Path, *extra: str) -> list[str]:
+def _prepare_args(corpus, out: Path, *extra: str, vocab: int | None = None) -> list[str]:
+    # Default: the vocabulary size the synthetic corpus actually reaches (295 for the
+    # requested 300), so the run needs no mismatch flag.
+    if vocab is None:
+        vocab = corpus.tok.get_vocab_size()
     return [
         "--inputs", str(corpus.jsonl),
         "--out", str(out),
-        "--vocab-size", str(VOCAB),
+        "--vocab-size", str(vocab),
         "--context-length", str(CONTEXT),
         "--train-tokens", str(TARGETS["train"]),
         "--val-tokens", str(TARGETS["val"]),
@@ -564,6 +617,8 @@ def test_prepare_script_end_to_end_and_refuses_overwrite(corpus, tmp_path, capsy
         assert (out / name).is_file()
     meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
     assert meta["sources"][0]["sha256"] == file_sha256(corpus.jsonl)
+    assert meta["tokenizer_sources"] == [{"path": str(corpus.jsonl), "sha256": file_sha256(corpus.jsonl)}]
+    assert meta["vocab_size"] == corpus.tok.get_vocab_size()
     printed = capsys.readouterr().out
     assert meta["dataset_sha256"] in printed and meta["tokenizer_sha256"] in printed
     splits = open_dataset(out, expected_dataset_sha256=meta["dataset_sha256"],
@@ -582,6 +637,7 @@ def test_prepare_script_reuses_given_tokenizer(corpus, tmp_path):
     meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
     assert meta["tokenizer_sha256"] == file_sha256(corpus.tok_path)
     assert (out / "tokenizer.json").read_bytes() == corpus.tok_path.read_bytes()
+    assert meta["tokenizer_sources"] == [{"path": str(corpus.tok_path), "sha256": file_sha256(corpus.tok_path)}]
 
 
 def test_same_inputs_give_same_dataset_hash_in_different_directories(corpus, tmp_path):
@@ -594,6 +650,44 @@ def test_same_inputs_give_same_dataset_hash_in_different_directories(corpus, tmp
     out = tmp_path / "c"
     assert main(_prepare_args(corpus, out, "--tokenizer", str(corpus.tok_path))) == 0
     assert json.loads((out / "meta.json").read_text(encoding="utf-8"))["dataset_sha256"] == hashes[0]
+
+
+def test_vocab_mismatch_refused_when_trained(corpus, tmp_path, capsys):
+    out = tmp_path / "mismatch_trained"
+    rc = main(_prepare_args(corpus, out, "--tokenizer-inputs", str(corpus.jsonl), vocab=UNREACHED_VOCAB))
+    assert rc == 2
+    assert not (out / "meta.json").exists()
+    err = capsys.readouterr().err
+    # Training stops at the corpus's merges, so the actual size is whatever it reached.
+    assert re.search(r"vocabulary is \d+", err) and f"requested size is {UNREACHED_VOCAB}" in err
+
+
+def test_vocab_mismatch_refused_when_reused(corpus, tmp_path, capsys):
+    out = tmp_path / "mismatch_reused"
+    rc = main(_prepare_args(corpus, out, "--tokenizer", str(corpus.tok_path), vocab=UNREACHED_VOCAB))
+    assert rc == 2
+    assert not (out / "meta.json").exists()
+    err = capsys.readouterr().err
+    assert str(corpus.tok.get_vocab_size()) in err and str(UNREACHED_VOCAB) in err
+
+
+def test_vocab_mismatch_allowed_with_flag(corpus, tmp_path):
+    trained = tmp_path / "flag_trained"
+    assert main(_prepare_args(corpus, trained, "--tokenizer-inputs", str(corpus.jsonl),
+                              "--allow-vocab-mismatch", vocab=UNREACHED_VOCAB)) == 0
+    reused = tmp_path / "flag_reused"
+    assert main(_prepare_args(corpus, reused, "--tokenizer", str(corpus.tok_path),
+                              "--allow-vocab-mismatch", vocab=UNREACHED_VOCAB)) == 0
+    meta = json.loads((reused / "meta.json").read_text(encoding="utf-8"))
+    assert meta["vocab_size"] == corpus.tok.get_vocab_size()  # the tokenizer's size, recorded as is
+
+
+def test_trained_tokenizer_reaches_requested_size_exactly(corpus, tmp_path):
+    # Training with the size the corpus reaches gives that size, with no flag needed.
+    out = tmp_path / "exact"
+    size = corpus.tok.get_vocab_size()
+    assert main(_prepare_args(corpus, out, "--tokenizer-inputs", str(corpus.jsonl), vocab=size)) == 0
+    assert json.loads((out / "meta.json").read_text(encoding="utf-8"))["vocab_size"] == size
 
 
 # --- 14. Vocabulary limit ----------------------------------------------------
