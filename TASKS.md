@@ -35,7 +35,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | T-09 | `solve_config.py` and `test_params.py` | W | T-08 | §3.2, §4.3, §8.4 | 17,308,032 exactly for non-MLA variants; MLA offsets +3,072 and +1,536; ladder at 10,621,824 and 17,702,784 non-embedding; fails loudly instead of rounding |
 | T-10 | Step-0 logit-scale test across all variants | O | T-04, T-05, T-07 | §3.3, §5 | Attention-logit std agrees within 10% across the seven variants |
 | T-11 | CI graph-diff check | W | T-09 | §4.1 | Fails when anything outside the attention subtree differs, except d_ff in Arm A and layer count in the ladder |
-| T-12 | Recurrence anchor module | W | T-02 | §9.2 | Causal and shape tests pass; the state is one d_model vector |
+| T-12 ✅ | Recurrence anchor module | W | T-02 | §9.2 | Causal and shape tests pass; the state is one d_model vector |
 
 ## M2 — Training
 
