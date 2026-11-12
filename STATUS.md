@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 2. 18 of 32 tasks merged; `cpu` tier green on `main` (2,151 tests, about two minutes).
+Last updated: 2026-11-12, session 2. 19 of 32 tasks merged; `cpu` tier green on `main` (2,185 tests, about two minutes).
 
 ## Done
 
@@ -23,10 +23,11 @@ Last updated: 2026-11-12, session 2. 18 of 32 tasks merged; `cpu` tier green on 
 - T-18 manifest and run naming (#17).
 - T-08 attention properties and FLOP counts (#18).
 - T-16 checkpoint and resume (#19).
+- T-10 step-0 logit-scale test (#21).
 
 ## In progress
 
-- Nothing.
+- **T-09 config solver**, **T-26 wall-clock estimate**, **T-27 headline table**: each implemented by a worker in its worktree under `/home/user/wt/`, committed locally on `task/T-09-solver`, `task/T-26-rqw`, `task/T-27-tables`. **Not yet reviewed, not pushed.** T-27's worker raised two points to settle in review: without the ladder there is no seed count and so no primary verdict (the brief contradicted itself; the code follows the plan's order), and it changed the synthetic campaign's default noise seed after seeing an outlier draw.
 
 ## Blocked
 
@@ -46,6 +47,7 @@ These do not block the build. Each is implemented as described and can be change
 - **Top context bucket (decision 95).** c = 1,024 counts in the last bucket, so that bucket is c ≥ 512 and not the half-open [512, 1024) of plan §10.3. Otherwise the bucket-weighted loss cannot equal the aggregate.
 - **Multiplier interval (decisions 87, 88, 92).** The interval of the effective-parameter multiplier is the set of gap / slope ratios the data do not reject, with the noise the 8-layer MHA runs contribute to both counted once. It reports no interval when the ladder slope cannot be told from zero. No simulated coverage test is committed, because `tests/tolerances.py` has no allowance for one; say if you want one and with what allowance.
 - **Reproducibility in `opt` mode (decision 99).** Plan §5 asks that two identical runs "land within a measured, recorded tolerance". No tolerance exists before the measurement, so the `gpu` and `t4` tests measure and record the difference and apply no threshold.
+- **Step-0 logit scale (decision 118).** "Attention-logit std" is pooled over all layers, heads and causal pairs of the full-size model, at two init seeds. The seven variants land between 0.965 and 1.019 of MHA. A single deep layer moves by up to about 10% between seeds of one variant, so the test does not compare layer by layer.
 - **`configs/data.yaml` (decision 38).** Not frozen. Consider adding it to CODEOWNERS once the hashes are filled in.
 
 ## Deviations from the plan
@@ -56,7 +58,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–116 so far).
+All decisions are in `docs/decisions.md` (rows 1–119 so far).
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
@@ -96,9 +98,9 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. T-17 branch (O+W): write `tests/test_wsd_branch.py` first; branch-point checkpoints and their manifests exist.
-2. T-26 wall-clock estimate (W), T-27 tables with refusal gates (W), T-09 config solver (W): all unblocked.
-3. T-06 MLA absorbed path (O+W), T-10 step-0 logit scale (O), T-21 probes (W), T-22 retrieval generators (W).
+1. Review and merge T-09, T-26 and T-27 (see "In progress").
+2. T-17 branch (O+W): write `tests/test_wsd_branch.py` first. T-06 MLA absorbed path (O+W).
+3. T-11 graph diff (W, after T-09), T-28 plots (W, after T-27), T-21 probes (W), T-22 retrieval generators (W), T-23 benchmark scripts (W, after T-06).
 
 ## Notes for the next session
 
@@ -112,7 +114,6 @@ How the loop has been run:
 
 Designs already worked out for tasks not yet started:
 
-- **T-10 logit scale.** Needs a common way to read pre-softmax scores from every attention module; only the sliding-window module exposes weights so far.
 - **T-06 absorbed MLA.** Replaces `opt` decode in `mla.py`; the cache already holds only the latent and the positional key.
 - **T-17 branch.** A branch restores a `trunk-step*.pt` checkpoint (`src/training/checkpoint.py`) into a trainer whose config has the branch's step count, then decays. `restore` refuses another config hash, so `branch.py` needs its own entry that checks the parent's hash and the branch step (`decay_start` of the branch budget) instead. Its manifest is `kind: branch` with the parent's resolved config (decision 102).
 - **T-29 entry points.** Give `ref` and `opt` their own checkpoint roots (decision 115). Record the trainer's enforced backend on the attention modules with `set_sdpa_backend` and write it to the manifest (decision 110).

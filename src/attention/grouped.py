@@ -126,11 +126,8 @@ class GroupedAttention(AttnBase):
         B, T, _ = x.shape
         H, G, share, dh = self.n_heads, self.n_kv_heads, self.share, self.head_dim
 
-        q = self.w_q(x).view(B, T, H, dh).transpose(1, 2)
-        k = self.w_k(x).view(B, T, G, dh).transpose(1, 2)
+        q, k = self._queries_keys(x, freqs)
         v = self.w_v(x).view(B, T, G, dh).transpose(1, 2)
-        q = apply_rope(q, freqs)
-        k = apply_rope(k, freqs)
 
         if cache is None:
             if mode == "ref":
@@ -162,9 +159,20 @@ class GroupedAttention(AttnBase):
         y = y.transpose(1, 2).reshape(B, T, H * dh)
         return self.w_o(y), new_cache
 
+    def _queries_keys(self, x, freqs):
+        """Rotated queries (B, H, T, dh) and keys (B, G, T, dh)."""
+        B, T, _ = x.shape
+        q = self.w_q(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.w_k(x).view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
+        return apply_rope(q, freqs), apply_rope(k, freqs)
+
+    def _logits(self, q, k):
+        """Scores (B, H, n, S) of queries (B, H, n, dh) against keys (B, G, S, dh), scale included."""
+        return q @ self._expand(k).transpose(-1, -2) / math.sqrt(self.head_dim)
+
+    def attention_logits(self, x, freqs):
+        return self._logits(*self._queries_keys(x, freqs))
+
     def _ref(self, q, k, v, allowed):
-        k = self._expand(k)
-        v = self._expand(v)
-        scores = q @ k.transpose(-1, -2) / math.sqrt(self.head_dim)
-        scores = scores.masked_fill(~allowed, float("-inf"))
-        return torch.softmax(scores, dim=-1) @ v
+        scores = self._logits(q, k).masked_fill(~allowed, float("-inf"))
+        return torch.softmax(scores, dim=-1) @ self._expand(v)
