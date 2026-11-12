@@ -11,7 +11,8 @@ RUN_SPEC identifies the parent trunk. --budget names the branch (for example 100
 The branch starts from the trunk's branch-point checkpoint of that budget, which
 must exist; once the branch has its own checkpoints it resumes from them. The
 manifest is kind `branch`, carries the parent's configuration and the `branch`
-block, and is named `...-b{budget}`.
+block, and is named `...-b{budget}`. A branch whose loss is not finite is recorded as
+diverged and exits 3, as scripts.train does; a later invocation exits 3 without training.
 """
 
 from __future__ import annotations
@@ -68,6 +69,11 @@ def _branch(args) -> int:
     if rc.already_complete(layout, name, ckpt_dir, parent, total):
         print(f"{name}: already complete ({total} steps, mode {args.mode}); nothing to do")
         return 0
+    diverged = rc.already_diverged(layout, name, parent)
+    if diverged is not None:
+        print(f"{name}: recorded as diverged at step {diverged['step']} ({diverged['reason']}); "
+              f"nothing to do (delete its manifest to retry)")
+        return rc.DIVERGED_EXIT
 
     stream = rc.make_stream(ds, parent)
     trainer, info = br.start_or_resume_branch(

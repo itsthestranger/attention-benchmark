@@ -8,7 +8,11 @@
         [--eval-curve-windows N] [--eval-batch-size N] [--keep-checkpoints N]
 
 One invocation is one run (a trunk with its final decay), started or resumed. A
-second invocation after completion changes nothing and exits 0. A refusal (hash
+second invocation after completion changes nothing and exits 0. A run whose loss is
+not finite at a validation point or in the final evaluation is recorded as an
+unfinished manifest with final_metrics.diverged, prints where it diverged, and exits
+3; a later invocation changes nothing and exits 3 too (delete the manifest to retry).
+A refusal (hash
 mismatch, incomplete recipe, another configuration's checkpoint) exits 2 with the
 library's message. Nothing here prompts or reads input.
 """
@@ -65,6 +69,11 @@ def _train(args) -> int:
     if rc.already_complete(layout, name, ckpt_dir, resolved, total):
         print(f"{name}: already complete ({total} steps, mode {args.mode}); nothing to do")
         return 0
+    diverged = rc.already_diverged(layout, name, resolved)
+    if diverged is not None:
+        print(f"{name}: recorded as diverged at step {diverged['step']} ({diverged['reason']}); "
+              f"nothing to do (delete its manifest to retry)")
+        return rc.DIVERGED_EXIT
 
     stream = rc.make_stream(ds, resolved)
     trainer = Trainer(

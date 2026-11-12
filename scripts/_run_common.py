@@ -37,7 +37,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from src import config
 from src.attention.base import SDPA_BACKENDS, AttnBase
 from src.data.loader import DataError, TrainStream, open_dataset
-from src.eval.lm import ContextSpec, evaluate
+from src.eval.lm import ContextSpec, NonFiniteLoss, evaluate
 from src.training import branch as br
 from src.training import checkpoint as ck
 from src.utils import manifest as mf
@@ -395,6 +395,36 @@ def already_complete(layout: Layout, name: str, ckpt_dir: Path, manifest_cfg: di
     return True
 
 
+def already_diverged(layout: Layout, name: str, manifest_cfg: dict) -> dict | None:
+    """The `final_metrics` of a recorded divergence of this configuration, or None.
+
+    A diverged run is never retried by a later invocation: its manifest stays, and a person
+    who wants another attempt deletes it. A manifest of another configuration is refused.
+    """
+    path = layout.manifests / f"{name}.json"
+    if not path.exists():
+        return None
+    existing = mf.read_manifest(path)
+    if existing["config_hash"] != config.config_hash(manifest_cfg):
+        raise EntryError(f"{path} belongs to another configuration; refusing to write this run under its name")
+    metrics = existing["final_metrics"]
+    if existing["completed"] is False and isinstance(metrics, dict) and metrics.get("diverged") is True:
+        return metrics
+    return None
+
+
+def record_divergence(trainer, job: "Job", sessions: list[str], exc: NonFiniteLoss) -> int:
+    """Write the run's manifest as unfinished and diverged, and report it. Exit status DIVERGED_EXIT.
+
+    The checkpoints stay where they are. The manifest's final_metrics say that the run diverged,
+    why, and at which step (plan §10.6); mf.is_result is False for it.
+    """
+    final = {"diverged": True, "reason": str(exc), "step": int(trainer.step)}
+    path = write_manifest(job, trainer, sessions, completed=False, final=final)
+    print(f"{path}: diverged at step {trainer.step} of {trainer.total_steps}: {exc}")
+    return DIVERGED_EXIT
+
+
 # --- The validation curve (plan §10.2) -------------------------------------------------------------
 
 
@@ -553,9 +583,12 @@ def run_job(trainer, job: Job) -> int:
         every=job.ops["eval_every_steps"],
         windows=job.ops["eval_curve_windows"],
     )
-    trainer.train(until=job.until)
-    finished = trainer.step == total
-    final = final_metrics(trainer, job, curve.entries) if finished else None
+    try:
+        trainer.train(until=job.until)
+        finished = trainer.step == total
+        final = final_metrics(trainer, job, curve.entries) if finished else None
+    except NonFiniteLoss as exc:
+        return record_divergence(trainer, job, sessions, exc)
     path = write_manifest(job, trainer, sessions, completed=finished, final=final)
     state = "completed" if finished else f"unfinished at step {trainer.step} of {total}"
     print(f"{path}: {state}; resumes so far: {len(sessions) - 1}")
@@ -617,6 +650,8 @@ def write_manifest(job: Job, trainer, sessions: list[str], *, completed: bool, f
 
 
 REFUSALS = (ValueError, DataError, ck.CheckpointError, br.BranchError)
+# The exit status of a run that diverged: its manifest is recorded, and it is not a result.
+DIVERGED_EXIT = 3
 
 
 def guarded(body) -> int:
