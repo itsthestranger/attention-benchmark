@@ -9,10 +9,11 @@ Last updated: 2026-11-12, session 1.
 - T-01 config system (#2).
 - T-02 backbone and attention registry (#3).
 - T-13 data pipeline (#4).
+- T-24 primary test and its statistics tests (#5).
 
 ## In progress
 
-- T-24 primary test, branch `task/T-24-primary-test`: orchestrator implementing.
+- Nothing.
 
 ## Blocked
 
@@ -20,6 +21,8 @@ Last updated: 2026-11-12, session 1.
 
 ## Open questions
 
+- **Welch multipliers in plan §1.3 (blocks T-25).** The table's Welch rows, 2.5 at 5 seeds and 1.8 at 8, are the values for a pooled-variance t-test. Welch's test as specified in §1.2 needs 2.63 and 1.83 for 80% power; at the plan's 2.5 it has 76%. Both calculations are in `primary_test.py`. Which one feeds the seed-count rule (§1.4) and the reported detectable-effect bound? Recommendation: the exact one.
+- **Seed-count rule under the paired test (blocks T-25).** §1.4 step 1 wants the 5-seed detectable gap in nats from sigma_init. For the paired test the multiplier is in units of sigma_d, which is unknown before any variant is read. Use the table's worst case, 3.2 × sigma_init? Recommendation: yes; it is the only value computable from MHA data alone.
 - Which PyTorch, Python and CUDA versions does Kaggle's GPU image ship? Needed to pin the environment. Until then: torch 2.15.0, Python 3.12 in CI.
 
 ## Readings of the plan for Phil to confirm
@@ -38,7 +41,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–38 so far).
+All decisions are in `docs/decisions.md` (rows 1–48 so far).
 
 ## Environment
 
