@@ -55,7 +55,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | --- | --- | --- | --- | --- | --- |
 | T-20 ✅ | `eval/lm.py` and context-bucketed loss with the in-context-learning score | W | T-13, T-15 | §6, §10.3 | Bucket-weighted loss equals aggregate loss; hand-built windows with mid-window document starts give the expected context values |
 | T-21 | Probe generators and probe training script | W | T-12, T-15 | §9.2 | Property tests pass for all five probes; a tiny MHA solves 4-pair MQAR on CPU |
-| T-22 | Retrieval evaluation: passkey and needle generators | W | T-15 | §9.7 | Generator tests pass; the RoPE extension stays open (decision 5) |
+| T-22 ✅ | Retrieval evaluation: passkey and needle generators | W | T-15 | §9.7 | Generator tests pass; the RoPE extension stays open (decision 5) |
 | T-23 | `bench.py`, `eval/inference.py`, `timing_pass.py` | W | T-04, T-06, T-07 | §8.5, §8.6, §10.4 | Each runs end to end on CPU with a tiny model; round-robin order and warm-up discard are tested; the analytic-vs-measured KV assertion is written for `gpu` |
 
 ## M4 — Analysis
