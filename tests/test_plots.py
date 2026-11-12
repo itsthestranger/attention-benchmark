@@ -142,13 +142,13 @@ def _tokens_of(name: str) -> int:
 @pytest.fixture(scope="module")
 def campaign() -> list[dict]:
     """Paired test selected (the default rerun noise), every synthetic input, Arm N extras."""
-    return fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}) + fpi.arm_n_extras())
+    return fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}))
 
 
 @pytest.fixture(scope="module")
 def welch_campaign() -> list[dict]:
     """Welch's test selected: the reproducibility reruns are noisier than the threshold allows."""
-    return fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, rerun_sigma=0.008) + fpi.arm_n_extras())
+    return fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, rerun_sigma=0.008))
 
 
 @pytest.fixture(scope="module")
@@ -610,7 +610,7 @@ def test_plots_refuse_incomparable_manifests(tmp_path, campaign):
 def test_an_arm_n_only_stage_builds_every_plot_and_plot_4_shows_only_arm_n(tmp_path):
     base = fake_campaign(without=("primaries", "exploratory", "ladder", "ladder_l10"))
     stage = [x for x in base if PARSE(x["name"]).tokens == "100M" or PARSE(x["name"]).branch == "100M"]
-    stage = fpi.with_eval_fields(stage + fpi.arm_n_extras())
+    stage = fpi.with_eval_fields(stage)
     paths = m.build_all(stage, [], [], [], tmp_path)
     assert [p.name for p in paths] == list(EXPECTED_FILES)
     inp = m.make_inputs(stage)
@@ -657,7 +657,7 @@ def test_plot_7_never_draws_a_trunk_point_as_a_result():
 
 
 def test_a_partial_campaign_without_the_ladder_builds_and_says_the_fit_is_missing(tmp_path):
-    partial = fpi.with_eval_fields(fake_campaign(without=("ladder", "ladder_l10")) + fpi.arm_n_extras())
+    partial = fpi.with_eval_fields(fake_campaign(without=("ladder", "ladder_l10")))
     assert len(m.build_all(partial, [], [], [], tmp_path)) == 10
     inp = m.make_inputs(partial)
     assert inp.analysis.fit is None
