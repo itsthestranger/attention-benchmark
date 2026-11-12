@@ -65,6 +65,9 @@ KERNEL_DISCLOSURE = (
     "MLA's and SWA's opt paths are newer or hand-written kernels, not architecture; ref and "
     "opt are both drawn so readers can separate the implementation share (plan §13.3)."
 )
+WITHHELD_CAPTION = (
+    "Variant runs are withheld until the controls pass (plan §8.1): only MHA's runs are drawn."
+)
 
 DISPLAY = {
     "mha": "MHA",
@@ -287,6 +290,20 @@ def _ladder_fit_usable(analysis: mt.Analysis) -> bool:
     return analysis.fit is not None and analysis.fit.b > 0.0
 
 
+def _withheld(analysis: mt.Analysis, variant: str) -> bool:
+    """Plan §8.1: with the gate shut, no variant's loss is drawn. MHA's loss is the reference, so it is."""
+    return variant != "mha" and not analysis.comparisons_allowed
+
+
+def _withheld_part(analysis: mt.Analysis) -> str | None:
+    """The caption line saying variant runs are withheld, when there is a variant run to withhold."""
+    if analysis.comparisons_allowed:
+        return None
+    if any(analysis.losses.get(v) for v in mt.HEADLINE_VARIANTS if v != "mha"):
+        return WITHHELD_CAPTION
+    return None
+
+
 # --- Model facts (no results) ------------------------------------------------------
 
 
@@ -390,6 +407,7 @@ def plot_primary_gaps(inp: PlotInputs) -> Figure:
             band_text,
             axis_text,
             "Bottom row, exploratory (plan §1.2): intervals only, no detection claim, no band.",
+            _withheld_part(a),
             SWA_CAVEAT,
             _notes_part(a.notes),
             _left_out_part(inp.skipped),
@@ -438,7 +456,7 @@ def plot_inference_frontier(inp: PlotInputs) -> Figure:
     rows, missing = [], []
     for variant in mt.HEADLINE_VARIANTS:
         losses = a.losses.get(variant, {})
-        if not losses:
+        if not losses or _withheld(a, variant):
             continue
         x = _decode_tok_s(bench.get((variant, "opt")))
         if x is None:
@@ -454,6 +472,7 @@ def plot_inference_frontier(inp: PlotInputs) -> Figure:
             "Every seed is a dot; the diamond is the seed mean. Right is faster; lower is better on loss.",
             SWA_CAVEAT,
             ("Missing: " + "; ".join(missing) + ".") if missing else None,
+            _withheld_part(a),
             _notes_part(a.notes),
             _left_out_part(inp.skipped),
         ],
@@ -488,6 +507,7 @@ def plot_memory_frontier(inp: PlotInputs) -> Figure:
             "(the table's own column). SWA-256's cache is capped at its window. Every seed is a dot; "
             "the diamond is the seed mean.",
             SWA_CAVEAT,
+            _withheld_part(a),
             _notes_part(a.notes),
             _left_out_part(inp.skipped),
         ],
@@ -498,7 +518,7 @@ def plot_memory_frontier(inp: PlotInputs) -> Figure:
     drawn = 0
     for variant in mt.HEADLINE_VARIANTS:
         losses = a.losses.get(variant, {})
-        if not losses:
+        if not losses or _withheld(a, variant):
             continue
         x = _kv_bytes_per_token_per_layer(variant)
         seeds = sorted(losses)

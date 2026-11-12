@@ -198,6 +198,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     sweep_seed = None if args.blank else args.sweep_seed
     try:
+        # Refused before anything is read: a sweep on an arm's seed would mix the sweep into the arm.
+        if sweep_seed is not None:
+            sw.check_sweep_seed(sweep_seed, config.load_prereg())
         manifests = [] if args.blank else mt.load_manifests(args.manifests)
         choices, points, sigma_notes = build(manifests, sweep_seed)
     except (sw.SweepError, mt.TableError, mf.ManifestError) as exc:

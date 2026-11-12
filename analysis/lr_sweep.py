@@ -260,3 +260,30 @@ def points_from_manifests(
                     reason=str(metrics.get("reason") or "diverged, no reason recorded"),
                 ))
     return sorted(points, key=lambda p: p.lr)
+
+
+# --- The sweep seed (plan §7.4, §8.1) ----------------------------------------------------------
+
+
+def check_sweep_seed(seed: int, prereg: Mapping) -> int:
+    """The seed of the sweep runs, or SweepError if an arm uses that seed.
+
+    A sweep run on a registered seed would also be an arm's run (plan §7.4, §8.1), so every
+    registered seed of every arm is refused.
+    """
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise SweepError(f"sweep seed must be a non-negative int, got {seed!r}")
+    registered = (
+        ("seed_count.base_seeds", prereg["seed_count"]["base_seeds"]),
+        ("seed_count.added_seeds", prereg["seed_count"]["added_seeds"]),
+        ("null_control.init_seeds", prereg["null_control"]["init_seeds"]),
+        ("exploratory.init_seeds", prereg["exploratory"]["init_seeds"]),
+        ("positive_control.init_seeds", prereg["positive_control"]["init_seeds"]),
+    )
+    for where, seeds in registered:
+        if seed in seeds:
+            raise SweepError(
+                f"sweep seed {seed} is a registered seed ({where} in prereg.yaml); an arm uses it, "
+                "so a sweep run on it would also be an arm's run: choose an unregistered seed"
+            )
+    return seed
