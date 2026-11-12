@@ -42,7 +42,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
 | T-13 ✅ | Data pipeline: tokenizer script, packing with EOS and document-offset sidecar, `uint16` loader with its own data-seed generator, hashing, splits | W | T-01 | §6 | On a synthetic corpus: token order is bit-identical across variants and init seeds; splits are disjoint by document; a wrong hash is refused |
-| T-14 | WSD schedule and optimizer parameter groups | O+W | T-01 | §7.1, §7.2 | LR is as specified at steps 0, 100, 1,221, 1,526, 3,662 and 4,578; decay has the 1−√ shape; weight decay covers 2D matrices only, not the tied embedding |
+| T-14 ✅ | WSD schedule and optimizer parameter groups | O+W | T-01 | §7.1, §7.2 | LR is as specified at steps 0, 100, 1,221, 1,526, 3,662 and 4,578; decay has the 1−√ shape; weight decay covers 2D matrices only, not the tied embedding |
 | T-15 | Trainer: autocast and GradScaler with unscale before clipping, accumulation, skip and steps-taken logging, in-loop backend and dtype assertions | O+W | T-04, T-13, T-14 | §2.3, §7, §13.6 | A tiny model overfits on CPU; an injected inf gradient is counted as a skipped step; accumulation matches the large batch; `gpu` tests written |
 | T-16 | Checkpoint and resume | O+W | T-15 | §5, §12.3 | Kill at step 500 and resume gives the uninterrupted curve; the last two checkpoints are kept; resume needs no human input |
 | T-17 | `branch.py` | O+W | T-16 | §5, §7.2 | A branch from a trunk checkpoint matches an uninterrupted run; its manifest records parent and branch step |
