@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 2. 17 of 32 tasks merged; `cpu` tier green on `main` (2,116 tests).
+Last updated: 2026-11-12, session 2. 18 of 32 tasks merged; `cpu` tier green on `main` (2,151 tests, about two minutes).
 
 ## Done
 
@@ -22,10 +22,11 @@ Last updated: 2026-11-12, session 2. 17 of 32 tasks merged; `cpu` tier green on 
 - T-19 determinism test and reproducibility measurement (#16).
 - T-18 manifest and run naming (#17).
 - T-08 attention properties and FLOP counts (#18).
+- T-16 checkpoint and resume (#19).
 
 ## In progress
 
-- **T-16 checkpoint and resume**, branch `task/T-16-checkpoint` in `/home/user/wt/T-16`: the acceptance tests are committed and final (`tests/test_checkpoint.py`); a worker's implementation is committed locally, **not yet reviewed, not pushed**. Its open point: a `ref` and an `opt` trainer with the same config share a checkpoint directory, because mode and precision are not part of the config hash.
+- Nothing.
 
 ## Blocked
 
@@ -55,7 +56,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–110 so far).
+All decisions are in `docs/decisions.md` (rows 1–116 so far).
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
@@ -67,6 +68,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 - `gpu`: causal leak under fp16 (`test_causality.py`), `ref`/`opt` agreement under fp16 (`test_reference.py`), `opt` decode peak memory at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
 - `gpu`, determinism (`test_determinism.py`): `ref` mode in fp16 bit-identical over 100 steps twice, for all seven variants. Needs `CUBLAS_WORKSPACE_CONFIG=:4096:8` in the environment before pytest starts.
 - `gpu` and `t4`, reproducibility (`test_determinism.py`): the `opt` measurement in fp16 for all seven variants; it records differences and applies no threshold.
+- `gpu`, checkpoint (`test_checkpoint.py`): GradScaler state after a resume, resume fidelity in fp16 for all seven variants, a checkpoint saved and restored on CUDA.
 - `gpu`, evaluation (`test_eval_lm.py`): fp16 evaluation on CUDA against fp32.
 - `gpu`, sliding window (`test_sliding_window.py`): both `opt` paths against `ref` in fp32 and fp16, including compiled FlexAttention.
 - `t4`: `opt` decode time at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
@@ -94,7 +96,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. Review and merge T-16 (see "In progress"). Then T-17 branch (O+W).
+1. T-17 branch (O+W): write `tests/test_wsd_branch.py` first; branch-point checkpoints and their manifests exist.
 2. T-26 wall-clock estimate (W), T-27 tables with refusal gates (W), T-09 config solver (W): all unblocked.
 3. T-06 MLA absorbed path (O+W), T-10 step-0 logit scale (O), T-21 probes (W), T-22 retrieval generators (W).
 
@@ -112,5 +114,6 @@ Designs already worked out for tasks not yet started:
 
 - **T-10 logit scale.** Needs a common way to read pre-softmax scores from every attention module; only the sliding-window module exposes weights so far.
 - **T-06 absorbed MLA.** Replaces `opt` decode in `mla.py`; the cache already holds only the latent and the positional key.
-- **T-16 checkpoint.** Manifests come from `src/utils/manifest.py` (`build_manifest`, `write_manifest`); an unfinished run writes `completed: false` and is not a result. The trainer keeps no hidden position: data and schedule are functions of `trainer.step`. A checkpoint needs the model, the optimizer, the scaler, `step`, `steps_taken` and the step records.
+- **T-17 branch.** A branch restores a `trunk-step*.pt` checkpoint (`src/training/checkpoint.py`) into a trainer whose config has the branch's step count, then decays. `restore` refuses another config hash, so `branch.py` needs its own entry that checks the parent's hash and the branch step (`decay_start` of the branch budget) instead. Its manifest is `kind: branch` with the parent's resolved config (decision 102).
+- **T-29 entry points.** Give `ref` and `opt` their own checkpoint roots (decision 115). Record the trainer's enforced backend on the attention modules with `set_sdpa_backend` and write it to the manifest (decision 110).
 - **T-23 benchmark.** Compare sliding-window memory with its cap, not with per-token growth (decision 77).
