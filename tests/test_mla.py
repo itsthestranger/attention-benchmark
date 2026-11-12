@@ -308,6 +308,22 @@ def test_factor_init_multipliers_at_full_size(name, d_c):
     assert {192: 0.02 * math.sqrt(2), 96: 0.04}[d_c] == 0.02 * m
 
 
+def test_each_factor_init_multiplier_uses_its_own_latent_width():
+    """The plan sets d_c = d_c_q, which would hide a mix-up of the two widths."""
+    resolved = config.resolve(
+        "mla192", init_seed=1, peak_lr=1e-3,
+        overrides={"model.attention": {"type": "mla", "d_c": 192, "d_c_q": 96, "rope_dim": 24}},
+    )
+    attn = build_attention(AttnConfig.from_resolved(resolved))
+    kv, q = math.sqrt(384 / 192), math.sqrt(384 / 96)
+    assert attn.init_std_multipliers() == {
+        "w_uk.weight": kv, "w_uv.weight": kv, "w_uq.weight": q, "w_qr.weight": q,
+    }
+    assert attn.w_uk.weight.shape == (384, 192) and attn.w_uq.weight.shape == (384, 96)
+    assert attn.w_qr.weight.shape == (8 * 24, 96)
+    assert attn.init_cache().values_per_token == 192 + 24
+
+
 @pytest.mark.parametrize("case", MLA_CASES, ids=lambda c: c.name)
 def test_built_model_follows_the_factor_init(case):
     import zlib
