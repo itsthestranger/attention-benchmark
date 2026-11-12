@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 3. Every task of `TASKS.md` is merged except T-21 (waits for Phil), T-37 (audit fixes, in progress) and T-31 (this handover). The `cpu` tier is green on `main`.
+Last updated: 2026-11-12, end of session 3. Every task of `TASKS.md` is merged except T-21 (waits for two decisions by Phil) and T-31 (this handover, closed by the pull request that carries this file). The `cpu` tier is green on `main`: 3,163 tests, about four minutes.
 
 ## Done
 
@@ -40,14 +40,25 @@ Last updated: 2026-11-12, session 3. Every task of `TASKS.md` is merged except T
 - T-34 Arm B, context use, wall-clock estimate and timing columns (#35).
 - T-36 three command-line gaps (#37).
 - T-30 `RUNBOOK.md` with `tests/test_runbook.py` (#38).
+- T-37 fixes for the handover audit (#39).
 
 ## In progress
 
-Check the worktrees under `/home/user/wt/` and the remote branches before trusting this.
-
-- T-37, fixes for the audit's findings: tests written by the orchestrator (`tests/test_audit_fixes.py`, `tests/test_backend_enforcement.py`), worker briefed, branch `task/T-37-audit-fixes`.
-- T-31, handover: `README.md` with the unfilled pre-registration template, this file, and the audit below, on branch `task/T-31-handover`.
+- Nothing is running. Every worker has stopped and every branch is pushed.
 - T-21 probes: waits for two decisions (see "Blocked" and "Open questions").
+
+## Handover checklist (plan §17.4)
+
+| # | Item | State |
+| --- | --- | --- |
+| 1 | Every task merged, `cpu` tier green in CI | **Not met**: T-21 (probes) is unmerged and waits for Phil. Everything else is merged and green. |
+| 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met for everything merged; listed below. T-21's are not written. |
+| 3 | Headline table and all ten plots generate from fake manifests and blank | Met. Plot 9 (probes) has no producer for its records until T-21. |
+| 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | Met except §2.3 (probes, Gate 1) and the sweep seed, which wait for Phil. Its commands are parsed by `tests/test_runbook.py`; none has run on a GPU. |
+| 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 188. |
+| 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Done; see the next section. |
+
+The harness is ready for Phil's verification step except for the probes. It is not "done" by the checklist until T-21 is merged.
 
 ## Handover audit (plan §17.4 item 6)
 
@@ -138,7 +149,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–183). Rows marked "for Phil" are readings of the plan or numbers the loop chose.
+All decisions are in `docs/decisions.md` (rows 1–188). Rows marked "for Phil" are readings of the plan or numbers the loop chose.
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80). Approved by Phil in session 1: the fp32 agreement tolerance of 1e-5, the float64 checks, and the Monte-Carlo allowance of the family-wise error test (0.05 plus three standard errors, decision 7).
 
@@ -191,15 +202,22 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. Merge T-37 after review (deliberate breaks, the full tier, `tests/test_runbook.py`), then this handover branch.
-2. T-21, once Phil has answered the two questions: change the layout, review the WIP branch from scratch, add the probe commands to `RUNBOOK.md` §2.3.
-3. Pin torch to Kaggle's version when Phil reports it, and run the `cpu` tier on it.
+1. T-21, once Phil has answered the two questions: change the layout, review the WIP branch from scratch with deliberate breaks, add the probe commands to `RUNBOOK.md` §2.3 and a producer for plot 9's records.
+2. Pin torch to Kaggle's version when Phil reports it, and run the `cpu` tier on it.
+3. Apply Phil's answers on the readings marked "for Phil" in `docs/decisions.md`.
 
-Remaining: T-37 (in progress), T-31 (this handover), T-21 (waits for Phil).
+Remaining: T-21.
 
 ## Notes for the next session
 
 How the loop has been run:
+
+- **Run every pytest with `OMP_NUM_THREADS=1`.** On this container torch with four threads is far slower on tiny models (a worker measured a factor of about a thousand on a small matmul). With one thread the full `cpu` tier takes about four minutes.
+- Deliberate breaks are run in a separate detached worktree of the branch under review, never in the worker's own worktree, so that a worker's test run and the review cannot disturb each other.
+- For `O+W` tasks the tests are committed and pushed before the worker is briefed, and checked first against the existing code (which tests fail, which already pass and so guard against over-correcting) or against a throwaway implementation.
+- Workers are told to stop and report when an existing test conflicts with the brief. In session 3 this happened three times, and each time stopping was right.
+- A test that parses the runbook's commands (`tests/test_runbook.py`) found three missing command-line paths before any human did. Keep it green when a script's flags change.
+- Session 3 hit the account's 5-hour usage limit while the audit ran on the full model. Workers are Haiku; the audit is the one place the full model was used.
 
 - Workers are Haiku subagents in git worktrees under `/home/user/wt/`, one task each. They commit locally; the orchestrator reviews, pushes and opens the pull request, then squash-merges on green CI.
 - Review includes breaking the source on purpose, one change at a time, and checking that a test fails. Every miss so far was a gap in a test, fixed by adding a test.
