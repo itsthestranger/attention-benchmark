@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 2. 19 of 32 tasks merged; `cpu` tier green on `main` (2,185 tests, about two minutes).
+Last updated: 2026-11-12, session 2. 20 of 32 tasks merged; `cpu` tier green on `main` (2,240 tests, about two minutes).
 
 ## Done
 
@@ -24,10 +24,11 @@ Last updated: 2026-11-12, session 2. 19 of 32 tasks merged; `cpu` tier green on 
 - T-08 attention properties and FLOP counts (#18).
 - T-16 checkpoint and resume (#19).
 - T-10 step-0 logit-scale test (#21).
+- T-09 config solver and exact parameter counts (#22).
 
 ## In progress
 
-- **T-09 config solver**, **T-26 wall-clock estimate**, **T-27 headline table**: each implemented by a worker in its worktree under `/home/user/wt/`, committed locally on `task/T-09-solver`, `task/T-26-rqw`, `task/T-27-tables`. **Not yet reviewed, not pushed.** T-27's worker raised two points to settle in review: without the ladder there is no seed count and so no primary verdict (the brief contradicted itself; the code follows the plan's order), and it changed the synthetic campaign's default noise seed after seeing an outlier draw.
+- **T-26 wall-clock estimate**, **T-27 headline table**: each implemented by a worker in its worktree under `/home/user/wt/`, committed locally on `task/T-26-rqw`, `task/T-27-tables`. T-26 is reviewed (one test added), T-27 is not. **Not yet reviewed, not pushed.** T-27's worker raised two points to settle in review: without the ladder there is no seed count and so no primary verdict (the brief contradicted itself; the code follows the plan's order), and it changed the synthetic campaign's default noise seed after seeing an outlier draw.
 
 ## Blocked
 
@@ -58,7 +59,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–119 so far).
+All decisions are in `docs/decisions.md` (rows 1–121 so far).
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
@@ -98,7 +99,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. Review and merge T-09, T-26 and T-27 (see "In progress").
+1. Review and merge T-26 and T-27 (see "In progress").
 2. T-17 branch (O+W): write `tests/test_wsd_branch.py` first. T-06 MLA absorbed path (O+W).
 3. T-11 graph diff (W, after T-09), T-28 plots (W, after T-27), T-21 probes (W), T-22 retrieval generators (W), T-23 benchmark scripts (W, after T-06).
 
