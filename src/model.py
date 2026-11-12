@@ -86,8 +86,12 @@ class Transformer(nn.Module):
         logits = F.linear(self.norm_f(x), self.embed.weight)
         return logits, new_state
 
-    def init_state(self) -> DecodeState:
-        return DecodeState(caches=[layer.attn.init_cache() for layer in self.layers], pos=0)
+    def init_state(self, capacity: int | None = None) -> DecodeState:
+        if capacity is None:
+            caches = [layer.attn.init_cache() for layer in self.layers]
+        else:
+            caches = [layer.attn.init_cache(capacity=capacity) for layer in self.layers]
+        return DecodeState(caches=caches, pos=0)
 
     @property
     def n_params(self) -> int:
@@ -112,3 +116,8 @@ def build_model(resolved: dict) -> Transformer:
     model = Transformer(resolved)
     init_model(model, resolved["run"]["init_seed"])
     return model
+
+
+# Registers "grouped". Imported here, not in src/attention/__init__.py: that would
+# import src.transformer while it is still initialising (circular import).
+import src.attention.grouped  # noqa: E402,F401
