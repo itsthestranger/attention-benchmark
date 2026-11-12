@@ -18,35 +18,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.attention.base import MODES, AttnBase, AttnConfig, register
+from src.attention.token_cache import TokenStorage, append_tokens
 from src.transformer import apply_rope
-
-
-class _Storage:
-    """One allocation, possibly shared by several KVCache objects.
-
-    Slots below `filled` are final: no cache may overwrite them.
-    """
-
-    __slots__ = ("k", "v", "filled")
-
-    def __init__(self, k: torch.Tensor, v: torch.Tensor, filled: int):
-        self.k = k
-        self.v = v
-        self.filled = filled
-
-
-def _allocate(k_like: torch.Tensor, capacity: int) -> tuple[torch.Tensor, torch.Tensor]:
-    shape = (k_like.shape[0], k_like.shape[1], capacity, k_like.shape[3])
-    return (
-        torch.empty(shape, dtype=k_like.dtype, device=k_like.device),
-        torch.empty(shape, dtype=k_like.dtype, device=k_like.device),
-    )
 
 
 class KVCache:
     """A value: the first `length` tokens of a storage. Never modified by appending."""
 
-    def __init__(self, storage: _Storage | None, length: int, capacity_hint: int = 0):
+    def __init__(self, storage: TokenStorage | None, length: int, capacity_hint: int = 0):
         self._storage = storage
         self.length = length
         self._capacity_hint = capacity_hint
@@ -54,49 +33,31 @@ class KVCache:
     @property
     def capacity(self) -> int:
         """Tokens the current storage has room for (0 if none yet)."""
-        return 0 if self._storage is None else self._storage.k.shape[2]
+        return 0 if self._storage is None else self._storage.tensors[0].shape[2]
 
     @property
     def k(self) -> torch.Tensor | None:
-        return None if self._storage is None else self._storage.k[:, :, : self.length]
+        return None if self._storage is None else self._storage.tensors[0][:, :, : self.length]
 
     @property
     def v(self) -> torch.Tensor | None:
-        return None if self._storage is None else self._storage.v[:, :, : self.length]
+        return None if self._storage is None else self._storage.tensors[1][:, :, : self.length]
 
     def append(self, k_new: torch.Tensor, v_new: torch.Tensor) -> "KVCache":
         """A new cache holding this cache's tokens followed by k_new, v_new (B, G, T, dh)."""
         if k_new.shape != v_new.shape or k_new.dim() != 4:
             raise ValueError(f"k and v must be equal (B, G, T, dh) tensors, got {tuple(k_new.shape)}")
-        T = k_new.shape[2]
-        L = self.length
-        if self._storage is None:
-            capacity = max(self._capacity_hint, T)
-            k_buf, v_buf = _allocate(k_new, capacity)
-            storage = _Storage(k_buf, v_buf, 0)
-        else:
-            old = self._storage
-            expected = (old.k.shape[0], old.k.shape[1], old.k.shape[3])
+        if self._storage is not None:
+            expected = (self.k.shape[0], self.k.shape[1], self.k.shape[3])
             if (k_new.shape[0], k_new.shape[1], k_new.shape[3]) != expected:
                 raise ValueError(
                     f"new tokens have shape (B, G, dh) = {(k_new.shape[0], k_new.shape[1], k_new.shape[3])}, "
                     f"cache holds {expected}: batch size and heads must match"
                 )
-            cap = old.k.shape[2]
-            if old.filled == L and L + T <= cap:
-                storage = old  # room, and nobody wrote past L: write in place
-            else:
-                new_cap = cap if L + T <= cap else max(L + T, 2 * cap)
-                k_buf, v_buf = _allocate(k_new, new_cap)
-                with torch.no_grad():
-                    k_buf[:, :, :L] = old.k[:, :, :L]
-                    v_buf[:, :, :L] = old.v[:, :, :L]
-                storage = _Storage(k_buf, v_buf, L)
-        with torch.no_grad():
-            storage.k[:, :, L : L + T] = k_new
-            storage.v[:, :, L : L + T] = v_new
-        storage.filled = L + T
-        return KVCache(storage, L + T, self._capacity_hint)
+        storage, length = append_tokens(
+            self._storage, self.length, self._capacity_hint, (k_new, v_new), axis=2
+        )
+        return KVCache(storage, length, self._capacity_hint)
 
 
 def _allowed(past: int, T: int, S: int, device) -> torch.Tensor:
