@@ -291,6 +291,35 @@ def test_torch_rng_state_is_restored(tmp_path):
     assert torch.equal(torch.get_rng_state(), generator_state)
 
 
+def test_a_loaded_state_is_a_value(tmp_path):
+    """Added with T-17, which restores one loaded state more than once. Training a restored
+    trainer must not change the state it was restored from, nor a second trainer restored
+    from the same state."""
+    cfg = resolved_for(steps=30)
+    first = trainer_for(cfg)
+    first.train(until=12)
+    state = ck.load_checkpoint(ck.save_checkpoint(first, tmp_path))
+    moments = {k: v["exp_avg"].clone() for k, v in state["optimizer"]["state"].items()}
+    weights = {k: v.clone() for k, v in state["model"].items()}
+
+    a, b = trainer_for(cfg), trainer_for(cfg)
+    ck.restore(a, state)
+    ck.restore(b, state)
+    a.train(until=20)
+    for key, value in moments.items():
+        assert torch.equal(state["optimizer"]["state"][key]["exp_avg"], value)
+    for key, value in weights.items():
+        assert torch.equal(state["model"][key], value)
+    b.train(until=20)
+    assert [r.loss for r in a.records] == [r.loss for r in b.records]
+    assert [r.loss for r in a.records[12:]] == [r.loss for r in first_continued(cfg, first)]
+
+
+def first_continued(cfg, first):
+    first.train(until=20)
+    return first.records[12:]
+
+
 def test_saving_changes_nothing_in_the_trainer(tmp_path):
     cfg = resolved_for(steps=30)
     plain, saving = trainer_for(cfg), trainer_for(cfg)

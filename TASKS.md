@@ -34,7 +34,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | T-08 ✅ | `AttnBase` properties and `utils/flops.py` | W | T-04, T-05, T-07 | §3.1, §3.2, §4.2 | KV bytes match §3.2 for every variant; attention FLOP shares at ctx 512/1,024/2,048 are 8/15/27% causal and 15/27/42% dense, within one point |
 | T-09 ✅ | `solve_config.py` and `test_params.py` | W | T-08 | §3.2, §4.3, §8.4 | 17,308,032 exactly for non-MLA variants; MLA offsets +3,072 and +1,536; ladder at 10,621,824 and 17,702,784 non-embedding; fails loudly instead of rounding |
 | T-10 ✅ | Step-0 logit-scale test across all variants | O | T-04, T-05, T-07 | §3.3, §5 | Attention-logit std agrees within 10% across the seven variants |
-| T-11 | CI graph-diff check | W | T-09 | §4.1 | Fails when anything outside the attention subtree differs, except d_ff in Arm A and layer count in the ladder |
+| T-11 ✅ | CI graph-diff check | W | T-09 | §4.1 | Fails when anything outside the attention subtree differs, except d_ff in Arm A and layer count in the ladder |
 | T-12 ✅ | Recurrence anchor module | W | T-02 | §9.2 | Causal and shape tests pass; the state is one d_model vector |
 
 ## M2 — Training
@@ -45,7 +45,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | T-14 ✅ | WSD schedule and optimizer parameter groups | O+W | T-01 | §7.1, §7.2 | LR is as specified at steps 0, 100, 1,221, 1,526, 3,662 and 4,578; decay has the 1−√ shape; weight decay covers 2D matrices only, not the tied embedding |
 | T-15 ✅ | Trainer: autocast and GradScaler with unscale before clipping, accumulation, skip and steps-taken logging, in-loop backend and dtype assertions | O+W | T-04, T-13, T-14 | §2.3, §7, §13.6 | A tiny model overfits on CPU; an injected inf gradient is counted as a skipped step; accumulation matches the large batch; `gpu` tests written |
 | T-16 ✅ | Checkpoint and resume | O+W | T-15 | §5, §12.3 | Kill at step 500 and resume gives the uninterrupted curve; the last two checkpoints are kept; resume needs no human input |
-| T-17 | `branch.py` | O+W | T-16 | §5, §7.2 | A branch from a trunk checkpoint matches an uninterrupted run; its manifest records parent and branch step |
+| T-17 ✅ | `branch.py` | O+W | T-16 | §5, §7.2 | A branch from a trunk checkpoint matches an uninterrupted run; its manifest records parent and branch step |
 | T-18 ✅ | Manifest and run naming | W | T-15 | §10.6, §11 | Schema test covers every field; names parse and round-trip |
 | T-19 ✅ | Determinism test for `ref` and the reproducibility measurement script | W | T-15 | §5 | 100 steps are bit-identical twice on CPU; the `gpu` measurement is written |
 
