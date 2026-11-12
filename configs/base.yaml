@@ -1,0 +1,35 @@
+# Backbone, identical across every variant (plan §3.1).
+# FROZEN (plan §17.3): changes only through a pull request that Phil approves.
+
+model:
+  n_layers: 8              # 6 and 10 for the ladder only (plan §8.4)
+  d_model: 384
+  n_heads: 8               # query heads, every variant
+  head_dim: 48
+  vocab_size: 8192
+  context_length: 1024
+  rope_theta: 10000.0
+  norm: rmsnorm
+  activation: swiglu
+  tie_embeddings: true
+  bias: false
+
+init:
+  distribution: normal
+  std: 0.02
+  # Residual output projections (attention W_O, MLP out) are scaled by
+  # 1/sqrt(2 * n_layers). Norm gains start at 1. MLA factor pairs: plan §3.3.
+  residual_output_scale: inverse_sqrt_two_layers
+  norm_gain: 1.0
+  seeding: per_parameter   # plan §4.5, never a global RNG
+
+precision:
+  autocast_dtype: float16  # not bf16: Turing has no bf16 support
+  master_dtype: float32
+  grad_scaler: true
+
+params:
+  target_total: 17308032
+  target_non_embedding: 14162304
+  # MLA carries latent RMSNorms that cannot be absorbed (plan §3.2).
+  mla_max_relative_offset: 0.0005

@@ -5,10 +5,12 @@ Last updated: 2026-11-12, session 1.
 ## Done
 
 - Bootstrap commit: `CLAUDE.md`, `TASKS.md`, `docs/plan_v5.md`.
+- T-00 scaffold (#1).
+- T-01 config system (#2).
 
 ## In progress
 
-- T-00, branch `task/T-00-scaffold`: complete, waiting for the pull request to be merged.
+- Nothing.
 
 ## Blocked
 
@@ -25,7 +27,7 @@ Last updated: 2026-11-12, session 1.
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–13 so far).
+All decisions are in `docs/decisions.md` (rows 1–21 so far).
 
 ## Environment
 
@@ -34,11 +36,14 @@ All decisions are in `docs/decisions.md` (rows 1–13 so far).
 
 ## For Phil
 
+- Confirm or change the two proposed thresholds in `configs/prereg.yaml` before the pre-registration commit: `paired_if_s_rep_ratio_below: 0.6` and `max_undetectable_param_fraction: 0.05`.
+- `recipe.yaml` leaves `micro_batch`, `init_scale` and `growth_interval` unset until the smoke runs.
+
 - Protect `main`: pull requests only, the `cpu` check required, and "Require review from Code Owners" enabled, otherwise CODEOWNERS has no effect.
 - Create the labels `needs-phil` and `question`.
 
 ## Next
 
-1. T-01 config system (W).
-2. T-24 `primary_test.py` and `test_primary_stats.py` (O), after T-01.
-3. T-02 backbone (W), then T-13 data pipeline and T-14 schedule in parallel.
+1. T-02 backbone (W).
+2. T-24 `primary_test.py` and `test_primary_stats.py` (O).
+3. T-13 data pipeline (W) and T-14 schedule (O+W).

@@ -1,0 +1,11 @@
+# Arm B: iso-backbone (plan §8.3). d_ff is fixed for every variant, so total
+# parameters drift down as KV heads are removed. Exploratory.
+name: iso_backbone
+tag: isobackbone
+d_ff: 1024
+variants: [gqa4, gqa2, mqa]
+init_seeds: [1, 2, 3]
+budget: 100M
+branches: []
+data_seed: 1
+timing: false

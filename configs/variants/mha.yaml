@@ -1,0 +1,5 @@
+name: mha
+attention:
+  type: grouped
+  n_kv_heads: 8
+d_ff: 1024

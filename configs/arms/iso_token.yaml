@@ -1,0 +1,9 @@
+# Arm A: iso-parameter, iso-token (plan §8.2). Also carries Arm N and the
+# ladder, which are MHA runs under the same rules (plan §8.1, §8.4).
+name: iso_token
+tag: isoparam            # the arm field of a run name (plan §11)
+d_ff: from_variant       # KV savings move into the MLP
+budget: 300M
+branches: [100M]         # the ladder adds 200M (plan §7.2)
+data_seed: 1
+timing: false            # may run two at a time

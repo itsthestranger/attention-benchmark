@@ -1,0 +1,5 @@
+name: mqa
+attention:
+  type: grouped
+  n_kv_heads: 1
+d_ff: 1248

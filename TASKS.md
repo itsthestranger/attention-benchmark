@@ -18,8 +18,8 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
-| T-00 | Repo scaffold: layout, `pyproject`, pytest markers, CI for the `cpu` tier, CODEOWNERS for frozen paths, `docs/decisions.md`, `STATUS.md`, `tests/tolerances.py` | O | — | §4.6, §5.1, §17.3 | CI is green on an empty suite; every frozen path is in CODEOWNERS |
-| T-01 | Config system: `base.yaml`, variants, ladder, arms, `recipe.yaml` with smoke-run values unset, `prereg.yaml`; loader with resolved config and hash | W | T-00 | §3, §7, §1.2 | Every config loads; the hash is stable; values match the plan's tables |
+| T-00 ✅ | Repo scaffold: layout, `pyproject`, pytest markers, CI for the `cpu` tier, CODEOWNERS for frozen paths, `docs/decisions.md`, `STATUS.md`, `tests/tolerances.py` | O | — | §4.6, §5.1, §17.3 | CI is green on an empty suite; every frozen path is in CODEOWNERS |
+| T-01 ✅ | Config system: `base.yaml`, variants, ladder, arms, `recipe.yaml` with smoke-run values unset, `prereg.yaml`; loader with resolved config and hash | W | T-00 | §3, §7, §1.2 | Every config loads; the hash is stable; values match the plan's tables |
 
 ## M1 — Model
 

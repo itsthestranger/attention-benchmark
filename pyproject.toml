@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 # The exact torch version used for development and CI is recorded in STATUS.md
 # and pinned in .github/workflows/ci.yml. It is pinned here once the Kaggle
 # image version is known (CLAUDE.md, Environment).
-dependencies = ["torch>=2.5,<3"]
+dependencies = ["torch>=2.5,<3", "pyyaml>=6"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
