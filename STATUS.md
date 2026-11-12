@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 2. 25 of 32 tasks merged; `cpu` tier green on `main` (2,698 tests, about three minutes).
+Last updated: 2026-11-12, end of session 2. 26 of 32 tasks merged; `cpu` tier green on `main` (2,727 tests, about three minutes).
 
 ## Done
 
@@ -30,17 +30,24 @@ Last updated: 2026-11-12, session 2. 25 of 32 tasks merged; `cpu` tier green on 
 - T-17 WSD decay branches (#25).
 - T-11 graph-diff check (#26).
 - T-22 retrieval generators and scorer (#27).
+- T-06 MLA absorbed path for inference (#28).
 
 ## In progress
 
-- **T-11 graph diff**, **T-21 probes**, **T-22 retrieval generators**: a worker each, in `/home/user/wt/T-11`, `T-21`, `T-22` on `task/T-11-graph-diff`, `task/T-21-probes`, `task/T-22-retrieval`. Started in session 2; if this file is read in a later session, check each worktree for a local commit and review it from scratch.
+- Nothing is running. Every worker has stopped and every branch is pushed.
 
 ## Blocked
 
-- Nothing.
+- **T-21 probes**, branch `task/T-21-probes` (pushed, one commit marked WIP and UNREVIEWED). The generators, the oracle, the stream and the training script exist, and 115 of 116 tests pass. The one that fails is the task's acceptance test, "a tiny MHA solves 4-pair MQAR on CPU": the worker could not reach a sequence accuracy of 1.0 and did not lower the bar. Measured afterwards on the synthetic task, with a 2-layer model of width 64 (8 heads of 8), 64 sequences per step:
+  - 64 keys and values, learning rate 3e-3: 0.87 after 6,000 steps and still rising. At 1e-3: 0.05 after 6,000.
+  - 16 keys and values, 3e-3: 1.0 after 4,000 steps. The same at 6e-3: 0.06 after 3,000.
+  - 8 keys and values: 0.06 to 0.11 after 3,000 steps at 3e-3, 6e-3 and 1e-2, and for three init seeds.
+  - Deeper models (4 and 8 layers) were slower in the worker's runs. Wider ones were not measured; a head dim of 8 gives RoPE only four frequencies, which may be why "attend to the previous token" is slow to form.
+  So the criterion can be met only by a test of several thousand steps (half a minute to a few minutes on CPU) whose outcome hangs on a phase transition and may differ on CI's CPU. Options: accept one long test after checking it across seeds and thread counts; change the criterion; or change the task. **Not decided.** See also the first open question.
 
 ## Open questions
 
+- **A shortcut in the MQAR probe as specified in the T-21 brief.** Every key is queried exactly once, so "answer with a context value not given yet" scores (1/4 + 1/3 + 1/2 + 1) / 4 = 52% token accuracy at 4 pairs with no recall at all; the plateau is visible in every training curve. Drawing the queries with replacement removes it, but then the tiny model learned nothing in 4,000 steps (0.30). This matters for Gate 1, which reads the anchor's failure off these probes: token accuracy must be compared with that baseline, or sequence accuracy used, or the task changed. The format was the orchestrator's choice (the plan names the probe, not its layout), so it can be changed, but the choice affects what Gate 1 measures. Recommendation: keep one query per key, report sequence accuracy, and state the 52% baseline.
 - **A sweep run and a reproducibility rerun can be the same run.** MHA's sweep point at the winning learning rate (100M, seed 1) has exactly the config, name and config hash of the reproducibility rerun of seed 1 (plan §7.4, §8.1). Using the sweep run as the rerun would feed a run that was picked for its low loss into s_rep. Should the rerun of seed 1 be a separate run, and if so how is it told apart: a field in the config, or reruns on seeds other than the sweep's? Until answered, `RUNBOOK.md` cannot give the Arm N commands. Recommendation: sweep on a seed that Arm N does not use.
 - Which PyTorch, Python and CUDA versions does Kaggle's GPU image ship? Needed to pin the environment. Until then: torch 2.15.0, Python 3.12 in CI.
 
@@ -57,6 +64,7 @@ These do not block the build. Each is implemented as described and can be change
 - **Step-0 logit scale (decision 118).** "Attention-logit std" is pooled over all layers, heads and causal pairs of the full-size model, at two init seeds. The seven variants land between 0.965 and 1.019 of MHA. A single deep layer moves by up to about 10% between seeds of one variant, so the test does not compare layer by layer.
 - **Wall-clock estimate below 100M (decision 123).** A variant slower than MHA affords fewer than 1,526 steps. Its loss is then read off the same line in ln(tokens), extended below the 100M branch, and flagged as extrapolated.
 - **Extra comparability gates (decision 125).** `make_tables.py` also refuses runs that differ in dataset hash, tokenizer hash, GPU, mode or precision, beyond the plan's list of steps, backend and versions.
+- **MLA cache layout (decision 142).** The MLA cache is one tensor of 216 values per token per layer, and the absorbed matrices travel with the cache. KV bytes per token are unchanged (432).
 - **`configs/data.yaml` (decision 38).** Not frozen. Consider adding it to CODEOWNERS once the hashes are filled in.
 
 ## Deviations from the plan
@@ -67,7 +75,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–140 so far).
+All decisions are in `docs/decisions.md` (rows 1–143 so far).
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
@@ -79,6 +87,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 - `gpu`: causal leak under fp16 (`test_causality.py`), `ref`/`opt` agreement under fp16 (`test_reference.py`), `opt` decode peak memory at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
 - `gpu`, determinism (`test_determinism.py`): `ref` mode in fp16 bit-identical over 100 steps twice, for all seven variants. Needs `CUBLAS_WORKSPACE_CONFIG=:4096:8` in the environment before pytest starts.
 - `gpu` and `t4`, reproducibility (`test_determinism.py`): the `opt` measurement in fp16 for all seven variants; it records differences and applies no threshold.
+- `gpu`, absorbed MLA (`test_mla_absorbed.py`): absorbed decode against the naive path in fp16.
 - `gpu`, branches (`test_wsd_branch.py`): branch fidelity in fp16 for all seven variants, with the scaler state carried over.
 - `gpu`, checkpoint (`test_checkpoint.py`): GradScaler state after a resume, resume fidelity in fp16 for all seven variants, a checkpoint saved and restored on CUDA.
 - `gpu`, evaluation (`test_eval_lm.py`): fp16 evaluation on CUDA against fp32.
@@ -108,9 +117,11 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. Review and merge T-11, T-21 and T-22 (see "In progress").
-2. T-06 MLA absorbed path (O+W): write `tests/test_mla_absorbed.py` first.
-3. T-28 plots (W, unblocked by T-27; reuse `tests/fixtures/fake_campaign.py` and `scripts.make_tables.analyse`), then T-23, T-29, T-30, T-31.
+1. T-21 probes: settle the acceptance criterion and the shortcut (see "Blocked" and the first open question), then review the WIP branch from scratch with deliberate breaks, as for every task.
+2. T-28 plots (W; reuse `tests/fixtures/fake_campaign.py` and `scripts.make_tables.analyse`), T-23 benchmark and timing scripts (W; unblocked by T-06), T-29 entry points and Kaggle shim (W; unblocked by T-17 and T-20).
+3. T-30 `RUNBOOK.md` (O; needs the answer on sweep runs and reruns), then T-31 handover audit by a fresh agent.
+
+Remaining: T-21, T-23, T-28, T-29, T-30, T-31.
 
 ## Notes for the next session
 
@@ -118,12 +129,15 @@ How the loop has been run:
 
 - Workers are Haiku subagents in git worktrees under `/home/user/wt/`, one task each. They commit locally; the orchestrator reviews, pushes and opens the pull request, then squash-merges on green CI.
 - Review includes breaking the source on purpose, one change at a time, and checking that a test fails. Every miss so far was a gap in a test, fixed by adding a test.
-- Run one pytest process at a time. The container has 4 cores, and two suites at once made runs ten times slower.
+- Run one pytest process at a time. The container has 4 cores, and two suites at once made runs ten times slower. Three workers each running the suite, plus the orchestrator's own checks, took the full tier from 2.5 to 13 minutes in session 2: tell workers to run the full suite once, and run deliberate-break checks while no worker is testing.
+- If a deliberate-break run is interrupted, the source file it was changing stays changed. Check `git status` in that worktree and restore the file before anything else.
+- Acceptance tests for `O+W` tasks are checked against a throwaway implementation before hand-off (kept out of the commit). In session 2 this caught three errors in the orchestrator's own tests and one defect in merged code.
+- Workers sometimes call session tools by mistake (a stray message or interrupt call); each was denied and did nothing. Briefs now say not to.
 - A branch stacked on an unmerged branch conflicts after the squash-merge; resolve with `git checkout --ours` on the files the stacked branch changed.
 - The container needs `pip install torch numpy scipy pyyaml tokenizers pyarrow pytest` from PyPI; download.pytorch.org is blocked.
 
 Designs already worked out for tasks not yet started:
 
-- **T-06 absorbed MLA.** Replaces `opt` decode in `mla.py`; the cache already holds only the latent and the positional key.
 - **T-29 entry points.** `scripts/branch.py` belongs here (decision 133): it calls `branch.start_or_resume_branch` and writes a `kind: branch` manifest with `branch.branch_manifest_block`; `train.py` gives its `Checkpointer` the steps from `branch.branch_steps`. Give `ref` and `opt` their own checkpoint roots (decision 115). Record the trainer's enforced backend on the attention modules with `set_sdpa_backend` and write it to the manifest (decision 110).
-- **T-23 benchmark.** Compare sliding-window memory with its cap, not with per-token growth (decision 77).
+- **T-23 benchmark.** Compare sliding-window memory with its cap, not with per-token growth (decision 77). MLA decodes on the absorbed path in `opt` mode and on the naive path in `ref` mode (decision 141); report both (plan §2.3). The timing pass feeds `analysis.rqw_estimate.estimate` a mapping of variant to ms per step, and `make_tables.headline_rows` takes `train_ms_per_step` and `decode_tok_per_s` mappings.
+- **T-28 plots.** `scripts.make_tables.analyse` returns everything a plot needs (losses per seed, the test selection, the ladder fit, the seed-count decision, the comparisons and multipliers) and `tests/fixtures/fake_campaign.py` builds a synthetic experiment. Plots must also build blank, from `analyse([])`.
