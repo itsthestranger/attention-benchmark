@@ -33,7 +33,7 @@ from scripts import branch as branch_script
 from scripts import evaluate as evaluate_script
 from scripts import train as train_script
 from src import config
-from src.data.loader import open_dataset
+from src.data.loader import open_dataset, order_sha256, train_order
 from src.data.packing import pack_dataset
 from src.data.tokenizer import iter_documents, train_tokenizer
 from src.eval.lm import ContextSpec, evaluate
@@ -697,6 +697,82 @@ def test_the_table_script_reads_the_manifest_directory_of_a_run_with_a_branch(
     assert sorted(m["name"] for m in manifests) == expected
     results, skipped = make_tables.select_results(manifests)
     assert sorted(m["name"] for m in results) == expected and skipped == []
+
+
+# --- Fields that must be recorded exactly ---------------------------------------------------------------
+
+
+def _spec_copy(src: Path, dest: Path, **keys) -> Path:
+    doc = yaml.safe_load(src.read_text(encoding="utf-8"))
+    doc.update(keys)
+    dest.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    return dest
+
+
+def test_the_checkpoint_stores_the_resume_count(reference, specs, synthetic, trunk_resolved, tmp_path):
+    assert final_state(reference("opt"), trunk_resolved, "opt")["resume_count"] == 0
+    out = tmp_path / "resumed_once"
+    assert run_train(specs.trunk, out, synthetic.root, extra=("--until", "14")) == 0
+    assert run_train(specs.trunk, out, synthetic.root) == 0
+    assert final_state(out, trunk_resolved, "opt")["resume_count"] == 1
+    directory = ck.checkpoint_dir(out / "checkpoints" / "opt", trunk_resolved)
+    assert ck.latest_valid_checkpoint(directory)[1]["resume_count"] == 1
+
+
+def test_each_validation_point_records_the_tokens_its_step_consumed(reference, trunk_resolved):
+    m = manifest_of(reference("opt"), "opt", mf.run_name(trunk_resolved))
+    per_step = trunk_resolved["recipe"]["batch"]["tokens_per_step"]
+    curve = m["final_metrics"]["val_curve"]
+    assert [e["step"] for e in curve] == list(range(EVAL_EVERY, TRUNK_STEPS + 1, EVAL_EVERY))
+    assert all(e["tokens"] == e["step"] * per_step for e in curve)
+    assert all(a["step"] < b["step"] for a, b in zip(curve, curve[1:]))
+
+
+def test_lr_source_comes_from_the_spec_or_the_flag_and_is_null_otherwise(specs, synthetic, trunk_resolved, tmp_path):
+    name = "sweep-run-example"
+    named = _spec_copy(specs.trunk, tmp_path / "named.yaml", lr_source=name)
+    out_spec = tmp_path / "from_spec"
+    assert run_train(named, out_spec, synthetic.root, extra=("--until", "1")) == 0
+    assert manifest_of(out_spec, "opt", mf.run_name(trunk_resolved))["lr_source"] == name
+
+    out_flag = tmp_path / "from_flag"
+    assert run_train(specs.trunk, out_flag, synthetic.root, extra=("--until", "1", "--lr-source", name)) == 0
+    assert manifest_of(out_flag, "opt", mf.run_name(trunk_resolved))["lr_source"] == name
+
+    out_none = tmp_path / "none"
+    assert run_train(specs.trunk, out_none, synthetic.root, extra=("--until", "1")) == 0
+    assert manifest_of(out_none, "opt", mf.run_name(trunk_resolved))["lr_source"] is None
+
+
+def test_the_data_seed_from_the_spec_or_the_flag_orders_the_data(specs, synthetic, trunk_resolved, tmp_path):
+    seed2_spec = _spec_copy(specs.trunk, tmp_path / "seed2.yaml", data_seed=2)
+    resolved2 = rc.resolve_spec(rc.load_run_spec(seed2_spec))
+    name2 = mf.run_name(resolved2)
+    assert name2.endswith("-d2")
+    out1, out_spec, out_flag = tmp_path / "seed1", tmp_path / "seed2_spec", tmp_path / "seed2_flag"
+    stop = ("--until", str(CKPT_EVERY))
+    assert run_train(specs.trunk, out1, synthetic.root, extra=stop) == 0
+    assert run_train(seed2_spec, out_spec, synthetic.root, extra=stop) == 0
+    assert run_train(specs.trunk, out_flag, synthetic.root, extra=(*stop, "--data-seed", "2")) == 0
+
+    n_windows = open_dataset(synthetic.root, expected_dataset_sha256=None,
+                             expected_tokenizer_sha256=None)["train"].n_windows(T)
+    expected = order_sha256(train_order(n_windows, 2))
+    for out in (out_spec, out_flag):
+        m = manifest_of(out, "opt", name2)
+        assert m["seeds"]["data_seed"] == 2
+        assert m["data"]["order_sha256"] == expected
+    seed1 = manifest_of(out1, "opt", mf.run_name(trunk_resolved))
+    assert seed1["data"]["order_sha256"] != expected
+
+    first_seed1 = losses(final_state(out1, trunk_resolved, "opt", step=CKPT_EVERY))[0]
+    first_seed2 = losses(final_state(out_spec, resolved2, "opt", step=CKPT_EVERY))[0]
+    assert first_seed1 != first_seed2
+
+
+def test_the_manifest_records_the_git_sha_of_the_checkout(reference, trunk_resolved):
+    m = manifest_of(reference("opt"), "opt", mf.run_name(trunk_resolved))
+    assert m["git_sha"] == mf.git_sha()
 
 
 # --- The gpu tier: written, skipped without CUDA, not yet run -----------------------------------------
