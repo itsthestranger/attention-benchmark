@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The job name `cpu` is what branch protection on main requires.
+  cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install PyTorch (CPU build, version recorded in STATUS.md)
+        run: pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+      - name: Install project
+        run: pip install -e ".[dev]"
+      - name: cpu tier
+        run: pytest -m "not gpu and not t4"

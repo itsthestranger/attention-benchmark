@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "attention-benchmark"
+version = "0.0.0"
+description = "Small-scale comparison of attention mechanisms at 17M parameters (plan v5)"
+requires-python = ">=3.11"
+# The exact torch version used for development and CI is recorded in STATUS.md
+# and pinned in .github/workflows/ci.yml. It is pinned here once the Kaggle
+# image version is known (CLAUDE.md, Environment).
+dependencies = ["torch>=2.5,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["src*", "analysis*", "scripts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--strict-markers -ra"
+markers = [
+    "gpu: needs any CUDA card (plan §5.1). Skips without one; a skip is never a pass.",
+    "t4: needs the Kaggle T4, sm75 (plan §5.1). Skips elsewhere; a skip is never a pass.",
+]

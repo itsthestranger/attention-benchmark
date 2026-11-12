@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+build/
+dist/
+# Checkpoints and run outputs never enter the repository; manifests and tables do.
+checkpoints/
+*.pt
+*.ckpt
