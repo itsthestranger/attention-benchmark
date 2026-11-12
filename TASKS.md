@@ -56,7 +56,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | T-20 ✅ | `eval/lm.py` and context-bucketed loss with the in-context-learning score | W | T-13, T-15 | §6, §10.3 | Bucket-weighted loss equals aggregate loss; hand-built windows with mid-window document starts give the expected context values |
 | T-21 | Probe generators and probe training script | W | T-12, T-15 | §9.2 | Property tests pass for all five probes; a tiny MHA solves 4-pair MQAR on CPU |
 | T-22 ✅ | Retrieval evaluation: passkey and needle generators | W | T-15 | §9.7 | Generator tests pass; the RoPE extension stays open (decision 5) |
-| T-23 | `bench.py`, `eval/inference.py`, `timing_pass.py` | W | T-04, T-06, T-07 | §8.5, §8.6, §10.4 | Each runs end to end on CPU with a tiny model; round-robin order and warm-up discard are tested; the analytic-vs-measured KV assertion is written for `gpu` |
+| T-23 ✅ | `bench.py`, `eval/inference.py`, `timing_pass.py` | W | T-04, T-06, T-07 | §8.5, §8.6, §10.4 | Each runs end to end on CPU with a tiny model; round-robin order and warm-up discard are tested; the analytic-vs-measured KV assertion is written for `gpu` |
 
 ## M4 — Analysis
 
@@ -66,12 +66,24 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | T-25 ✅ | `ladder_fit.py` with the seed-count rule | O | T-24 | §1.4, §8.4 | A known slope is recovered; the multiplier interval carries both uncertainties; the rule returns 5 or 8 on constructed cases |
 | T-26 ✅ | `rqw_estimate.py` | W | T-18 | §8.5 | Interpolation is correct on constructed manifests; a variant missing from Arm A reports its step-time ratio only |
 | T-27 ✅ | `make_tables.py` with its refusal gates | W | T-18, T-24 | §8.7, §10.1 | The headline table builds from fake manifests; each refusal (steps, backend, versions, trunk checkpoint) has a test |
-| T-28 | Plots | W | T-27 | §10.5 | All ten build from fake manifests and build blank; every seed is a visible dot |
+| T-28 ✅ | Plots | W | T-27 | §10.5 | All ten build from fake manifests and build blank; every seed is a visible dot |
+
+## M4b — Reporting gaps found in session 3
+
+The plan requires these outputs, and no task above produces them. Added by the orchestrator on 2026-11-12; see `STATUS.md`.
+
+| ID | Task | Owner | Depends on | Plan | Done when |
+| --- | --- | --- | --- | --- | --- |
+| T-32 ✅ | Controls, σ_data, ladder fits by budget and the gate report in `make_tables.py` | O+W | T-27 | §8.1, §8.4, §9.3, §9.4 | `tests/test_gate_report.py` passes; no comparison is computed before the controls; the blank `gates.md` is committed |
+| T-33 ✅ | LR-sweep report and selection: edge rule, tie rule, divergences recorded | O+W | T-29, T-32 | §7.4, §13.15 | Constructed sweeps give the pre-registered choice; a winner at the grid edge asks for another point; a diverged run is recorded, not lost |
+| T-34 ✅ | Secondary reports and command-line wiring: Arm B table, RQ-W estimate from the timing-pass file, context-use gaps with intervals, the timing and decode columns of the headline table | O+W | T-23, T-32 | §8.3, §8.5, §10.1, §10.3 | Each builds blank and from fake manifests; no verdict outside `primary_test.py` |
+| T-35 ✅ | Plots 4 and 5 read the controls and the per-budget ladder fits | W | T-28, T-32 | §10.5 | The null-control verdict is shown verbatim; the ladder is drawn and fitted at 100M, 200M and 300M |
+| T-36 | Command-line gaps found while writing the runbook: a standalone short run from flags, plots with unfinished runs left out, the timing-pass id of an Arm C run | W | T-29, T-28 | §7.4, §8.1, §8.5, §10.6 | Each gap has a test that fails without its fix |
 
 ## M5 — Operations and handover
 
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
-| T-29 | Kaggle shim notebook and the `train.py` / `evaluate.py` entry points | W | T-17, T-20 | §12.3 | A cold start runs on CPU against a synthetic dataset and resumes without human input |
-| T-30 | `RUNBOOK.md` | O | T-00 to T-29 | §15 | Exact commands for the verification step and each GPU week, in order, with the gate after each block and what Phil checks |
+| T-29 ✅ | Kaggle shim notebook and the `train.py` / `evaluate.py` entry points | W | T-17, T-20 | §12.3 | A cold start runs on CPU against a synthetic dataset and resumes without human input |
+| T-30 | `RUNBOOK.md` | O | T-00 to T-35 | §15 | Exact commands for the verification step and each GPU week, in order, with the gate after each block and what Phil checks |
 | T-31 | Handover: audit by a fresh agent against §5 and §13, final `STATUS.md`, `README.md` with an unfilled pre-registration template | O | T-30 | §17.4 | The handover checklist in `CLAUDE.md` is complete |
