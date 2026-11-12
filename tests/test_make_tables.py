@@ -429,9 +429,11 @@ def test_mixed_learning_rates_of_one_variant_raise(campaign):
 
 
 def test_a_100m_sweep_point_at_another_learning_rate_is_ignored(campaign, analysis):
+    # A sweep point is a standalone 100M run (plan §7.4). A branch at another learning rate
+    # would mean a 300M run at that rate, which is refused (see the test added in review).
     extra = [
         fake_manifest("mha", budget="100M", branches=[], init_seed=1, peak_lr=3e-3, val_loss=9.0),
-        fake_manifest("mha", init_seed=2, branch="100M", peak_lr=3e-3, val_loss=9.0),
+        fake_manifest("gqa4", budget="100M", branches=[], init_seed=1, peak_lr=5e-4, val_loss=9.0),
     ]
     a = mt.analyse(campaign + extra)
     assert a.reruns_100m == analysis.reruns_100m
@@ -563,3 +565,46 @@ def test_main_blank_matches_the_committed_file(tmp_path):
     assert mt.main(["--blank", "--out", str(tmp_path)]) == 0
     committed = (ROOT / "results" / "tables" / "blank" / "headline.md").read_bytes()
     assert (tmp_path / "headline.md").read_bytes() == committed
+
+
+def test_the_test_is_selected_before_any_300m_result_exists(campaign, analysis):
+    """Added in review. At Gate 2 the 300M runs are still training: only their 100M branches
+    and MHA's reruns are results. The selection must already work then, and nothing that
+    needs a 300M result may be computed."""
+    early = [m for m in campaign if mf.parse_run_name(m["name"]).branch == "100M"
+             or mf.parse_run_name(m["name"]).tokens == "100M"]
+    assert early and all(m["steps"]["total"] == 1526 for m in early)
+    result = mt.analyse(early)
+    assert result.selection is not None
+    assert result.selection == analysis.selection
+    assert result.fit is None and result.decision is None
+    assert result.comparisons == {} and result.multipliers == {}
+    assert all(cell == mt.BLANK for cell in _verdict_cells(mt.headline_rows(result)))
+
+
+def test_a_branch_at_another_learning_rate_is_refused(campaign):
+    """Added in review: a variant's branches and results share one learning rate."""
+    other = fake_manifest("mha", init_seed=1, branch="100M", peak_lr=2e-3, val_loss=3.6)
+    with pytest.raises(mt.TableError, match="more than one peak learning rate"):
+        mt.analyse(list(campaign) + [other])
+
+
+def test_seeds_outside_the_registered_sets_are_shown_but_never_tested(campaign, analysis, rows):
+    """Added in review. An extra run must not change a comparison: the registered seeds are
+    the test (plan §11, "no subset of seeds", and none added either)."""
+    extra = [
+        fake_manifest("gqa4", init_seed=6, val_loss=1.0),  # a primary, far from the others
+        fake_manifest("gqa2", init_seed=4, val_loss=1.0),  # an exploratory variant
+    ]
+    with_extra = mt.analyse(list(campaign) + extra)
+    assert with_extra.comparisons == analysis.comparisons
+    assert with_extra.multipliers == analysis.multipliers
+    assert with_extra.decision == analysis.decision
+    new_rows, old_rows = _by_variant(mt.headline_rows(with_extra)), _by_variant(rows)
+    for name in ("gqa4", "gqa2"):
+        assert new_rows[name]["verdict"] == old_rows[name]["verdict"]
+        assert new_rows[name]["gap vs MHA [95% CI]"] == old_rows[name]["gap vs MHA [95% CI]"]
+    assert "s6 1.0000" in new_rows["gqa4"]["val loss, every seed"]  # every seed is shown
+    assert "s4 1.0000" in new_rows["gqa2"]["val loss, every seed"]
+    assert any("gqa4" in n and "[6]" in n for n in with_extra.notes)
+    assert any("gqa2" in n and "[4]" in n for n in with_extra.notes)

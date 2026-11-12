@@ -212,10 +212,12 @@ def _collect(results: Sequence[dict], prereg: Mapping):
             continue
         selected.append((manifest, parsed))
 
-    # One learning rate per variant at the primary budget (plan §10.3).
+    # One learning rate per variant: that of its runs at the primary budget, results and
+    # branches alike. The branches finish first, and the test selection needs them (and the
+    # reruns at the same rate) before any 300M result exists (plan §8.1, §9.3).
     lr_runs: dict[str, dict[float, list[str]]] = {}
     for manifest, parsed in selected:
-        if parsed.tokens == budget and parsed.branch is None:
+        if parsed.tokens == budget:
             lr_runs.setdefault(parsed.variant, {}).setdefault(parsed.peak_lr, []).append(manifest["name"])
     problems = []
     for variant, by_lr in sorted(lr_runs.items()):
@@ -223,7 +225,7 @@ def _collect(results: Sequence[dict], prereg: Mapping):
             listed = "; ".join(
                 f"{mf.format_lr(lr)} in {', '.join(names_)}" for lr, names_ in sorted(by_lr.items())
             )
-            problems.append(f"{variant} has {budget} results at more than one peak learning rate: {listed}")
+            problems.append(f"{variant} has {budget} runs at more than one peak learning rate: {listed}")
     if problems:
         raise TableError(_listing("two learning rates of one variant cannot be mixed", problems))
     lr = {variant: next(iter(by_lr)) for variant, by_lr in lr_runs.items()}
@@ -379,6 +381,18 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
                 )
             except pt.PreregError as exc:
                 notes.append(f"exploratory {name}: {exc}")
+
+    # Runs with seeds outside the registered sets are shown in the table but never tested.
+    if decision is not None:
+        registered = {name: set(decision.seeds) for name in primary_names}
+        registered.update({name: set(ex_seeds) for name in prereg["exploratory"]["variants"]})
+        for name in sorted(registered):
+            extra = sorted(set(losses.get(name, {})) - registered[name])
+            if extra and name in comparisons:
+                notes.append(
+                    f"{name}: 300M results for seeds {extra} are outside the registered seeds "
+                    "and are not part of its comparison"
+                )
 
     # 6. Effective-parameter multipliers (plan §8.4).
     multipliers: dict[str, lf.Multiplier] = {}
