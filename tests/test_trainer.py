@@ -57,8 +57,8 @@ Gradients are left in place after a step (they are cleared at the start of the n
   and `torch.amp.GradScaler` with `init_scale` and `growth_interval` from the
   recipe). Default: "fp16" on a CUDA device, "fp32" on the CPU. "fp16" on the
   CPU is a ValueError. The logits of every micro-batch must have the dtype the
-  precision implies (float32 or float16), else RuntimeError: this is the
-  in-loop dtype assertion of plan §3.1.
+  precision implies (float32 or float16), else RuntimeError whose message
+  contains "logits dtype": this is the in-loop dtype assertion of plan §3.1.
 - `expected_backend`: None, or the name of the one fused attention backend the
   run may use ("flash", "efficient", "math", "cudnn"). When given, every forward
   runs inside `torch.nn.attention.sdpa_kernel` restricted to it, so a fallback
@@ -358,11 +358,31 @@ def test_wrong_logits_dtype_fails_inside_the_loop():
     trainer = make_trainer(steps=4)
     trainer.train_step()
     trainer.model.double()  # the run's precision is fp32
-    with pytest.raises(RuntimeError, match="dtype"):
+    before = snapshot(trainer.model)
+    with pytest.raises(RuntimeError, match="logits dtype"):
         trainer.train_step()
+    assert trainer.step == 1 and len(trainer.records) == 1  # the step did not happen
+    for name, p in trainer.model.named_parameters():
+        assert torch.equal(p, before[name]), name
 
 
 # --- Modes and construction ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["ref", "opt"])
+def test_the_mode_reaches_the_model(mode):
+    """`ref` and `opt` agree numerically, so only the call itself shows which one ran."""
+    modes = []
+    trainer = make_trainer(steps=2, mode=mode)
+    original = trainer.model.forward
+
+    def recording(*args, **kwargs):
+        modes.append(kwargs.get("mode"))
+        return original(*args, **kwargs)
+
+    trainer.model.forward = recording
+    trainer.train()
+    assert modes == [mode] * 4  # two steps of two micro-batches
 
 
 def test_ref_and_opt_training_agree():
