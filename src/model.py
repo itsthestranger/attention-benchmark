@@ -122,3 +122,4 @@ def build_model(resolved: dict) -> Transformer:
 # import src.transformer while it is still initialising (circular import).
 import src.attention.grouped  # noqa: E402,F401
 import src.attention.sliding_window  # noqa: E402,F401
+import src.attention.mla  # noqa: E402,F401
