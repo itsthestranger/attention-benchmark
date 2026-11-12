@@ -38,13 +38,14 @@ Last updated: 2026-11-12, during session 3. 26 of 32 tasks merged; `cpu` tier gr
 - T-35 plots 4 and 5 read the controls and the per-budget ladder fits (#33).
 - T-33 LR-sweep rules, sweep report and diverged runs (#34).
 - T-34 Arm B, context use, wall-clock estimate and timing columns (#35).
+- T-36 three command-line gaps (#37).
+- T-30 `RUNBOOK.md` with `tests/test_runbook.py` (#38).
 
 ## In progress
 
 Session 3 (2026-11-12), state when this note was written; check the worktrees under `/home/user/wt/` and the remote branches before trusting it.
 
-- T-36 command-line gaps (see `TASKS.md`): worker briefed, branch `task/T-36-cli-gaps`.
-- T-30 `RUNBOOK.md`: written with `tests/test_runbook.py`, which parses every command of the runbook with the scripts' own parsers; branch `task/T-30-runbook`. Its test needs T-36 merged first (the runbook uses `--branches` with no label, `make_plots --skip-unfinished` and `--timing-pass-id`).
+- T-31 handover: `README.md` with the unfilled pre-registration template is on branch `task/T-31-handover` (pushed, no pull request yet). The audit by a fresh agent against plan §5 and §13 is running in `/home/user/wt/audit`; it was cut off once by a usage limit and resumed. Its findings are not in yet: until they are fixed or listed here, handover item 6 is open.
 - T-21 probes: waits for Phil's two decisions.
 
 ## Gaps found in session 3 (tasks T-32 to T-35 added to `TASKS.md`)
@@ -146,7 +147,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 2. T-28 plots (W; reuse `tests/fixtures/fake_campaign.py` and `scripts.make_tables.analyse`), T-23 benchmark and timing scripts (W; unblocked by T-06), T-29 entry points and Kaggle shim (W; unblocked by T-17 and T-20).
 3. T-30 `RUNBOOK.md` (O; needs the answer on sweep runs and reruns), then T-31 handover audit by a fresh agent.
 
-Remaining: T-36 and T-30 (in progress), T-21 (waits for Phil), then T-31.
+Remaining: T-31 (audit running), T-21 (waits for Phil).
 
 ## Notes for the next session
 
