@@ -20,6 +20,14 @@ from src.eval.positions import bucket_index, context_values, validate_buckets
 PRECISIONS = ("fp16", "fp32")
 
 
+class NonFiniteLoss(ValueError):
+    """A validation or evaluation loss is not finite: the run has diverged (plan §10.6).
+
+    A ValueError, so every caller that refuses on ValueError still refuses; the entry
+    points catch this class alone and record the run as diverged.
+    """
+
+
 def _positive_int(name: str, value) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be a positive int, got {value!r}")
@@ -134,7 +142,7 @@ def evaluate(
                 finite = torch.isfinite(loss)
                 if not bool(finite.all()):
                     bad_rows = (~finite).any(dim=1).nonzero().flatten()
-                    raise ValueError(f"non-finite loss in window {first + int(bad_rows[0])}")
+                    raise NonFiniteLoss(f"non-finite loss in window {first + int(bad_rows[0])}")
 
                 l64 = loss.detach().to(torch.float64).cpu().numpy()
                 c = context_values(split.doc_starts, first, keep, T)
