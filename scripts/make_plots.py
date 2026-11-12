@@ -399,7 +399,9 @@ def plot_primary_gaps(inp: PlotInputs) -> Figure:
                 ax.set_title(_label(name, prereg), fontsize=9)
                 _no_data(ax, _reason(a.notes, name))
                 continue
-            ax.set_title(f"{_label(name, prereg)}\n{comp.verdict}", fontsize=9, pad=24 if _ladder_fit_usable(a) else 6)
+            # The exploratory suffix is in the legend; the title's verdict line already says "exploratory".
+            title = DISPLAY.get(name, name)
+            ax.set_title(f"{title}\n{comp.verdict}", fontsize=9, pad=24 if _ladder_fit_usable(a) else 6)
             ax.axvline(0.0, color="black", lw=0.8, zorder=1)
             ax.xaxis.set_major_locator(MaxNLocator(4))
             if row == 0 and band is not None:
@@ -636,7 +638,10 @@ def _arm_a_runs(results: Sequence[dict], prereg: Mapping) -> dict:
             continue
         if parsed.branch is not None or parsed.tokens != budget or parsed.variant not in mt.HEADLINE_VARIANTS:
             continue
-        runs[(parsed.variant, parsed.init_seed)] = manifest
+        key = (parsed.variant, parsed.init_seed)
+        if key in runs:
+            raise PlotError(f"two 300M runs claim {key[0]} seed {key[1]}: {runs[key]['name']} and {manifest['name']}")
+        runs[key] = manifest
     return runs
 
 
@@ -785,16 +790,19 @@ def plot_latency(inp: PlotInputs) -> Figure:
             record = bench.get((variant, mode))
             if record is None:
                 continue
+            tag = f"{mode}:{variant}"
             prefill = sorted((r["context"], r["latency_ms"]) for r in record["prefill"] if r["batch"] == 1)
             if prefill:
-                row[0].plot([x for x, _ in prefill], [y for _, y in prefill], color=_colour(variant),
-                            ls=style, lw=LINE_WIDTH, marker="o", markersize=3)
+                for line in row[0].plot([x for x, _ in prefill], [y for _, y in prefill], color=_colour(variant),
+                                        ls=style, lw=LINE_WIDTH, marker="o", markersize=3):
+                    line.set_gid(tag)
                 has_any = True
             for ax, batch in zip(row[1:], batches):
                 decode = sorted((r["cache"], r["ms_per_token"]) for r in record["decode"] if r["batch"] == batch)
                 if decode:
-                    ax.plot([x for x, _ in decode], [y for _, y in decode], color=_colour(variant),
-                            ls=style, lw=LINE_WIDTH, marker="o", markersize=3)
+                    for line in ax.plot([x for x, _ in decode], [y for _, y in decode], color=_colour(variant),
+                                        ls=style, lw=LINE_WIDTH, marker="o", markersize=3):
+                        line.set_gid(tag)
                     has_any = True
     if not has_any:
         for ax in row:

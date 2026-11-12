@@ -27,7 +27,9 @@ from scripts import make_plots as m
 from scripts import make_tables as mt
 from src.utils import manifest as mf
 from tests.fixtures import fake_plot_inputs as fpi
+from src import config
 from tests.fixtures.fake_campaign import fake_campaign
+from tests.fixtures.fake_manifests import fake_manifest
 from tests.tolerances import FLOAT64_IDENTITY
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -111,7 +113,7 @@ def canvas_draw(fig) -> None:
 
 
 def _primary_panel(figure: Figure, name: str, prereg):
-    label = m._label(name, prereg)
+    label = m.DISPLAY.get(name, name)
     matches = [ax for ax in figure.axes if ax.get_title().split("\n")[0] == label]
     assert len(matches) == 1, f"no single panel titled {label!r}"
     return matches[0]
@@ -198,7 +200,7 @@ def test_each_builder_returns_a_figure(figures):
 def test_every_blank_plot_has_zero_points_a_no_data_note_a_title_and_axis_labels(blank_figures):
     for name, figure in blank_figures.items():
         assert dot_count(figure) == 0, name
-        assert any(m.NO_DATA in text for text in all_texts(figure)), name
+        assert any("no data yet" in text for text in all_texts(figure)), name
         assert figure.get_suptitle(), name
         for ax in figure.axes:
             if not ax.axison:
@@ -434,6 +436,78 @@ def test_plot_1_without_a_decision_has_no_band_and_says_why(campaign):
 # --- No statistics in the plot module ----------------------------------------------------------------
 
 
+def test_the_no_data_note_is_the_literal_text():
+    assert m.NO_DATA == "no data yet"
+
+
+def test_every_primary_panel_has_one_band_and_no_exploratory_panel_has_one(figures, inputs):
+    """Plan §1.2: exploratory variants make no detection claim, so they carry no detectable-effect band."""
+    decision = inputs.analysis.decision
+    figure = figures["01_primary_gaps.png"]
+    for name in PRIMARY:
+        ax = _primary_panel(figure, name, inputs.prereg)
+        assert len(ax.patches) == 1, name
+        np.testing.assert_allclose(_band_half_width(ax.patches[0]), decision.bound_gap,
+                                   rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+    for name in EXPLORATORY:
+        ax = _primary_panel(figure, name, inputs.prereg)
+        assert len(ax.patches) == 0, name
+
+
+def _constructed_300m_and_100m(order: str) -> list[dict]:
+    """MHA and MQA at 300M (seeds 1, 2) and their 100M branches. The branches' bucket losses sit at
+    different offsets (MQA +1, MHA -1 nat), so a branch standing in for a 300M run changes the gap."""
+    manifests = fpi.bucket_manifests()
+    for (variant, seed), losses in fpi.CONSTRUCTED_BUCKETS.items():
+        offset = 1.0 if variant == "mqa" else -1.0
+        shifted = tuple(x + offset for x in losses)
+        final = float(np.mean(shifted))
+        manifests.append(
+            fake_manifest(variant, init_seed=seed, branch="100M", val_loss=final,
+                          final_metrics={"val_loss": final, "val": fpi.val_block(final, shifted)})
+        )
+    return manifests if order == "forward" else list(reversed(manifests))
+
+
+@pytest.mark.parametrize("order", ["forward", "reversed"])
+def test_plot_6_uses_the_300m_runs_only_whatever_the_order(order):
+    figure = m.plot_context_gap(m.make_inputs(_constructed_300m_and_100m(order)))
+    expected = []
+    for seed in (1, 2):
+        mha = fpi.CONSTRUCTED_BUCKETS[("mha", seed)]
+        mqa = fpi.CONSTRUCTED_BUCKETS[("mqa", seed)]
+        expected += [q - h for h, q in zip(mha, mqa)]
+    gaps = sorted(y for ax in figure.axes for _, y in plotted_points(ax))
+    assert len(gaps) == len(expected) == 8
+    np.testing.assert_allclose(gaps, sorted(expected), rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+
+
+def test_arm_a_runs_refuses_two_300m_runs_for_one_variant_and_seed():
+    prereg = config.load_prereg()
+    mqa = fpi.bucket_manifests()[2]
+    assert mqa["name"].startswith("mqa-")
+    with pytest.raises(m.PlotError, match="claim mqa seed 1"):
+        m._arm_a_runs([mqa, mqa], prereg)
+
+
+def test_latency_legend_and_lines_agree_on_ref_dashed_and_opt_solid(figures, inputs):
+    figure = figures["08_latency.png"]
+    legend = next(ax.get_legend() for ax in figure.axes if ax.get_legend() is not None)
+    styles = {t.get_text(): h.get_linestyle() for h, t in zip(legend.get_lines(), legend.get_texts())}
+    assert styles["ref path"] == "--"
+    assert styles["opt path"] == "-"
+    panel = figure.axes[0]  # the prefill panel: one line per (variant, mode)
+    tagged = [line for line in panel.lines if line.get_gid()]
+    assert len(tagged) == 2 * len(mt.HEADLINE_VARIANTS)
+    bench = {(r["variant"], r["mode"]): r for r in inputs.bench}
+    for line in tagged:
+        mode, variant = line.get_gid().split(":")
+        assert line.get_linestyle() == ("--" if mode == "ref" else "-"), line.get_gid()
+        expected = sorted((r["context"], r["latency_ms"]) for r in bench[(variant, mode)]["prefill"] if r["batch"] == 1)
+        np.testing.assert_allclose(line.get_xdata(), [x for x, _ in expected], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+        np.testing.assert_allclose(line.get_ydata(), [y for _, y in expected], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+
+
 def test_the_plot_module_contains_no_statistics_of_its_own():
     source = Path(m.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -593,7 +667,7 @@ def test_a_partial_campaign_without_the_ladder_builds_and_says_the_fit_is_missin
 def test_missing_benchmark_is_no_data_not_an_error(campaign):
     figure = m.plot_inference_frontier(m.make_inputs(campaign))
     assert dot_count(figure) == 0
-    assert any(m.NO_DATA in text for text in all_texts(figure))
+    assert any("no data yet" in text for text in all_texts(figure))
 
 
 # --- Command line -------------------------------------------------------------------------------------
