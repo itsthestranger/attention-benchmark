@@ -10,10 +10,11 @@ Last updated: 2026-11-12, session 1.
 - T-02 backbone and attention registry (#3).
 - T-13 data pipeline (#4).
 - T-24 primary test and its statistics tests (#5).
+- T-03 per-parameter seeded init (#6).
 
 ## In progress
 
-- Nothing.
+- T-14 WSD schedule and parameter groups, branch `task/T-14-schedule`: tests committed, worker implementing.
 
 ## Blocked
 
@@ -41,7 +42,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–48 so far).
+All decisions are in `docs/decisions.md` (rows 1–52 so far).
 
 ## Environment
 
@@ -59,6 +60,6 @@ All decisions are in `docs/decisions.md` (rows 1–48 so far).
 
 ## Next
 
-1. T-03 seeded init (O+W) and T-04 grouped attention (O+W): tests first.
-2. T-14 schedule (O+W), T-12 recurrence anchor (W).
-3. T-07 sliding window (O+W).
+1. T-04 grouped attention (O+W): tests first.
+2. T-12 recurrence anchor (W), T-07 sliding window (O+W).
+3. T-05 MLA naive path (O+W), T-25 ladder fit (O, waits for Phil's two answers).
