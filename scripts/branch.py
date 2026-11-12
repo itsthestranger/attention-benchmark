@@ -4,7 +4,7 @@
         [--device cpu|cuda] [--gpu-shared yes|no] [--expected-backend NAME] [--until STEP]
         [--variant V] [--arm A] [--init-seed N] [--data-seed N] [--peak-lr X] [--steps N]
         [--branches L ...] [--lr-source RUN] [--override PATH=VALUE ...]
-        [--checkpoint-every-seconds S] [--checkpoint-every-steps N] [--eval-every-steps N]
+        [--data-config PATH] [--checkpoint-every-seconds S] [--checkpoint-every-steps N] [--eval-every-steps N]
         [--eval-curve-windows N] [--eval-batch-size N] [--keep-checkpoints N]
 
 RUN_SPEC identifies the parent trunk. --budget names the branch (for example 100M).
@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--budget", dest="branch_budget", required=True, metavar="LABEL",
                    help="the branch's budget label, e.g. 100M; one of the trunk's branches")
     p.add_argument("--data", required=True, metavar="DIR", help="prepared dataset directory")
+    rc.data_config_argument(p)
     p.add_argument("--out", required=True, metavar="DIR", help="the trunk's working directory")
     p.add_argument("--mode", choices=rc.MODES, default="opt")
     p.add_argument("--device", default=None, help="cuda or cpu (default: cuda if available)")
@@ -63,7 +64,7 @@ def _branch(args) -> int:
     name = mf.run_name(parent, budget)
     ckpt_dir = ck.checkpoint_dir(layout.checkpoints, branch_cfg)
     total = branch_cfg["run"]["steps"]
-    ds = rc.open_data(args.data, parent)
+    ds = rc.open_data(args.data, parent, args.data_config)
     if rc.already_complete(layout, name, ckpt_dir, parent, total):
         print(f"{name}: already complete ({total} steps, mode {args.mode}); nothing to do")
         return 0

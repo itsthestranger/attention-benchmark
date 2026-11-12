@@ -4,7 +4,7 @@
         [--gpu-shared yes|no] [--expected-backend NAME] [--until STEP]
         [--variant V] [--arm A] [--init-seed N] [--data-seed N] [--peak-lr X] [--budget L]
         [--steps N] [--branches L ...] [--lr-source RUN] [--override PATH=VALUE ...]
-        [--checkpoint-every-seconds S] [--checkpoint-every-steps N] [--eval-every-steps N]
+        [--data-config PATH] [--checkpoint-every-seconds S] [--checkpoint-every-steps N] [--eval-every-steps N]
         [--eval-curve-windows N] [--eval-batch-size N] [--keep-checkpoints N]
 
 One invocation is one run (a trunk with its final decay), started or resumed. A
@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rc.spec_arguments(p, parent_budget=True)
     p.add_argument("--data", required=True, metavar="DIR", help="prepared dataset directory")
+    rc.data_config_argument(p)
     p.add_argument("--out", required=True, metavar="DIR", help="working directory: checkpoints and manifests")
     p.add_argument("--mode", choices=rc.MODES, default="opt")
     p.add_argument("--device", default=None, help="cuda or cpu (default: cuda if available)")
@@ -60,7 +61,7 @@ def _train(args) -> int:
     name = mf.run_name(resolved)
     ckpt_dir = ck.checkpoint_dir(layout.checkpoints, resolved)
     total = resolved["run"]["steps"]
-    ds = rc.open_data(args.data, resolved)
+    ds = rc.open_data(args.data, resolved, args.data_config)
     if rc.already_complete(layout, name, ckpt_dir, resolved, total):
         print(f"{name}: already complete ({total} steps, mode {args.mode}); nothing to do")
         return 0

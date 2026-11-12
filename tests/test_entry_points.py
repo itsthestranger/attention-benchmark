@@ -74,6 +74,11 @@ def _doc(rng: random.Random) -> str:
     return " ".join(rng.choice(WORDS) for _ in range(rng.randint(3, 40)))
 
 
+# The data config that pins the synthetic dataset's hashes. Set by the `synthetic` fixture;
+# every run of this module passes it with --data-config, so no test patches the repository's file.
+PIN: dict = {}
+
+
 @pytest.fixture(scope="module")
 def synthetic(tmp_path_factory):
     """A SYNTHETIC dataset, packed once per module by the project's packer."""
@@ -87,7 +92,13 @@ def synthetic(tmp_path_factory):
     root = base / "dataset"
     pack_dataset(iter_documents([jsonl]), tok, root, targets=TARGETS, context_length=T)
     meta = json.loads((root / "meta.json").read_text(encoding="utf-8"))
-    return SimpleNamespace(root=root, meta=meta, vocab=meta["vocab_size"])
+    pinned = base / "pinned_data.yaml"
+    pinned.write_text(yaml.safe_dump({
+        "dataset_sha256": meta["dataset_sha256"],
+        "tokenizer": {"sha256": meta["tokenizer_sha256"]},
+    }), encoding="utf-8")
+    PIN["path"] = pinned
+    return SimpleNamespace(root=root, meta=meta, vocab=meta["vocab_size"], pinned=pinned)
 
 
 def _tiny(vocab: int, *, steps: int, label: str, branches: list[str]) -> dict:
@@ -145,18 +156,26 @@ def short_resolved(specs):
 # --- Helpers ---------------------------------------------------------------------------------------
 
 
-def train_argv(spec, out, data, *, mode="opt", eval_every=EVAL_EVERY, extra=()) -> list[str]:
+def pin() -> list[str]:
+    return ["--data-config", str(PIN["path"])]
+
+
+def train_argv(spec, out, data, *, mode="opt", eval_every=EVAL_EVERY, extra=(), data_config=None) -> list[str]:
+    config_args = ["--data-config", str(data_config)] if data_config is not None else pin()
     return [str(spec), "--data", str(data), "--out", str(out), "--mode", mode, "--device", "cpu",
-            "--eval-every-steps", str(eval_every), "--checkpoint-every-steps", str(CKPT_EVERY), *extra]
+            "--eval-every-steps", str(eval_every), "--checkpoint-every-steps", str(CKPT_EVERY),
+            *config_args, *extra]
 
 
-def run_train(spec, out, data, *, mode="opt", eval_every=EVAL_EVERY, extra=()) -> int:
-    return train_script.main(train_argv(spec, out, data, mode=mode, eval_every=eval_every, extra=extra))
+def run_train(spec, out, data, *, mode="opt", eval_every=EVAL_EVERY, extra=(), data_config=None) -> int:
+    return train_script.main(train_argv(spec, out, data, mode=mode, eval_every=eval_every, extra=extra,
+                                        data_config=data_config))
 
 
-def run_branch(spec, out, data, *, mode="opt", extra=()) -> int:
+def run_branch(spec, out, data, *, mode="opt", extra=(), data_config=None) -> int:
+    config_args = ["--data-config", str(data_config)] if data_config is not None else pin()
     argv = [str(spec), "--budget", SHORT_LABEL, "--data", str(data), "--out", str(out), "--mode", mode,
-            "--device", "cpu", "--eval-every-steps", str(EVAL_EVERY), *extra]
+            "--device", "cpu", "--eval-every-steps", str(EVAL_EVERY), *config_args, *extra]
     return branch_script.main(argv)
 
 
@@ -263,7 +282,7 @@ def test_cold_start_writes_a_valid_completed_manifest(reference, trunk_resolved,
                           "skipped": 0, "skipped_in_first_100": 0}
     assert m["data"]["dataset_sha256"] == synthetic.meta["dataset_sha256"]
     assert m["data"]["tokenizer_sha256"] == synthetic.meta["tokenizer_sha256"]
-    stream = rc.make_stream(rc.open_data(synthetic.root, trunk_resolved), trunk_resolved)
+    stream = rc.make_stream(rc.open_data(synthetic.root, trunk_resolved, str(synthetic.pinned)), trunk_resolved)
     assert m["data"]["order_sha256"] == stream.order_sha256
     assert set(m["final_metrics"]) == {"val_loss", "test_loss", "train_loss", "val", "test", "val_curve"}
     assert m["resume_count"] == 0 and len(m["session_ids"]) == 1
@@ -377,7 +396,7 @@ def test_ops_do_not_change_the_config_hash(specs, synthetic, trunk_resolved, ref
     m = manifest_of(out, "opt", name)
     assert m["resume_count"] == 1 and m["config_hash"] == rc.config.config_hash(trunk_resolved)
     assert len(list((out / "checkpoints" / "opt").iterdir())) == 1  # one configuration, one directory
-    ops = json.loads((out / "manifests" / "opt" / f"{name}.ops.json").read_text(encoding="utf-8"))
+    ops = json.loads((out / "ops" / "opt" / f"{name}.json").read_text(encoding="utf-8"))
     assert [entry["ops"]["checkpoint_every_seconds"] for entry in ops] == [1000.0, 1.0]
     assert_same_result(out, reference("opt"), "opt", trunk_resolved, RESUME_TOL["opt"], name)
 
@@ -422,27 +441,18 @@ def test_a_hash_mismatch_is_refused_by_train_branch_and_evaluate(
     result_path = tmp_path / "refused.json"
     assert evaluate_script.main([
         "--checkpoint", str(checkpoint), "--data", str(bad), "--split", "val",
-        "--json", str(result_path), "--device", "cpu",
+        "--json", str(result_path), "--device", "cpu", *pin(),
     ]) == 2
     assert not result_path.exists()
 
 
-def test_an_expected_hash_that_differs_is_refused_and_the_matching_one_accepted(
-    monkeypatch, synthetic, specs, tmp_path
-):
+def test_an_expected_hash_that_differs_is_refused_and_the_matching_one_accepted(synthetic, specs, tmp_path):
     wrong = tmp_path / "data_wrong.yaml"
-    wrong.write_text(yaml.safe_dump({"dataset_sha256": "0" * 64, "tokenizer": {"sha256": None}}), encoding="utf-8")
-    monkeypatch.setattr(rc, "DATA_CONFIG", wrong)
+    wrong.write_text(yaml.safe_dump({"dataset_sha256": "0" * 64, "tokenizer": {"sha256": synthetic.meta["tokenizer_sha256"]}}),
+                     encoding="utf-8")
     out = tmp_path / "wrong"
-    assert run_train(specs.trunk, out, synthetic.root) == 2
+    assert run_train(specs.trunk, out, synthetic.root, data_config=wrong) == 2
     assert not out.exists()
-
-    right = tmp_path / "data_right.yaml"
-    right.write_text(yaml.safe_dump({
-        "dataset_sha256": synthetic.meta["dataset_sha256"],
-        "tokenizer": {"sha256": synthetic.meta["tokenizer_sha256"]},
-    }), encoding="utf-8")
-    monkeypatch.setattr(rc, "DATA_CONFIG", right)
     assert run_train(specs.trunk, tmp_path / "right", synthetic.root, extra=("--until", "1")) == 0
 
 
@@ -543,10 +553,11 @@ def test_evaluate_reproduces_the_manifest_losses_and_changes_nothing(reference, 
         result_path = tmp_path / f"{split}.json"
         assert evaluate_script.main([
             str(specs.trunk), "--out", str(out), "--data", str(synthetic.root), "--split", split,
-            "--json", str(result_path), "--device", "cpu",
+            "--json", str(result_path), "--device", "cpu", *pin(),
         ]) == 0
-        result = json.loads(result_path.read_text(encoding="utf-8"))
-        assert abs(result["loss"] - m["final_metrics"][f"{split}_loss"]) <= FLOAT64_IDENTITY
+        document = json.loads(result_path.read_text(encoding="utf-8"))
+        assert document["is_final"] is True and document["step"] == document["total_steps"] == TRUNK_STEPS
+        assert abs(document["result"]["loss"] - m["final_metrics"][f"{split}_loss"]) <= FLOAT64_IDENTITY
     assert snapshot(out) == before
 
 
@@ -559,6 +570,10 @@ def test_the_notebook_is_a_one_cell_shim_without_credentials():
     source = "".join(code[0]["source"])
     assert "scripts.train" in source and "--data" in source and "--out" in source
     assert source.count("\n") <= 10
+    lines = source.splitlines()
+    checkouts = [line for line in lines if "checkout" in line]
+    assert checkouts and all(not line.startswith("if ") for line in checkouts)
+    assert all("PINNED_COMMIT" in line for line in checkouts)
     lowered = text.lower()
     for banned in ("kaggle_key", "kaggle.json", "kaggle datasets", "kaggle kernels", "kaggle competitions",
                    "password", "token"):
@@ -586,12 +601,102 @@ def test_the_module_entry_runs_in_a_subprocess(specs, synthetic, trunk_resolved,
     out = tmp_path / "subprocess"
     proc = subprocess.run(
         [sys.executable, "-m", "scripts.train", str(specs.trunk), "--data", str(synthetic.root),
-         "--out", str(out), "--mode", "opt", "--device", "cpu", "--until", "5"],
+         "--out", str(out), "--mode", "opt", "--device", "cpu", "--until", "5", *pin()],
         cwd=ROOT, capture_output=True, text=True, timeout=600,
     )
     assert proc.returncode == 0, proc.stderr
     m = manifest_of(out, "opt", mf.run_name(trunk_resolved))
     assert m["completed"] is False and m["steps"]["attempted"] == 5
+
+
+# --- Pinning, pruning, unfinished checkpoints, and the table script ----------------------------------
+
+
+def test_the_repository_data_config_refuses_train_branch_and_evaluate_and_writes_nothing(
+    synthetic, specs, branch_source, reference, tmp_path, capsys
+):
+    """configs/data.yaml has null hashes until Phil pins them: no entry point may run against it."""
+    assert (config.CONFIG_DIR / "data.yaml").exists()
+    out = tmp_path / "unpinned"
+    assert train_script.main([str(specs.trunk), "--data", str(synthetic.root), "--out", str(out),
+                              "--device", "cpu"]) == 2
+    assert not out.exists()
+    assert "does not pin the data" in capsys.readouterr().err
+
+    work = tmp_path / "unpinned_branch"
+    shutil.copytree(branch_source, work)
+    before = snapshot(work)
+    assert branch_script.main([str(specs.trunk), "--budget", SHORT_LABEL, "--data", str(synthetic.root),
+                               "--out", str(work), "--device", "cpu"]) == 2
+    assert snapshot(work) == before
+
+    source = reference("opt")
+    before = snapshot(source)
+    json_path = tmp_path / "unpinned_eval.json"
+    assert evaluate_script.main([str(specs.trunk), "--out", str(source), "--data", str(synthetic.root),
+                                 "--split", "val", "--json", str(json_path), "--device", "cpu"]) == 2
+    assert not json_path.exists() and snapshot(source) == before
+
+
+def test_a_completed_run_whose_checkpoints_were_pruned_is_complete_and_writes_nothing(
+    specs, synthetic, tmp_path, capsys
+):
+    out = tmp_path / "pruned"
+    assert run_train(specs.trunk, out, synthetic.root) == 0
+    shutil.rmtree(out / "checkpoints")
+    before = snapshot(out)
+    capsys.readouterr()
+    assert run_train(specs.trunk, out, synthetic.root) == 0
+    assert "pruned" in capsys.readouterr().out
+    assert snapshot(out) == before
+    assert not (out / "checkpoints").exists()
+
+
+def test_evaluate_refuses_an_unfinished_checkpoint_unless_asked_and_then_marks_it(
+    specs, synthetic, tmp_path, capsys
+):
+    out = tmp_path / "midrun"
+    assert run_train(specs.trunk, out, synthetic.root, extra=("--until", "14")) == 0
+    json_path = tmp_path / "mid.json"
+    base = [str(specs.trunk), "--out", str(out), "--data", str(synthetic.root), "--split", "val",
+            "--json", str(json_path), "--device", "cpu", *pin()]
+    assert evaluate_script.main(base) == 2
+    assert not json_path.exists()
+    capsys.readouterr()
+    assert evaluate_script.main(base + ["--allow-unfinished"]) == 0
+    document = json.loads(json_path.read_text(encoding="utf-8"))
+    assert document["is_final"] is False
+    assert document["step"] == CKPT_EVERY and document["total_steps"] == TRUNK_STEPS
+    assert document["checkpoint"] == f"step{CKPT_EVERY:08d}.pt" and document["split"] == "val"
+    assert document["mode"] == "opt" and document["precision"] == "fp32"
+    assert document["result"]["loss"] is not None
+    assert f"NOT A RESULT: step {CKPT_EVERY} of {TRUNK_STEPS}" in capsys.readouterr().out
+
+
+def test_a_branch_point_checkpoint_stays_refused_even_with_allow_unfinished(reference, synthetic, trunk_resolved, tmp_path):
+    checkpoint = ck.checkpoint_dir(reference("opt") / "checkpoints" / "opt", trunk_resolved) / f"trunk-step{BRANCH_STEP:08d}.pt"
+    assert evaluate_script.main([
+        "--checkpoint", str(checkpoint), "--data", str(synthetic.root), "--split", "val",
+        "--json", str(tmp_path / "bp.json"), "--device", "cpu", "--allow-unfinished", *pin(),
+    ]) == 2
+    assert not (tmp_path / "bp.json").exists()
+
+
+def test_the_table_script_reads_the_manifest_directory_of_a_run_with_a_branch(
+    branch_source, specs, synthetic, trunk_resolved, tmp_path
+):
+    from scripts import make_tables
+
+    out = tmp_path / "tables"
+    shutil.copytree(branch_source, out)
+    assert run_branch(specs.trunk, out, synthetic.root) == 0
+    directory = out / "manifests" / "opt"
+    expected = sorted([mf.run_name(trunk_resolved), mf.run_name(trunk_resolved, SHORT_LABEL)])
+    assert sorted(p.name for p in directory.iterdir()) == sorted(f"{name}.json" for name in expected)
+    manifests = make_tables.load_manifests(directory)
+    assert sorted(m["name"] for m in manifests) == expected
+    results, skipped = make_tables.select_results(manifests)
+    assert sorted(m["name"] for m in results) == expected and skipped == []
 
 
 # --- The gpu tier: written, skipped without CUDA, not yet run -----------------------------------------
@@ -601,7 +706,7 @@ def test_the_module_entry_runs_in_a_subprocess(specs, synthetic, trunk_resolved,
 def test_cuda_fp16_cold_start_and_resume_record_the_enforced_backend_and_scale(specs, synthetic, trunk_resolved, tmp_path):
     out = tmp_path / "gpu"
     base = [str(specs.trunk), "--data", str(synthetic.root), "--out", str(out), "--mode", "opt",
-            "--device", "cuda", "--gpu-shared", "no", "--expected-backend", "efficient",
+            "--device", "cuda", "--gpu-shared", "no", "--expected-backend", "efficient", *pin(),
             "--eval-every-steps", str(EVAL_EVERY), "--checkpoint-every-steps", str(CKPT_EVERY)]
     assert train_script.main(base + ["--until", "10"]) == 0
     assert train_script.main(base) == 0

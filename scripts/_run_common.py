@@ -9,8 +9,10 @@ the evaluator or the libraries the entry points call.
 Layout under OUT (one working directory per experiment)
     checkpoints/{mode}/{config hash}/   step*.pt, trunk-step*.pt (branch points),
                                         sessions.json, val_curve.json
-    manifests/{mode}/{name}.json        one manifest per run and per branch
-    manifests/{mode}/{name}.ops.json    the operational settings of each session
+    manifests/{mode}/{name}.json        one manifest per run and per branch, and nothing else
+    ops/{mode}/{name}.json              the operational settings of each session (kept out of
+                                        the manifest directory: scripts/make_tables.py reads
+                                        every file there as a manifest)
 
 The mode is part of both paths (decision 115). A run's name does not carry the
 mode, so without it a `ref` and an `opt` run of one spec would write one manifest.
@@ -267,14 +269,28 @@ class Dataset:
     tokenizer_sha256: str
 
 
-def open_data(data_dir, resolved: dict) -> Dataset:
-    """Open the dataset, refusing a hash mismatch (plan §6). Expected hashes come from configs/data.yaml."""
-    data_cfg = _read_yaml(DATA_CONFIG)
+def open_data(data_dir, resolved: dict, data_config=None) -> Dataset:
+    """Open the dataset, refusing a hash mismatch and an unpinned dataset (plan §6).
+
+    The expected hashes come from the data config (configs/data.yaml by default). A config
+    whose hashes are null refuses before anything else: nothing else can say which data a
+    run is about.
+    """
+    path = Path(data_config) if data_config is not None else DATA_CONFIG
+    data_cfg = _read_yaml(path)
     tokenizer_cfg = data_cfg.get("tokenizer") or {}
+    dataset_pin = data_cfg.get("dataset_sha256")
+    tokenizer_pin = tokenizer_cfg.get("sha256")
+    if dataset_pin is None or tokenizer_pin is None:
+        raise EntryError(
+            f"{path} does not pin the data: dataset_sha256 and tokenizer.sha256 must be set. "
+            "Run `python -m scripts.prepare_data` once and paste the two hashes it prints into "
+            "configs/data.yaml. Nothing skips this check."
+        )
     splits = open_dataset(
         data_dir,
-        expected_dataset_sha256=data_cfg.get("dataset_sha256"),
-        expected_tokenizer_sha256=tokenizer_cfg.get("sha256"),
+        expected_dataset_sha256=dataset_pin,
+        expected_tokenizer_sha256=tokenizer_pin,
     )
     # open_dataset has just verified meta.json against the files, so its values are the verified ones.
     meta = _read_json(Path(data_dir) / "meta.json")
@@ -292,6 +308,12 @@ def open_data(data_dir, resolved: dict) -> Dataset:
         dataset_sha256=meta["dataset_sha256"],
         tokenizer_sha256=meta["tokenizer_sha256"],
     )
+
+
+def data_config_argument(parser: argparse.ArgumentParser) -> None:
+    """--data-config: the file that pins the dataset's hashes (default configs/data.yaml)."""
+    parser.add_argument("--data-config", dest="data_config", metavar="PATH", default=None,
+                        help="data config that pins the dataset hashes (default configs/data.yaml)")
 
 
 def make_stream(ds: Dataset, resolved: dict) -> TrainStream:
@@ -323,6 +345,10 @@ class Layout:
     def manifests(self) -> Path:
         return self.out / "manifests" / self.mode
 
+    @property
+    def ops(self) -> Path:
+        return self.out / "ops" / self.mode
+
 
 def register_session(directory: Path) -> list[str]:
     """Append this process's session id to the configuration's session list and return the list.
@@ -340,9 +366,9 @@ def register_session(directory: Path) -> list[str]:
     return ids
 
 
-def record_ops(manifests: Path, name: str, session_id: str, ops: dict, device: torch.device, until) -> None:
-    """Keep the operational values each session actually used, next to its manifest (plan §8.7)."""
-    path = manifests / f"{name}.ops.json"
+def record_ops(ops_dir: Path, name: str, session_id: str, ops: dict, device: torch.device, until) -> None:
+    """Keep the operational values each session actually used (plan §8.7), beside the manifests."""
+    path = ops_dir / f"{name}.json"
     entries = _read_json(path) if path.exists() else []
     if not isinstance(entries, list):
         raise EntryError(f"{path} is not an ops record")
@@ -351,8 +377,9 @@ def record_ops(manifests: Path, name: str, session_id: str, ops: dict, device: t
 
 
 def already_complete(layout: Layout, name: str, ckpt_dir: Path, manifest_cfg: dict, total: int) -> bool:
-    """True when a completed manifest of this configuration and its final checkpoint exist.
+    """True when a completed manifest of this configuration exists: nothing is left to do.
 
+    The final checkpoint may have been pruned (plan §12.3); that is reported, not an error.
     A manifest of another configuration under the same name is refused, not overwritten.
     """
     path = layout.manifests / f"{name}.json"
@@ -364,7 +391,7 @@ def already_complete(layout: Layout, name: str, ckpt_dir: Path, manifest_cfg: di
     if existing["completed"] is not True:
         return False
     if not (ckpt_dir / f"step{total:08d}.pt").exists():
-        raise EntryError(f"{path} is complete but its final checkpoint is missing; refusing to run")
+        print(f"{path.name}: complete; its final checkpoint has been pruned (plan §12.3)")
     return True
 
 
@@ -509,7 +536,7 @@ def run_job(trainer, job: Job) -> int:
     curve.load()
     if curve.truncate_after(trainer.step):
         curve.save()
-    record_ops(job.layout.manifests, job.name, sessions[-1], job.ops, job.device, job.until)
+    record_ops(job.layout.ops, job.name, sessions[-1], job.ops, job.device, job.until)
     checkpointer = ck.Checkpointer(
         job.layout.checkpoints,
         every_steps=job.ops["checkpoint_every_steps"],
