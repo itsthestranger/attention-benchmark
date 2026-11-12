@@ -355,6 +355,18 @@ def test_build_optimizer_uses_the_recipe():
     assert opt.param_groups[0]["amsgrad"] is False
 
 
+def test_build_optimizer_takes_every_value_from_the_config():
+    """Not from AdamW's defaults, which happen to share the recipe's eps."""
+    cfg = tiny_cfg(peak_lr=7e-4)
+    cfg["recipe"]["optimizer"].update(betas=[0.8, 0.9], eps=1e-6, weight_decay=0.3)
+    opt = build_optimizer(tiny_model(), cfg)
+    for group in opt.param_groups:
+        assert group["betas"] == (0.8, 0.9)
+        assert group["eps"] == 1e-6
+        assert group["lr"] == 7e-4
+    assert [g["weight_decay"] for g in opt.param_groups] == [0.3, 0.0]
+
+
 def test_build_optimizer_refuses_another_optimizer():
     cfg = tiny_cfg()
     cfg["recipe"]["optimizer"]["name"] = "sgd"
