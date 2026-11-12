@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, during session 3. 26 of 32 tasks merged; `cpu` tier green on `main` (2,727 tests, about three minutes).
+Last updated: 2026-11-12, session 3. Every task of `TASKS.md` is merged except T-21 (waits for Phil), T-37 (audit fixes, in progress) and T-31 (this handover). The `cpu` tier is green on `main`.
 
 ## Done
 
@@ -43,20 +43,47 @@ Last updated: 2026-11-12, during session 3. 26 of 32 tasks merged; `cpu` tier gr
 
 ## In progress
 
-Session 3 (2026-11-12), state when this note was written; check the worktrees under `/home/user/wt/` and the remote branches before trusting it.
+Check the worktrees under `/home/user/wt/` and the remote branches before trusting this.
 
-- T-31 handover: `README.md` with the unfilled pre-registration template is on branch `task/T-31-handover` (pushed, no pull request yet). The audit by a fresh agent against plan §5 and §13 is running in `/home/user/wt/audit`; it was cut off once by a usage limit and resumed. Its findings are not in yet: until they are fixed or listed here, handover item 6 is open.
-- T-21 probes: waits for Phil's two decisions.
+- T-37, fixes for the audit's findings: tests written by the orchestrator (`tests/test_audit_fixes.py`, `tests/test_backend_enforcement.py`), worker briefed, branch `task/T-37-audit-fixes`.
+- T-31, handover: `README.md` with the unfilled pre-registration template, this file, and the audit below, on branch `task/T-31-handover`.
+- T-21 probes: waits for two decisions (see "Blocked" and "Open questions").
 
-## Gaps found in session 3 (tasks T-32 to T-35 added to `TASKS.md`)
+## Handover audit (plan §17.4 item 6)
 
-The task list reached "analysis done" without these, and the plan needs each of them as generated output (plan §11: nothing typed or computed by hand):
+A fresh agent that wrote none of the code reviewed the harness against plan §5 and §13 at commit `6697a42`. It ran the `cpu` tier (3,103 passed), made 34 deliberate one-line breaks (33 caught) and compared the frozen configs with the plan value by value (they match). Its verdict: the core is sound on CPU; four defects had to be fixed or decided before the handover. Findings and what happened to each:
 
-- `primary_test.null_control` and `positive_control` exist, and nothing called them. No report showed σ_data, the test choice, the detectable-effect bound or the seed count. T-32 adds them to `analyse()` and writes `gates.md`; its tests are on `task/T-32-gate-report` (worker briefed). T-32 also makes `analyse()` refuse every cross-variant comparison until the null control exists and is not detected and the positive control exists (plan §8.1, §9.3, §9.4). **For Phil**: that refusal is the loop's reading of the plan.
-- No code applies the edge rule and the tie rule of plan §7.4 or reports a sweep, and a diverged run cannot write a manifest today (a completed manifest needs a finite loss), so "record everything, including divergences" is not met. T-33.
-- No Arm B table (plan §8.3), no command line for the RQ-W estimate (§8.5), no intervals for the context-use gaps (§10.3), and `make_tables.py` cannot read the timing-pass and benchmark files into the headline table. T-34.
-- Plot 5 shows the ladder at 300M only and plot 4 cannot show the null-control verdict, because `analyse()` did not expose them. T-35.
-- MHA's Arm A runs need the 200M branch point as well as the 100M one (plan §12.1: "plus 200M branches on L8"), so their run specs must say `branches: [100M, 200M]` from the start. For `RUNBOOK.md`.
+| # | Finding | Status |
+| --- | --- | --- |
+| F1 | One run that skipped more than 0.5% of its steps made every table, plot and the sweep report refuse, even when no comparison read it. | Fix in T-37: step parity is checked among the runs the analysis reads; the sweep lists such a run as diverged. |
+| F2 | The seed-count rule was fed a ladder fit over every MHA seed present, so adding the seeds it asked for could reverse it (reproduced). | Fix in T-37: the rule reads the registered base seeds only. **Still open for Phil**: the committed seed count lives in the pre-registration text only; no frozen file holds it, so nothing refuses a run set that disagrees with it. |
+| F3 | The FlexAttention path of SWA could not be selected by any entry point. | Fix in T-37: `opt_path` in `configs/variants/swa256.yaml`, part of the config hash. Phil sets it after the T4 verification, before any SWA run. |
+| F4 | The test of the trainer's in-loop backend enforcement could not fail. | Fixed in T-37: `tests/test_backend_enforcement.py` observes the restriction during the forward pass; removing the enforcement fails four tests. `gpu` and `t4` versions for all seven variants are written, never run. |
+| F5 | With the comparison gate closed, the headline table and three plots still showed the variants' losses. | Fix in T-37: withheld in the tables and plots until the controls pass. |
+| F6 | Nothing refused a sweep on a seed an arm uses. | Fix in T-37: `select_lr` refuses registered seeds. This builds in the recommendation on the open sweep-seed question; it is removed if Phil decides otherwise. |
+| F7 | The runbook's 100-step smoke runs decayed from step 80, a milder schedule than a real run's first 100 steps. | Fixed in `RUNBOOK.md`: smoke runs are real 300M runs stopped with `--until 100`. |
+| F8 | The disclosures of plan §13.2, §13.4 and §13.5 were generated nowhere; §13.3 only in one plot caption. | Fix in T-37: a fixed "Disclosures" block in `headline.md`. `README.md` states the scope. |
+| F9 | `STATUS.md` was stale and omitted four `gpu` tests. | Fixed here. |
+| F10 | Arm C has no generated report: the 3% elapsed-time flag and the step-time spread of plan §8.5 have no code. | **Listed, not built.** Arm C is optional and first on the cut list. If it runs, those numbers need code first. |
+| F11 | The `gpu` memory test of GQA/MQA decode compares with MHA's whole cache and could miss one expanded layer. | **Listed.** It implements the plan's wording; the `cpu` shape test is the real guard and catches the break. |
+| F12 | The comment in `configs/prereg.yaml` says the context buckets are half-open; the top bucket is closed (decision 95). | **Listed for Phil**: the file is frozen. |
+| — | A `ref`-mode run recorded the fused kernel it did not use. | Fix in T-37: the manifest's backend is null for `ref`. |
+
+Suspicions the auditor could not confirm without hardware are under "To check on real hardware".
+
+What the audit did not cover, by its own account: anything on a GPU; CI and branch protection; a full read of the entry points, the benchmark, the plots and the manifest module; the manifest fields against plan §10.6 one by one; the plots visually; about 155 of the 181 decision rows.
+
+## Gaps found in session 3 (tasks T-32 to T-36)
+
+The original task list reached "analysis done" without outputs the plan requires to be generated by code. All five are merged:
+
+- T-32: the null control, the positive control, σ_data and the per-budget ladder fits in `analyse()`, and `gates.md`. No cross-variant comparison is computed before the controls (decision 170).
+- T-33: the LR-sweep rules of plan §7.4 as code, `lr_sweep.md`, and a manifest for a diverged run.
+- T-34: Arm B, context use, the wall-clock estimate, and the timing columns from the command line.
+- T-35: plots 4 and 5 read the controls and the per-budget fits.
+- T-36: standalone 100M runs from flags, plots with unfinished runs left out, the timing-pass id of an Arm C run.
+
+Not built, and outside the task list: a run script for Phase 6 (plan §9.7; the RoPE extension is open decision 5), and the Arm C report (F10).
 
 ## Blocked
 
@@ -73,9 +100,13 @@ The task list reached "analysis done" without these, and the plan needs each of 
 
 ## Open questions
 
-- **A shortcut in the MQAR probe as specified in the T-21 brief.** Every key is queried exactly once, so "answer with a context value not given yet" scores (1/4 + 1/3 + 1/2 + 1) / 4 = 52% token accuracy at 4 pairs with no recall at all; the plateau is visible in every training curve. Drawing the queries with replacement removes it, but then the tiny model learned nothing in 4,000 steps (0.30). This matters for Gate 1, which reads the anchor's failure off these probes: token accuracy must be compared with that baseline, or sequence accuracy used, or the task changed. The format was the orchestrator's choice (the plan names the probe, not its layout), so it can be changed, but the choice affects what Gate 1 measures. Recommendation: keep one query per key, report sequence accuracy, and state the 52% baseline.
-- **A sweep run and a reproducibility rerun can be the same run.** MHA's sweep point at the winning learning rate (100M, seed 1) has exactly the config, name and config hash of the reproducibility rerun of seed 1 (plan §7.4, §8.1). Using the sweep run as the rerun would feed a run that was picked for its low loss into s_rep. Should the rerun of seed 1 be a separate run, and if so how is it told apart: a field in the config, or reruns on seeds other than the sweep's? Until answered, `RUNBOOK.md` cannot give the Arm N commands. Recommendation: sweep on a seed that Arm N does not use.
-- Which PyTorch, Python and CUDA versions does Kaggle's GPU image ship? Needed to pin the environment. Until then: torch 2.15.0, Python 3.12 in CI.
+Recommendations were given to Phil in session 3; none is answered yet.
+
+- **MQAR layout (blocks T-21).** The layout of the WIP branch feeds each answer back as input, which lets "a context value not given yet" score 52% at 4 pairs with no recall. Zoology's own generator does not feed answers back. Recommendation: never feed answers back, one query per key, values without replacement, token accuracy against the 1/n line with sequence accuracy as a second column; the same for multi-hop and fuzzy recall.
+- **T-21 acceptance criterion (blocks T-21).** With identical settings the jump to recall came at steps 500, 1,250 and 3,250, and one 5,000-step run takes 150 to 190 s here. Recommendation: on `cpu`, the property tests plus exact memorisation of one fixed batch; the "solves held-out 4-pair MQAR" assertion as a `gpu` test over 3 seeds with a step budget of three times the slowest CPU solve.
+- **The sweep seed.** A sweep on seed 1, 2 or 3 gives the winning point the name and config hash of a reproducibility rerun, and makes that seed's MHA run a selected one. Recommendation: every sweep on one seed no arm uses, for example 21, written into `configs/prereg.yaml` (frozen: Phil's pull request). `select_lr` takes the seed as an argument and, after T-37, refuses registered seeds.
+- **Kaggle's torch, Python and CUDA versions.** Needed to pin the environment; `RUNBOOK.md` §1.5 has the cell to run. Until then: torch 2.15.0, Python 3.12 in CI.
+- **Where the committed seed count lives** (audit F2): see the audit table.
 
 ## Readings of the plan for Phil to confirm
 
@@ -92,6 +123,12 @@ These do not block the build. Each is implemented as described and can be change
 - **Extra comparability gates (decision 125).** `make_tables.py` also refuses runs that differ in dataset hash, tokenizer hash, GPU, mode or precision, beyond the plan's list of steps, backend and versions.
 - **MLA cache layout (decision 142).** The MLA cache is one tensor of 216 values per token per layer, and the absorbed matrices travel with the cache. KV bytes per token are unchanged (432).
 - **`configs/data.yaml` (decision 38).** Not frozen. Consider adding it to CODEOWNERS once the hashes are filled in.
+- **No comparison before the controls (decision 170).** `analyse()` computes no primary or exploratory comparison, multiplier, Arm B or context-use gap until the null control exists and is not detected and the positive control exists. An undetected positive control does not block; it adds a note.
+- **Sweep rules (decisions 173, 174).** The edge rule is satisfied before the tie rule is read; a diverged point is a tested point that cannot win; "less than σ_init" is strict; a run is diverged when a validation loss is non-finite or it skipped more than 0.5% of its steps.
+- **Arm B's learning rate (decision 179).** Arm A minus Arm B is computed only when both arms ran at one rate; the runbook uses each variant's Arm A rate.
+- **Operational cadence (decision 155).** Checkpoint every 600 s, keep 2, an in-run validation point every 250 steps on 256 windows, in `configs/ops.yaml`, outside the config hash.
+- **Smoke runs (decision 183).** The first 100 steps of a real 300M run, stopped with `--until 100`, at a placeholder rate of 1e-3.
+- **The 200M branch of MHA (plan §12.1).** MHA's Arm A runs are configured with the 100M and 200M branch points from the start.
 
 ## Deviations from the plan
 
@@ -101,30 +138,41 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–143 so far).
+All decisions are in `docs/decisions.md` (rows 1–183). Rows marked "for Phil" are readings of the plan or numbers the loop chose.
 
-Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
+Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80). Approved by Phil in session 1: the fp32 agreement tolerance of 1e-5, the float64 checks, and the Monte-Carlo allowance of the family-wise error test (0.05 plus three standard errors, decision 7).
 
 ## Hardware tests written, never run
 
-These skip without the hardware. A skip is not a pass. List them with `pytest --collect-only -q -m "gpu or t4"`.
+These skip without the hardware. A skip is not a pass. List them with `pytest --collect-only -q -m "gpu or t4"`. Counts are collected test cases after T-37.
 
-- `gpu`, trainer (`test_trainer.py`): fp16 training with unscaled gradient norms, a skipped step with scaler back-off, scaler growth, refusal without scaler settings, the backend restriction. **The fp16, GradScaler and backend code in the trainer has never executed.**
-- `gpu`: causal leak under fp16 (`test_causality.py`), `ref`/`opt` agreement under fp16 (`test_reference.py`), `opt` decode peak memory at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
-- `gpu`, determinism (`test_determinism.py`): `ref` mode in fp16 bit-identical over 100 steps twice, for all seven variants. Needs `CUBLAS_WORKSPACE_CONFIG=:4096:8` in the environment before pytest starts.
-- `gpu` and `t4`, reproducibility (`test_determinism.py`): the `opt` measurement in fp16 for all seven variants; it records differences and applies no threshold.
-- `gpu`, absorbed MLA (`test_mla_absorbed.py`): absorbed decode against the naive path in fp16.
-- `gpu`, branches (`test_wsd_branch.py`): branch fidelity in fp16 for all seven variants, with the scaler state carried over.
-- `gpu`, checkpoint (`test_checkpoint.py`): GradScaler state after a resume, resume fidelity in fp16 for all seven variants, a checkpoint saved and restored on CUDA.
-- `gpu`, evaluation (`test_eval_lm.py`): fp16 evaluation on CUDA against fp32.
-- `gpu`, sliding window (`test_sliding_window.py`): both `opt` paths against `ref` in fp32 and fp16, including compiled FlexAttention.
-- `t4`: `opt` decode time at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
-- `t4`, sliding window (`test_sliding_window.py`): SWA attention time at ctx 1,024 below MHA's, for the chunked and the FlexAttention path.
+| File | `gpu` | `t4` | What they check |
+| --- | --- | --- | --- |
+| `test_backend_enforcement.py` | 7 | 7 | One training step per variant under the enforced kernel. |
+| `test_causality.py` | 14 | | Causal leak under fp16, every variant and mode. |
+| `test_checkpoint.py` | 9 | | GradScaler state after a resume, resume fidelity in fp16, a checkpoint on CUDA. |
+| `test_determinism.py` | 14 | 7 | `ref` bit-identical over 100 steps in fp16 (needs `CUBLAS_WORKSPACE_CONFIG=:4096:8`); the `opt` reproducibility measurement, which applies no threshold. |
+| `test_entry_points.py` | 1 (2 after T-37) | | Cold start and resume on CUDA in fp16; the recorded backend and scale. |
+| `test_eval_lm.py` | 1 | | fp16 evaluation against fp32. |
+| `test_grouped_decode.py` | 3 | 3 | `opt` decode peak memory and decode time at cache 8k below MHA's. |
+| `test_inference_bench.py` | 8 | | Measured against analytic KV bytes for every variant; the benchmark on CUDA. |
+| `test_mla_absorbed.py` | 2 | | Absorbed decode against the naive path in fp16. |
+| `test_reference.py` | 7 | | `ref`/`opt` agreement under fp16. |
+| `test_scaffold.py` | 1 | 1 | The tier canaries. |
+| `test_sliding_window.py` | 2 | 2 | Both `opt` paths against `ref`, including compiled FlexAttention; SWA attention time below MHA's. |
+| `test_timing_pass.py` | 1 | | The timing pass on CUDA. |
+| `test_trainer.py` | 5 | | fp16 training with unscaled gradient norms, a skipped step with scaler back-off, scaler growth, refusals. |
+| `test_wsd_branch.py` | 7 | | Branch fidelity in fp16 with the scaler state carried over. |
+
+**The fp16, GradScaler and backend-enforcement code paths have never executed.** Neither have `scripts/bench.py` and `scripts/timing_pass.py` on a GPU, the shim notebook, or anything on the real corpus.
 
 ## To check on real hardware
 
-- Whether FlexAttention compiles and runs on the T4 (plan §2.3), and which SWA path is faster there.
+- Whether FlexAttention compiles and runs on the T4 (plan §2.3), and which SWA path is faster there. Then set `opt_path` in `configs/variants/swa256.yaml` before any SWA run.
 - Whether the fused kernel copies K and V when given a slice of the cache storage (plan §2.3). If it does, decode needs an explicit matmul, disclosed.
+- The sliding-window cache allocates up to twice its 256-token cap (decision 77), and MLA's absorbed matrices are a fixed cost per cache outside the KV bytes per token (decision 147). Disclose both with the benchmark.
+- Suspicions from the audit, not confirmed: the tiny MLA test models have score widths (12, 36) that the memory-efficient kernel on sm75 may not serve in fp16, so those `gpu` tests could fail under an enforced kernel for a reason unrelated to what they check; the `t4` decode-time test at batch 1 may be dominated by launch overhead; one fp16 trainer test asserts an exact overfit after 150 steps.
+- Divergence recording was tested with a forced non-finite loss, never with a real diverged run.
 
 ## Environment
 
@@ -143,11 +191,11 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. T-21 probes: settle the acceptance criterion and the shortcut (see "Blocked" and the first open question), then review the WIP branch from scratch with deliberate breaks, as for every task.
-2. T-28 plots (W; reuse `tests/fixtures/fake_campaign.py` and `scripts.make_tables.analyse`), T-23 benchmark and timing scripts (W; unblocked by T-06), T-29 entry points and Kaggle shim (W; unblocked by T-17 and T-20).
-3. T-30 `RUNBOOK.md` (O; needs the answer on sweep runs and reruns), then T-31 handover audit by a fresh agent.
+1. Merge T-37 after review (deliberate breaks, the full tier, `tests/test_runbook.py`), then this handover branch.
+2. T-21, once Phil has answered the two questions: change the layout, review the WIP branch from scratch, add the probe commands to `RUNBOOK.md` §2.3.
+3. Pin torch to Kaggle's version when Phil reports it, and run the `cpu` tier on it.
 
-Remaining: T-31 (audit running), T-21 (waits for Phil).
+Remaining: T-37 (in progress), T-31 (this handover), T-21 (waits for Phil).
 
 ## Notes for the next session
 

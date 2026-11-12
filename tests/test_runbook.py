@@ -116,7 +116,7 @@ def test_every_runbook_command_parses_with_its_scripts_own_parser(command, monke
 def test_no_command_carries_an_override_outside_the_smoke_runs():
     for command in COMMANDS:
         if "--override" in command:
-            assert "--steps 100" in command and "/smoke" in command, command
+            assert "--until" in command and "/smoke" in command, command
 
 
 def test_training_commands_state_the_gpu_facts_the_manifest_records():
@@ -157,9 +157,15 @@ def test_the_stated_budgets_and_branch_points_are_the_recipes():
     assert leaves == [decay_start(BUDGET_STEPS["100M"], FRACTION), decay_start(BUDGET_STEPS["200M"], FRACTION)]
 
 
-def test_the_until_step_is_the_hundred_million_branch_point():
-    untils = {int(n) for n in re.findall(r"--until (\d+)", RUNBOOK)}
-    assert untils == {decay_start(BUDGET_STEPS["100M"], FRACTION)}
+def test_the_until_steps_are_the_branch_point_and_the_smoke_lengths():
+    smoke = {int(n) for c in COMMANDS if "/smoke" in c for n in re.findall(r"--until (\d+)", c)}
+    real = {int(n) for c in COMMANDS if "/smoke" not in c for n in re.findall(r"--until (\d+)", c)}
+    assert real == {decay_start(BUDGET_STEPS["100M"], FRACTION)}
+    # Plan §7.3 judges skipped steps "in the first 100": the smoke run of every variant stops there,
+    # still inside the stable phase of a real run (the first decay starts later).
+    assert max(smoke) == 100 and all(n <= 100 for n in smoke)
+    assert 100 < decay_start(BUDGET_STEPS["300M"], FRACTION)
+    assert 100 >= RECIPE["schedule"]["warmup_steps"]
 
 
 def test_the_sweep_grid_and_the_registered_seeds_are_the_codes():

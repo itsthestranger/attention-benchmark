@@ -79,6 +79,7 @@ The plan requires these outputs, and no task above produces them. Added by the o
 | T-34 ✅ | Secondary reports and command-line wiring: Arm B table, RQ-W estimate from the timing-pass file, context-use gaps with intervals, the timing and decode columns of the headline table | O+W | T-23, T-32 | §8.3, §8.5, §10.1, §10.3 | Each builds blank and from fake manifests; no verdict outside `primary_test.py` |
 | T-35 ✅ | Plots 4 and 5 read the controls and the per-budget ladder fits | W | T-28, T-32 | §10.5 | The null-control verdict is shown verbatim; the ladder is drawn and fitted at 100M, 200M and 300M |
 | T-36 ✅ | Command-line gaps found while writing the runbook: a standalone short run from flags, plots with unfinished runs left out, the timing-pass id of an Arm C run | W | T-29, T-28 | §7.4, §8.1, §8.5, §10.6 | Each gap has a test that fails without its fix |
+| T-37 | Fixes for the handover audit: step parity scoped to the runs a comparison reads, the seed-count rule on registered seeds only, losses withheld while the gate is closed, a registered sweep seed refused, the SWA `opt` path as a config key, the disclosures, a null backend for `ref` runs, a backend-enforcement test that can fail | O+W | T-31 audit | §1.4, §2.3, §8.1, §13 | `tests/test_audit_fixes.py` and `tests/test_backend_enforcement.py` pass; every audit finding is fixed or listed in `STATUS.md` |
 
 ## M5 — Operations and handover
 
