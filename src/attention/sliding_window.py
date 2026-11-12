@@ -245,16 +245,23 @@ class SlidingWindowAttention(GroupedAttention):
             b = min(a + W, T)
             n = b - a
             L = c.length
-            held_k, held_v = c.k, c.v
             qc, kc, vc = q[:, :, a:b], k[:, :, a:b], v[:, :, a:b]
-            c = c.append(kc, vc)  # validates the batch size before anything is concatenated
-            if held_k is None:
-                keys, vals = kc, vc
-            else:
-                keys = torch.cat((held_k, kc), dim=2)
-                vals = torch.cat((held_v, vc), dim=2)
             s = max(0, L - W + 1)  # the earliest key the chunk's first query may see
-            keys, vals = keys[:, :, s:], vals[:, :, s:]
+            if n == 1:
+                # The new cache already holds exactly the keys this token may see (the
+                # last min(L + 1, W) tokens, itself included, in order): no copy.
+                c = c.append(kc, vc)
+                keys, vals = c.k, c.v
+            else:
+                # Prefill chunk: the cache holds W tokens but up to 2W - 1 are needed.
+                held_k, held_v = c.k, c.v
+                c = c.append(kc, vc)  # validates the batch size before anything is concatenated
+                if held_k is None:
+                    keys, vals = kc, vc
+                else:
+                    keys = torch.cat((held_k, kc), dim=2)
+                    vals = torch.cat((held_v, vc), dim=2)
+                keys, vals = keys[:, :, s:], vals[:, :, s:]
             q_pos = torch.arange(L, L + n, device=dev)
             k_pos = torch.arange(s, L + n, device=dev)
             if mode == "ref":
