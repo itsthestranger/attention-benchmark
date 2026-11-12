@@ -86,9 +86,19 @@ class GatedRecurrence(AttnBase):
         return 0
 
     @property
+    def kv_cache_max_tokens(self) -> int:
+        # Nothing is stored per token.
+        return 0
+
+    @property
     def state_values(self) -> int:
         return self.cfg.d_model
 
     @property
     def sdpa_backend(self) -> None:
         return None
+
+    def set_sdpa_backend(self, name: str | None) -> None:
+        # This module calls no fused kernel, so none can be enforced for it.
+        if name is not None:
+            raise ValueError(f"the recurrence calls no fused kernel: sdpa backend must be None, got {name!r}")
