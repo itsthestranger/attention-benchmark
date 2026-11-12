@@ -12,10 +12,11 @@ Last updated: 2026-11-12, session 1.
 - T-24 primary test and its statistics tests (#5).
 - T-03 per-parameter seeded init (#6).
 - T-14 WSD schedule and optimizer parameter groups (#7).
+- T-12 recurrence anchor (#8).
 
 ## In progress
 
-- Nothing.
+- T-04 grouped attention, branch `task/T-04-grouped`: tests committed, worker implementing.
 
 ## Blocked
 
@@ -43,7 +44,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–55 so far).
+All decisions are in `docs/decisions.md` (rows 1–58 so far).
 
 ## Environment
 
@@ -61,6 +62,6 @@ All decisions are in `docs/decisions.md` (rows 1–55 so far).
 
 ## Next
 
-1. T-04 grouped attention (O+W): tests first.
-2. T-12 recurrence anchor (W), T-07 sliding window (O+W).
-3. T-05 MLA naive path (O+W), T-25 ladder fit (O, waits for Phil's two answers).
+1. T-07 sliding window (O+W) and T-05 MLA naive path (O+W): tests first.
+2. T-15 trainer (O+W), after T-04.
+3. T-25 ladder fit (O), waits for Phil's two answers.
