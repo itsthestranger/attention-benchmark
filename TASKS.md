@@ -72,6 +72,6 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
-| T-29 | Kaggle shim notebook and the `train.py` / `evaluate.py` entry points | W | T-17, T-20 | §12.3 | A cold start runs on CPU against a synthetic dataset and resumes without human input |
+| T-29 ✅ | Kaggle shim notebook and the `train.py` / `evaluate.py` entry points | W | T-17, T-20 | §12.3 | A cold start runs on CPU against a synthetic dataset and resumes without human input |
 | T-30 | `RUNBOOK.md` | O | T-00 to T-29 | §15 | Exact commands for the verification step and each GPU week, in order, with the gate after each block and what Phil checks |
 | T-31 | Handover: audit by a fresh agent against §5 and §13, final `STATUS.md`, `README.md` with an unfilled pre-registration template | O | T-30 | §17.4 | The handover checklist in `CLAUDE.md` is complete |
