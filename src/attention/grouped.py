@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.attention.base import MODES, AttnBase, AttnConfig, register
+from src.attention.base import MODES, AttnBase, AttnConfig, bytes_per_value, mixing_flops, register
 from src.attention.token_cache import TokenStorage, append_tokens
 from src.transformer import apply_rope
 
@@ -92,6 +92,20 @@ class GroupedAttention(AttnBase):
 
     def residual_output_params(self) -> set[str]:
         return {"w_o.weight"}
+
+    @property
+    def kv_bytes_per_token(self) -> int:
+        # Keys and values for each KV head.
+        return 2 * self.n_kv_heads * self.head_dim * bytes_per_value(self.cfg.kv_dtype)
+
+    @property
+    def sdpa_backend(self) -> str | None:
+        # The fused kernel recorded by whoever enforced one (set_sdpa_backend), or None.
+        return self._sdpa_backend
+
+    def mixing_flops_per_token(self, T: int, causal_skip: bool = True) -> int:
+        # Every query head scores head_dim wide, whatever the number of KV heads.
+        return mixing_flops(T, self.n_heads, self.head_dim, self.head_dim, causal_skip=causal_skip)
 
     def init_cache(self, capacity: int | None = None) -> KVCache:
         if capacity is not None and (isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0):

@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 2. 16 of 32 tasks merged; `cpu` tier green on `main` (1,694 tests).
+Last updated: 2026-11-12, session 2. 17 of 32 tasks merged; `cpu` tier green on `main` (2,116 tests).
 
 ## Done
 
@@ -21,10 +21,11 @@ Last updated: 2026-11-12, session 2. 16 of 32 tasks merged; `cpu` tier green on 
 - T-20 evaluation with context-bucketed loss (#15).
 - T-19 determinism test and reproducibility measurement (#16).
 - T-18 manifest and run naming (#17).
+- T-08 attention properties and FLOP counts (#18).
 
 ## In progress
 
-- Nothing.
+- **T-16 checkpoint and resume**, branch `task/T-16-checkpoint` in `/home/user/wt/T-16`: the acceptance tests are committed and final (`tests/test_checkpoint.py`); a worker's implementation is committed locally, **not yet reviewed, not pushed**. Its open point: a `ref` and an `opt` trainer with the same config share a checkpoint directory, because mode and precision are not part of the config hash.
 
 ## Blocked
 
@@ -54,7 +55,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–106 so far).
+All decisions are in `docs/decisions.md` (rows 1–110 so far).
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
@@ -93,9 +94,9 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. T-16 checkpoint and resume (O+W), T-06 MLA absorbed path (O+W), T-10 step-0 logit scale (O).
-2. T-08 properties and FLOPs (W), T-26 wall-clock estimate (W), T-27 tables with refusal gates (W): all unblocked.
-3. T-21 probes (W), T-22 retrieval generators (W), then T-09, T-17, T-23.
+1. Review and merge T-16 (see "In progress"). Then T-17 branch (O+W).
+2. T-26 wall-clock estimate (W), T-27 tables with refusal gates (W), T-09 config solver (W): all unblocked.
+3. T-06 MLA absorbed path (O+W), T-10 step-0 logit scale (O), T-21 probes (W), T-22 retrieval generators (W).
 
 ## Notes for the next session
 

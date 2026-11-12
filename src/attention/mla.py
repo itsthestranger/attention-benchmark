@@ -18,7 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F  # noqa: N812  (tests wrap this module's F attribute)
 
-from src.attention.base import MODES, AttnBase, AttnConfig, register
+from src.attention.base import MODES, AttnBase, AttnConfig, bytes_per_value, mixing_flops, register
 from src.attention.grouped import _allowed
 from src.attention.token_cache import TokenStorage, append_tokens
 from src.transformer import RMSNorm, apply_rope
@@ -109,6 +109,26 @@ class LatentAttention(AttnBase):
 
     def residual_output_params(self) -> set[str]:
         return {"w_o.weight"}
+
+    @property
+    def kv_bytes_per_token(self) -> int:
+        # The latent c_KV and the shared positional key k_R.
+        return (self.d_c + self._rope_dim) * bytes_per_value(self.cfg.kv_dtype)
+
+    @property
+    def sdpa_backend(self) -> str | None:
+        # The fused kernel recorded by whoever enforced one (set_sdpa_backend), or None.
+        return self._sdpa_backend
+
+    def mixing_flops_per_token(self, T: int, causal_skip: bool = True) -> int:
+        # Scores are (head_dim + rope_dim) wide: content and positional parts; values are head_dim wide.
+        return mixing_flops(
+            T,
+            self.n_heads,
+            self.head_dim + self._rope_dim,
+            self.head_dim,
+            causal_skip=causal_skip,
+        )
 
     def init_std_multipliers(self) -> dict[str, float]:
         d = self.cfg.d_model

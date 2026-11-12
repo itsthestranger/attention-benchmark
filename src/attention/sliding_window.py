@@ -22,7 +22,7 @@ import math
 
 import torch
 
-from src.attention.base import MODES, register
+from src.attention.base import MODES, mixing_flops, register
 from src.attention.grouped import GroupedAttention
 from src.transformer import apply_rope
 
@@ -152,6 +152,16 @@ class SlidingWindowAttention(GroupedAttention):
         self.window = W
         self.opt_path = "chunked"
         self._block_masks = {}
+
+    @property
+    def kv_cache_max_tokens(self) -> int:
+        # The cache holds the last `window` tokens; its bytes per token are GroupedAttention's.
+        return self.window
+
+    def mixing_flops_per_token(self, T: int, causal_skip: bool = True) -> int:
+        return mixing_flops(
+            T, self.n_heads, self.head_dim, self.head_dim, causal_skip=causal_skip, window=self.window
+        )
 
     def set_opt_path(self, name):
         if name not in OPT_PATHS:
