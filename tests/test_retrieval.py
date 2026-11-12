@@ -478,3 +478,30 @@ def test_end_to_end_tiny_model_returns_fractions():
     assert all(p.grad is None for p in model.parameters())
     single = score(model, examples, trained_context=trained_context, batch_size=1)
     assert single["per_example"] == out["per_example"]
+
+
+class _RecordingStub(_Stub):
+    """Also records how each forward was called."""
+
+    def __init__(self, table):
+        super().__init__(table)
+        self.seen_training: list[bool] = []
+        self.seen_mode: list[str] = []
+
+    def forward(self, idx, *, mode="opt"):
+        self.seen_training.append(self.training)
+        self.seen_mode.append(mode)
+        return super().forward(idx, mode=mode)
+
+
+@pytest.mark.parametrize("start_training", [True, False])
+@pytest.mark.parametrize("mode", ["ref", "opt"])
+def test_scorer_runs_in_eval_mode_and_in_the_mode_asked_for(start_training, mode):
+    """Added in review. `ref` and `opt` agree numerically, so only the call shows which ran."""
+    a = _ex([5, 6, 7, 8, 9, 10], 4)
+    model = _RecordingStub(dict([_table_entry(a, [True, True])]))
+    model.train(start_training)
+    out = score(model, [a], trained_context=8, mode=mode)
+    assert out["exact_match"] == 1.0
+    assert model.seen_training == [False] and model.seen_mode == [mode]
+    assert model.training is start_training and model.drop.training is start_training
