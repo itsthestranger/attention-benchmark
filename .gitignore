@@ -9,3 +9,6 @@ dist/
 checkpoints/
 *.pt
 *.ckpt
+# Generated plots are never committed; the .gitkeep keeps the directory.
+results/plots/*.png
+results/plots/preview/
