@@ -11,10 +11,11 @@ Last updated: 2026-11-12, session 1.
 - T-13 data pipeline (#4).
 - T-24 primary test and its statistics tests (#5).
 - T-03 per-parameter seeded init (#6).
+- T-14 WSD schedule and optimizer parameter groups (#7).
 
 ## In progress
 
-- T-14 WSD schedule and parameter groups, branch `task/T-14-schedule`: tests committed, worker implementing.
+- Nothing.
 
 ## Blocked
 
@@ -42,7 +43,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–52 so far).
+All decisions are in `docs/decisions.md` (rows 1–55 so far).
 
 ## Environment
 
