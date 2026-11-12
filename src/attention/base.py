@@ -63,6 +63,13 @@ class AttnBase(nn.Module):
         """
         raise NotImplementedError
 
+    def attention_logits(self, x, freqs):
+        """(B, H, T, T) scores of every query against every key of one sequence, as they
+        enter the softmax: scale included, mask not applied. The step-0 logit-scale test
+        of plan §5 reads them; the `ref` forward computes its scores through the same code.
+        """
+        raise NotImplementedError
+
     def init_cache(self, capacity: int | None = None) -> Any:
         """An empty cache for decode."""
         raise NotImplementedError

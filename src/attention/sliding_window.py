@@ -183,11 +183,13 @@ class SlidingWindowAttention(GroupedAttention):
         v = self.w_v(x).view(B, T, G, dh).transpose(1, 2)
         return apply_rope(q, freqs), apply_rope(k, freqs), v
 
+    def _queries_keys(self, x, freqs):
+        q, k, _ = self._project(x, freqs)
+        return q, k
+
     def _weights(self, q, k, allowed):
         """Softmax weights (B, H, n, S) of queries q against keys k (B, G, S, dh)."""
-        k = self._expand(k)
-        scores = q @ k.transpose(-1, -2) / math.sqrt(self.head_dim)
-        scores = scores.masked_fill(~allowed, float("-inf"))
+        scores = self._logits(q, k).masked_fill(~allowed, float("-inf"))
         return torch.softmax(scores, dim=-1)
 
     def _fused(self, q, k, v, allowed):
