@@ -32,7 +32,8 @@ The contract for `src/attention/sliding_window.py`
       sliding-window block mask; compiled with `torch.compile` when the input
       is on a CUDA device, uncompiled otherwise (which is dense, and only good
       for checking the mask on CPU). Used for the full forward; decode through
-      a cache always uses the chunked rules.
+      a cache always uses the chunked rules. The uncompiled call looks the
+      function up in its module at call time (a test wraps it).
   `set_opt_path` raises ValueError for an unknown name.
 - `flex_compiled_available()` is True when FlexAttention can be imported and a
   CUDA device is present. Whether it compiles on the T4 is checked on hardware.
@@ -328,6 +329,35 @@ def test_flex_path_matches_ref_uncompiled_on_cpu(T, dtype, tol):
         flex, _ = attn(x, freqs, mode="opt")
     assert attn.opt_path == "flex"
     assert scale_relative_error(flex, ref) <= tol
+
+
+@pytest.mark.filterwarnings(FLEX_WARNING)
+def test_the_selected_path_is_the_one_that_runs():
+    """Both paths give the same numbers, so only the call shows which one ran."""
+    import torch.nn.attention.flex_attention as flex_module
+
+    attn = module(dtype=torch.float32)
+    x, freqs = inputs(3 * W, dtype=torch.float32)
+    flex_calls = []
+    original = flex_module.flex_attention
+
+    def recording(*args, **kwargs):
+        flex_calls.append(1)
+        return original(*args, **kwargs)
+
+    flex_module.flex_attention = recording
+    try:
+        with torch.no_grad():
+            with Recorder() as rec:
+                attn(x, freqs, mode="opt")
+            assert flex_calls == [] and len(rec.calls) == 3  # chunked: three chunks
+            attn.set_opt_path("flex")
+            attn(x, freqs, mode="opt")
+            assert flex_calls == [1]
+            attn(x, freqs, mode="ref")
+            assert flex_calls == [1]  # ref never uses it
+    finally:
+        flex_module.flex_attention = original
 
 
 @pytest.mark.filterwarnings(FLEX_WARNING)
