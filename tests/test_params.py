@@ -253,3 +253,14 @@ def test_cli_target_off_by_one_returns_1_and_writes_reason(capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "17308033" in captured.err
+
+
+def test_a_target_that_leaves_no_mlp_fails_loudly():
+    """Added in review. Targets that divide exactly but leave d_ff at zero or below are refused,
+    not returned as a model without an MLP."""
+    non_mlp = 8192 * 384 + 384 + 8 * (589_824 + 2 * 384)  # everything but the MLPs, for MHA
+    step = 3 * 384 * 8
+    assert solve_d_ff("mha", target_total=non_mlp + step) == 1
+    for target in (non_mlp, non_mlp - step):
+        with pytest.raises(SolveError):
+            solve_d_ff("mha", target_total=target)
