@@ -27,7 +27,9 @@ surrounding norms and MLP. CUDA is synchronised at each boundary.
 
 `--synthetic` replaces the model and data by a tiny synthetic setup. It exercises the
 script; its numbers mean nothing about the study. Plan §8.5: the pass runs alone on the box.
-On CUDA `--gpu-shared` is required, and the script refuses `true`. On CUDA the SWA-below-MHA
+On CUDA `--gpu-shared` is required, and the script refuses `true`. On CUDA `--expected-backend`
+is required too (plan §2.3 item 1): every training step runs with only that SDPA kernel enabled,
+and the name is written to the document's "backend" key. It is refused on CPU. On CUDA the SWA-below-MHA
 assertion (plan §2.3 item 2) makes the script exit non-zero when it fails; on CPU it is only
 reported.
 """
@@ -51,6 +53,7 @@ from src.config import ConfigError
 from src.data.loader import TrainStream, open_dataset
 from src.model import build_model
 from src.training.trainer import Trainer
+from src.eval.inference import BenchError, check_backend_flag
 from src.utils.manifest import collect_environment
 from src.utils.reproducibility import synthetic_split
 
@@ -108,6 +111,7 @@ class TimingSetup:
     device: torch.device
     clock: Callable[[], float] = DEFAULT_CLOCK
     init_seed: int = INIT_SEED
+    expected_backend: str | None = None  # the enforced SDPA backend; CUDA only (plan §2.3 item 1)
 
 
 @dataclass(frozen=True)
@@ -164,7 +168,16 @@ def _trainer(track: Track, setup: TimingSetup) -> Trainer:
         overrides=setup.overrides,
     )
     model = build_model(resolved)
-    return Trainer(model, resolved, setup.stream, device=str(setup.device), mode=track.mode)
+    # Every track, the ref track included, runs under the enforced backend. A ref forward makes
+    # no SDPA call, so the restriction changes nothing there.
+    return Trainer(
+        model,
+        resolved,
+        setup.stream,
+        device=str(setup.device),
+        mode=track.mode,
+        expected_backend=setup.expected_backend,
+    )
 
 
 def time_repetition(track: Track, setup: TimingSetup) -> Repetition:
@@ -349,6 +362,7 @@ def run_timing_pass(
         "timing_pass_id": f"tp-{uuid.uuid4().hex}",
         "environment": collect_environment(),
         "gpu_shared": bool(gpu_shared),
+        "backend": setup.expected_backend,
         "steps": setup.steps,
         "discarded": setup.discarded,
         "repetitions": repetitions,
@@ -405,6 +419,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--with-ref", action="store_true", help="also time the ref track of MLA and SWA")
     p.add_argument("--device", default="cpu")
     p.add_argument("--gpu-shared", type=_bool, default=None, help="required on CUDA: true or false (plan §2.2)")
+    p.add_argument(
+        "--expected-backend", default=None,
+        help="required on CUDA, refused on CPU: the SDPA backend every track must use "
+             "(flash, efficient, math or cudnn; plan §2.3 item 1)",
+    )
     p.add_argument("--peak-lr", type=float, required=True, help="peak learning rate; does not change speed")
     p.add_argument("--micro-batch", type=int, default=None, help="recipe.batch.micro_batch (unset in recipe.yaml)")
     p.add_argument("--init-scale", type=float, default=None, help="recipe.grad_scaler.init_scale (unset)")
@@ -463,6 +482,10 @@ def main(argv=None) -> int:
         parser.error("--gpu-shared true|false is required on CUDA: state whether the GPU is shared (plan §2.2)")
     if args.gpu_shared:
         parser.error("refusing to run: gpu_shared is true; the timing pass must run alone (plan §2.2)")
+    try:
+        expected_backend = check_backend_flag(args.expected_backend, device)
+    except BenchError as exc:
+        parser.error(str(exc))
 
     overrides = _overrides(args)
     try:
@@ -481,6 +504,7 @@ def main(argv=None) -> int:
         steps=args.steps,
         discarded=args.discarded,
         device=device,
+        expected_backend=expected_backend,
     )
     document = run_timing_pass(
         setup,

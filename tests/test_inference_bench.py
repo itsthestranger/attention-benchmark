@@ -57,12 +57,12 @@ class FakeClock:
 
 def _schema_keys(doc: dict) -> None:
     assert set(doc) == {
-        "schema", "variant", "mode", "precision", "environment", "gpu_shared",
+        "schema", "variant", "mode", "precision", "backend", "environment", "gpu_shared",
         "kv_bytes_per_token", "prefill", "decode", "max_batch_at_8k",
     }
     assert doc["schema"] == "bench/1"
     assert isinstance(doc["environment"], dict)
-    assert set(doc["kv_bytes_per_token"]) == {"analytic", "measured"}
+    assert set(doc["kv_bytes_per_token"]) == {"analytic", "measured", "measured_tokens"}
     for row in doc["prefill"]:
         assert set(row) == {"context", "batch", "latency_ms", "tok_per_s", "peak_bytes"}
         assert isinstance(row["context"], int) and isinstance(row["batch"], int)
@@ -90,8 +90,10 @@ def test_bench_runs_end_to_end_for_every_variant_in_both_tracks(tmp_path):
             assert doc["variant"] == variant and doc["mode"] == mode
             assert doc["precision"] == "fp32"  # CPU
             assert doc["gpu_shared"] is False
+            assert doc["backend"] is None  # no backend is enforced on CPU
             # CPU cannot measure these: they are null, not zero.
             assert doc["kv_bytes_per_token"]["measured"] is None
+            assert doc["kv_bytes_per_token"]["measured_tokens"] is None
             assert doc["max_batch_at_8k"] is None
             assert all(row["peak_bytes"] is None for row in doc["prefill"] + doc["decode"])
             assert [(r["context"], r["batch"]) for r in doc["prefill"]] == [(8, 1), (16, 1)]
@@ -114,6 +116,55 @@ def test_bench_refuses_gpu_shared_true(tmp_path):
     assert not list(tmp_path.glob("*.json"))
     with pytest.raises(bench.BenchError, match="gpu_shared is true"):
         bench.check_gpu_shared(True, CPU)
+
+
+def test_the_expected_backend_is_required_on_cuda_and_refused_on_cpu(tmp_path):
+    cuda = torch.device("cuda")
+    with pytest.raises(bench.BenchError, match="required on CUDA"):
+        inf.check_backend_flag(None, cuda)
+    assert inf.check_backend_flag("efficient", cuda) == "efficient"
+    with pytest.raises(bench.BenchError, match="CUDA only"):
+        inf.check_backend_flag("efficient", CPU)
+    assert inf.check_backend_flag(None, CPU) is None
+    # The command line: missing on CUDA, given on CPU, and unknown names, all refused before any work.
+    with pytest.raises(SystemExit):
+        bench.main(["--synthetic", "--device", "cuda", "--gpu-shared", "false", "--variants", "mha",
+                    "--out-dir", str(tmp_path)])
+    with pytest.raises(SystemExit):
+        bench.main(["--synthetic", "--variants", "mha", "--expected-backend", "efficient",
+                    "--out-dir", str(tmp_path)])
+    with pytest.raises(SystemExit):
+        bench.main(["--synthetic", "--variants", "mha", "--expected-backend", "bogus",
+                    "--out-dir", str(tmp_path)])
+    assert not list(tmp_path.glob("*.json"))
+
+
+def test_unknown_backend_names_are_refused():
+    with pytest.raises(inf.BenchError, match="unknown SDPA backend"):
+        inf.check_backend_name("bogus")
+    assert inf.check_backend_name(None) is None
+
+
+def test_the_backend_mapping_covers_the_declared_names():
+    from src.attention.base import SDPA_BACKENDS
+
+    assert set(inf.SDPA_MEMBERS) == set(SDPA_BACKENDS)
+
+
+def test_the_max_batch_fill_uses_the_small_chunk():
+    model = inf.build_model_for_benchmark("mha", context_length=64, overrides=bench.SYNTHETIC_DIMS)
+    lengths = []
+    original = model.forward
+
+    def recording(idx, **kwargs):
+        lengths.append(idx.shape[1])
+        return original(idx, **kwargs)
+
+    model.forward = recording
+    inf.try_decode_at(model, batch=2, cache=40, device=CPU)
+    assert inf.MAX_BATCH_FILL_CHUNK == 8
+    # Five fill forwards of at most the chunk size, then the single decode step.
+    assert lengths == [8, 8, 8, 8, 8, 1]
 
 
 def test_bench_on_cuda_requires_the_gpu_shared_flag(tmp_path):
@@ -307,7 +358,7 @@ def test_decode_reader_refuses_a_wrong_schema(tmp_path):
 def test_measured_kv_bytes_agree_with_analytic_during_decode(variant):
     device = torch.device("cuda")
     model = inf.build_model_for_benchmark(variant, context_length=1024).to(device).half()
-    total, n = inf.measure_kv_allocation(model, device=device, n_tokens=1024)
+    total, n = inf.measure_kv_allocation(model, device=device, n_tokens=1024, backend="efficient")
     expected = inf.analytic_kv_cache_bytes(model, n)
     assert expected > 0
     assert abs(total - expected) / expected <= KV_BYTES_MEASURED_REL
@@ -316,7 +367,7 @@ def test_measured_kv_bytes_agree_with_analytic_during_decode(variant):
 @pytest.mark.gpu
 def test_bench_runs_on_cuda_in_fp16(tmp_path):
     code = bench.main([
-        "--synthetic", "--device", "cuda", "--gpu-shared", "false",
+        "--synthetic", "--device", "cuda", "--gpu-shared", "false", "--expected-backend", "efficient",
         "--variants", "mha", "mqa",
         "--contexts", "16", "--decode-batches", "1", "--decode-caches", "16",
         "--max-batch-cache", "8192", "--warmup", "1", "--reps", "2",
@@ -328,6 +379,8 @@ def test_bench_runs_on_cuda_in_fp16(tmp_path):
         _schema_keys(doc)
         assert doc["precision"] == "fp16"
         assert doc["gpu_shared"] is False
+        assert doc["backend"] == "efficient"
         assert doc["kv_bytes_per_token"]["measured"] is not None
+        assert doc["kv_bytes_per_token"]["measured_tokens"] == 1024
         assert isinstance(doc["max_batch_at_8k"], int) and 1 <= doc["max_batch_at_8k"] < inf.MAX_BATCH_LIMIT
         assert all(row["peak_bytes"] is not None for row in doc["prefill"] + doc["decode"])

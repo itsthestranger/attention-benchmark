@@ -4,14 +4,20 @@ One JSON file per (variant, mode) is written to --out-dir, named bench_<variant>
 in the "bench/1" schema (see `write_bench_file`). `read_decode_tok_per_s` reads the headline
 column that scripts/make_tables.py takes.
 
-    python -m scripts.bench --device cuda --gpu-shared false --out-dir results/bench
-    python -m scripts.bench --device cuda --gpu-shared false --with-ref --out-dir results/bench
+    python -m scripts.bench --device cuda --gpu-shared false --expected-backend efficient \
+        --out-dir results/bench
+    python -m scripts.bench --device cuda --gpu-shared false --expected-backend efficient \
+        --with-ref --out-dir results/bench
     python -m scripts.bench --synthetic --contexts 16 32 --decode-batches 1 2 \
         --decode-caches 8 16 --out-dir /tmp/bench_check
 
 `--synthetic` replaces the model by a tiny one and is for exercising the script; its
 numbers mean nothing about the study. Plan §2.2: the benchmark must run alone on the
 box. On CUDA `--gpu-shared` is required and the script refuses `true`.
+
+Plan §2.3 item 1: on CUDA `--expected-backend` is required (the SDPA kernel the variants
+must use). Opt-mode forwards run with only that kernel enabled, so a fallback fails.
+It is refused on CPU. `ref` documents make no SDPA call and record a null backend.
 
 The benchmark runs on the GPU in fp16 (the model is cast with `.half()`); on CPU it
 runs in fp32, and the JSON `precision` field says which.
@@ -34,12 +40,12 @@ from src.eval.inference import (
     analytic_kv_bytes_per_token,
     analytic_kv_cache_bytes,
     build_model_for_benchmark,
+    check_backend_flag,
     max_batch_before_oom,
     measure_decode,
     measure_kv_allocation,
     measure_prefill,
-    fill_state,
-    random_tokens,
+    try_decode_at,
 )
 from src.utils.manifest import collect_environment
 
@@ -100,16 +106,6 @@ def _overrides(synthetic: bool) -> dict:
     return dict(SYNTHETIC_DIMS) if synthetic else {}
 
 
-def _try_decode(model, *, batch: int, cache: int, device: torch.device) -> None:
-    """One decode step at `cache` tokens for `batch` sequences: the body of the max-batch search."""
-    state = fill_state(model, mode="opt", batch=batch, length=cache, device=device, capacity=cache + 1)
-    step = random_tokens(batch, 1, model.embed.num_embeddings, device, seed=2)
-    with torch.no_grad():
-        model(step, mode="opt", state=state)
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-
-
 def bench_variant_mode(
     variant: str,
     mode: str,
@@ -123,24 +119,30 @@ def bench_variant_mode(
     with_max_batch: bool = True,
     overrides: dict | None = None,
     gpu_shared: bool = False,
+    expected_backend: str | None = None,
     warmup: int = WARMUP,
     reps: int = REPS,
     clock=None,
 ) -> dict:
-    """The schema-"bench/1" document for one variant and mode."""
+    """The schema-"bench/1" document for one variant and mode.
+
+    `expected_backend` is enforced on the opt track only. Its name is recorded in the
+    document's "backend" key; ref documents record null.
+    """
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    backend = expected_backend if mode == "opt" else None
     kwargs = {} if clock is None else {"clock": clock}
     cuda = device.type == "cuda"
     longest = max(list(contexts) + list(decode_caches) + ([max_batch_cache] if with_max_batch and cuda else []))
     model = build_model_for_benchmark(variant, context_length=longest, overrides=overrides).to(device)
     if cuda:
         model = model.half()
-    vocab = model.embed.num_embeddings
 
     analytic = analytic_kv_bytes_per_token(model)
     measured = None
-    allocation = measure_kv_allocation(model, device=device, n_tokens=KV_CHECK_TOKENS)
+    measured_tokens = None
+    allocation = measure_kv_allocation(model, device=device, n_tokens=KV_CHECK_TOKENS, backend=backend)
     if allocation is not None:
         total, n = allocation
         expected = analytic_kv_cache_bytes(model, n)
@@ -151,13 +153,20 @@ def bench_variant_mode(
                 f"{expected} by {rel:.2%} (limit {KV_BYTES_TOLERANCE_REL:.0%}, plan §4.2)"
             )
         measured = total / n
+        measured_tokens = n
 
     prefill = [
-        measure_prefill(model, mode=mode, context=c, batch=prefill_batch, device=device, warmup=warmup, reps=reps, **kwargs)
+        measure_prefill(
+            model, mode=mode, context=c, batch=prefill_batch, device=device,
+            backend=backend, warmup=warmup, reps=reps, **kwargs,
+        )
         for c in contexts
     ]
     decode = [
-        measure_decode(model, mode=mode, batch=b, cache=c, device=device, warmup=warmup, reps=reps, **kwargs)
+        measure_decode(
+            model, mode=mode, batch=b, cache=c, device=device,
+            backend=backend, warmup=warmup, reps=reps, **kwargs,
+        )
         for b in decode_batches
         for c in decode_caches
     ]
@@ -165,7 +174,9 @@ def bench_variant_mode(
     max_batch = None
     if with_max_batch and cuda:
         max_batch = max_batch_before_oom(
-            lambda b: _try_decode(model, batch=b, cache=max_batch_cache, device=device)
+            lambda b: try_decode_at(
+                model, batch=b, cache=max_batch_cache, device=device, backend=backend
+            )
         )
         torch.cuda.empty_cache()
 
@@ -174,9 +185,14 @@ def bench_variant_mode(
         "variant": variant,
         "mode": mode,
         "precision": "fp16" if cuda else "fp32",
+        "backend": backend,
         "environment": collect_environment(),
         "gpu_shared": bool(gpu_shared),
-        "kv_bytes_per_token": {"analytic": analytic, "measured": measured},
+        "kv_bytes_per_token": {
+            "analytic": analytic,
+            "measured": measured,
+            "measured_tokens": measured_tokens,
+        },
         "prefill": prefill,
         "decode": decode,
         "max_batch_at_8k": max_batch,
@@ -186,10 +202,11 @@ def bench_variant_mode(
 def write_bench_file(out_dir: Path, document: dict) -> Path:
     """Write one "bench/1" document as bench_<variant>_<mode>.json.
 
-    Keys: schema, variant, mode, precision, environment, gpu_shared,
-    kv_bytes_per_token {analytic, measured}, prefill [{context, batch, latency_ms,
-    tok_per_s, peak_bytes}], decode [{batch, cache, ms_per_token, tok_per_s, peak_bytes}],
-    max_batch_at_8k. Off CUDA, measured, peak_bytes and max_batch_at_8k are null.
+    Keys: schema, variant, mode, precision, backend (enforced SDPA name on opt documents
+    on CUDA, else null), environment, gpu_shared, kv_bytes_per_token {analytic, measured,
+    measured_tokens}, prefill [{context, batch, latency_ms, tok_per_s, peak_bytes}],
+    decode [{batch, cache, ms_per_token, tok_per_s, peak_bytes}], max_batch_at_8k.
+    Off CUDA, measured, measured_tokens, peak_bytes and max_batch_at_8k are null.
     """
     path = out_dir / f"bench_{document['variant']}_{document['mode']}.json"
     path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
@@ -223,6 +240,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--with-ref", action="store_true", help="also benchmark the ref track (plan §4.4)")
     p.add_argument("--device", default="cpu", help="torch device, cpu or cuda")
     p.add_argument("--gpu-shared", type=_bool, default=None, help="required on CUDA: true or false (plan §2.2)")
+    p.add_argument(
+        "--expected-backend", default=None,
+        help="required on CUDA, refused on CPU: the SDPA backend the opt track must use "
+             "(flash, efficient, math or cudnn; plan §2.3 item 1)",
+    )
     p.add_argument("--contexts", nargs="+", type=int, default=list(DEFAULT_CONTEXTS))
     p.add_argument("--prefill-batch", type=int, default=DEFAULT_PREFILL_BATCH)
     p.add_argument("--decode-batches", nargs="+", type=int, default=list(DEFAULT_DECODE_BATCHES))
@@ -246,6 +268,7 @@ def main(argv=None) -> int:
     device = torch.device(args.device)
     try:
         gpu_shared = check_gpu_shared(args.gpu_shared, device)
+        expected_backend = check_backend_flag(args.expected_backend, device)
     except BenchError as exc:
         parser.error(str(exc))
 
@@ -266,6 +289,7 @@ def main(argv=None) -> int:
                 with_max_batch=not args.skip_max_batch,
                 overrides=_overrides(args.synthetic),
                 gpu_shared=gpu_shared,
+                expected_backend=expected_backend,
                 warmup=args.warmup,
                 reps=args.reps,
             )

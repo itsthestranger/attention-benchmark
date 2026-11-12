@@ -192,7 +192,7 @@ def test_the_document_has_the_schema_keys(tmp_path):
         time_fn=_fake_repetition, share_fn=_fake_share,
     )
     assert set(doc) == {
-        "schema", "timing_pass_id", "environment", "gpu_shared", "steps", "discarded",
+        "schema", "timing_pass_id", "environment", "gpu_shared", "backend", "steps", "discarded",
         "repetitions", "order", "variants",
     }
     assert doc["schema"] == "timing_pass/1"
@@ -243,6 +243,7 @@ def test_the_pass_runs_end_to_end_on_cpu_and_writes_the_schema(tmp_path):
     assert code == 0  # on CPU the SWA check is reported, not enforced
     doc = json.loads(out.read_text())
     assert doc["schema"] == "timing_pass/1"
+    assert doc["backend"] is None  # no backend is enforced on CPU
     assert doc["timing_pass_id"].startswith("tp-")
     assert doc["gpu_shared"] is False
     assert (doc["steps"], doc["discarded"], doc["repetitions"]) == (4, 1, 2)
@@ -265,6 +266,25 @@ def test_the_pass_refuses_to_run_without_the_recipe_values(tmp_path):
         tp.main(["--variants", "mha", "--peak-lr", "1e-3", "--data-dir", str(tmp_path), "--out", str(tmp_path / "x.json")])
     assert exc.value.code == 2
     assert not (tmp_path / "x.json").exists()
+
+
+def test_the_expected_backend_is_required_on_cuda_and_refused_on_cpu(tmp_path):
+    from src.eval import inference as inf
+
+    cuda = torch.device("cuda")
+    with pytest.raises(inf.BenchError, match="required on CUDA"):
+        inf.check_backend_flag(None, cuda)
+    with pytest.raises(inf.BenchError, match="CUDA only"):
+        inf.check_backend_flag("math", CPU)
+    with pytest.raises(inf.BenchError, match="unknown SDPA backend"):
+        inf.check_backend_flag("bogus", cuda)
+    with pytest.raises(SystemExit):
+        tp.main(["--synthetic", "--gpu-shared", "false", "--variants", "mha", *SMALL,
+                 "--expected-backend", "math", "--out", str(tmp_path / "c.json")])
+    with pytest.raises(SystemExit):
+        tp.main(["--synthetic", "--gpu-shared", "false", "--device", "cuda", "--variants", "mha", *SMALL,
+                 "--out", str(tmp_path / "d.json")])
+    assert not (tmp_path / "c.json").exists() and not (tmp_path / "d.json").exists()
 
 
 def test_the_pass_refuses_gpu_shared_true_and_requires_the_flag_on_cuda(tmp_path):
@@ -292,9 +312,10 @@ def test_the_pass_runs_on_cuda_in_fp16_with_a_tiny_model():
         context_length=32, sequences_per_step=8, data_seed=1,
     )
     setup = tp.TimingSetup(stream=stream, overrides=overrides, peak_lr=1e-3, steps=steps, discarded=2,
-                           device=torch.device("cuda"))
+                           device=torch.device("cuda"), expected_backend="efficient")
     doc = tp.run_timing_pass(setup, variants=["mha", "swa256"], repetitions=2, gpu_shared=False)
     assert doc["gpu_shared"] is False
+    assert doc["backend"] == "efficient"
     for key in ("mha", "swa256"):
         entry = doc["variants"][key]
         assert isinstance(entry["peak_bytes"], int) and entry["peak_bytes"] > 0
