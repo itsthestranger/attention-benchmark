@@ -79,7 +79,8 @@ def _drop(manifests: list[dict], *, variant: str, init_seed: int, tokens: str = 
 
 @pytest.fixture(scope="module")
 def campaign() -> list[dict]:
-    return fake_campaign(gaps={"mqa": 0.05})
+    # A complete campaign: the ladder and MHA also branch at 200M (plan §7.2, §12.1).
+    return fake_campaign(gaps={"mqa": 0.05}, ladder_branches=True)
 
 
 @pytest.fixture(scope="module")
