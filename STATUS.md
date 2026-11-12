@@ -7,10 +7,12 @@ Last updated: 2026-11-12, session 1.
 - Bootstrap commit: `CLAUDE.md`, `TASKS.md`, `docs/plan_v5.md`.
 - T-00 scaffold (#1).
 - T-01 config system (#2).
+- T-02 backbone and attention registry (#3).
 
 ## In progress
 
-- Nothing.
+- T-13 data pipeline, branch `task/T-13-data`: worker implementing.
+- T-24 primary test, branch `task/T-24-primary-test`: orchestrator implementing.
 
 ## Blocked
 
@@ -27,7 +29,7 @@ Last updated: 2026-11-12, session 1.
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–21 so far).
+All decisions are in `docs/decisions.md` (rows 1–27 so far).
 
 ## Environment
 
@@ -44,6 +46,6 @@ All decisions are in `docs/decisions.md` (rows 1–21 so far).
 
 ## Next
 
-1. T-02 backbone (W).
-2. T-24 `primary_test.py` and `test_primary_stats.py` (O).
-3. T-13 data pipeline (W) and T-14 schedule (O+W).
+1. T-03 seeded init (O+W) and T-04 grouped attention (O+W): tests first.
+2. T-14 schedule (O+W), T-12 recurrence anchor (W).
+3. T-07 sliding window (O+W).
