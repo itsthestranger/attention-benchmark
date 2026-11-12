@@ -332,3 +332,56 @@ def test_seed_change_moves_only_hashes_and_the_fingerprint():
     assert seeded["parameter_hashes"]["embed.weight"] != mha["parameter_hashes"]["embed.weight"]
     for name in gain_names(mha):
         assert seeded["parameter_hashes"][name] == mha["parameter_hashes"][name]
+
+
+# --- Added in review: each rule on its own, with nothing else to catch the same change ------------
+
+
+def _pair(other="mha"):
+    """Two independent copies of real graphs, to tamper with."""
+    return copy.deepcopy(graph("mha")), copy.deepcopy(graph(other))
+
+
+def test_a_parameter_missing_on_one_side_is_named():
+    reference, other = _pair()
+    name = "layers.3.norm2.gain"
+    del other["parameters"][name], other["parameter_hashes"][name]
+    assert any(name in line and "only in reference" in line for line in gd.diff_graphs(reference, other))
+    reference, other = _pair()
+    del reference["parameters"][name], reference["parameter_hashes"][name]
+    assert any(name in line and "only in other" in line for line in gd.diff_graphs(reference, other))
+
+
+def test_a_shape_difference_is_named_even_when_the_hashes_agree():
+    reference, other = _pair()
+    name = "norm_f.gain"
+    other["parameters"][name]["shape"] = [385]
+    lines = gd.diff_graphs(reference, other)
+    assert any(name in line and "shape" in line for line in lines)
+
+
+def test_the_attention_interface_is_compared():
+    reference, other = _pair()
+    other["attention_interface"][2] = dict(other["attention_interface"][2], n_heads=4)
+    lines = gd.diff_graphs(reference, other)
+    assert any("attention interface of layer 2" in line for line in lines)
+
+
+@pytest.mark.parametrize("name", ["embed.weight", "layers.0.norm1.gain", "norm_f.gain"])
+def test_the_d_ff_allowance_excuses_only_the_mlp_values(name):
+    """GQA-4 against MHA: the MLPs differ and may. An embedding or a norm gain that differs
+    in value must still be reported, although the forward fingerprint is excused."""
+    reference, other = _pair("gqa4")
+    assert gd.diff_graphs(reference, other, allow=frozenset({ALLOW_D_FF})) == []
+    other["parameter_hashes"][name] = ZERO_HASH
+    lines = gd.diff_graphs(reference, other, allow=frozenset({ALLOW_D_FF}))
+    assert lines == [f"parameter hash {name!r} differs"]
+
+
+def test_under_the_d_ff_allowance_an_mlp_weight_may_differ_only_along_d_ff():
+    reference, other = _pair("gqa4")
+    name = "layers.1.mlp.gate.weight"
+    assert other["parameters"][name]["shape"] == [1152, 384]
+    other["parameters"][name]["shape"] = [1152, 383]  # d_model changed too
+    lines = gd.diff_graphs(reference, other, allow=frozenset({ALLOW_D_FF}))
+    assert any(name in line for line in lines)
