@@ -68,10 +68,21 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | T-27 ✅ | `make_tables.py` with its refusal gates | W | T-18, T-24 | §8.7, §10.1 | The headline table builds from fake manifests; each refusal (steps, backend, versions, trunk checkpoint) has a test |
 | T-28 | Plots | W | T-27 | §10.5 | All ten build from fake manifests and build blank; every seed is a visible dot |
 
+## M4b — Reporting gaps found in session 3
+
+The plan requires these outputs, and no task above produces them. Added by the orchestrator on 2026-11-12; see `STATUS.md`.
+
+| ID | Task | Owner | Depends on | Plan | Done when |
+| --- | --- | --- | --- | --- | --- |
+| T-32 | Controls, σ_data, ladder fits by budget and the gate report in `make_tables.py` | O+W | T-27 | §8.1, §8.4, §9.3, §9.4 | `tests/test_gate_report.py` passes; no comparison is computed before the controls; the blank `gates.md` is committed |
+| T-33 | LR-sweep report and selection: edge rule, tie rule, divergences recorded | O+W | T-29, T-32 | §7.4, §13.15 | Constructed sweeps give the pre-registered choice; a winner at the grid edge asks for another point; a diverged run is recorded, not lost |
+| T-34 | Secondary reports and command-line wiring: Arm B table, RQ-W estimate from the timing-pass file, context-use gaps with intervals, the timing and decode columns of the headline table | O+W | T-23, T-32 | §8.3, §8.5, §10.1, §10.3 | Each builds blank and from fake manifests; no verdict outside `primary_test.py` |
+| T-35 | Plots 4 and 5 read the controls and the per-budget ladder fits | W | T-28, T-32 | §10.5 | The null-control verdict is shown verbatim; the ladder is drawn and fitted at 100M, 200M and 300M |
+
 ## M5 — Operations and handover
 
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
 | T-29 ✅ | Kaggle shim notebook and the `train.py` / `evaluate.py` entry points | W | T-17, T-20 | §12.3 | A cold start runs on CPU against a synthetic dataset and resumes without human input |
-| T-30 | `RUNBOOK.md` | O | T-00 to T-29 | §15 | Exact commands for the verification step and each GPU week, in order, with the gate after each block and what Phil checks |
+| T-30 | `RUNBOOK.md` | O | T-00 to T-35 | §15 | Exact commands for the verification step and each GPU week, in order, with the gate after each block and what Phil checks |
 | T-31 | Handover: audit by a fresh agent against §5 and §13, final `STATUS.md`, `README.md` with an unfilled pre-registration template | O | T-30 | §17.4 | The handover checklist in `CLAUDE.md` is complete |

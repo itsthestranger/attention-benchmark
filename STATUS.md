@@ -41,6 +41,16 @@ Session 3 (2026-11-12), state when this note was written; check the worktrees un
 - T-28 plots: worker briefed, branch `task/T-28-plots`.
 - Contracts fixed in those briefs: `final_metrics` carries `val_loss`, `test_loss`, `train_loss`, `val`, `test` (the `evaluate` dicts) and `val_curve` (`step`, `tokens`, `val_loss`); `scripts/bench.py` writes one `bench/1` JSON per variant and mode; `scripts/timing_pass.py` writes one `timing_pass/1` JSON; operational settings (checkpoint and eval cadence) live in a new, unfrozen `configs/ops.yaml` and stay out of the config hash.
 
+## Gaps found in session 3 (tasks T-32 to T-35 added to `TASKS.md`)
+
+The task list reached "analysis done" without these, and the plan needs each of them as generated output (plan §11: nothing typed or computed by hand):
+
+- `primary_test.null_control` and `positive_control` exist, and nothing called them. No report showed σ_data, the test choice, the detectable-effect bound or the seed count. T-32 adds them to `analyse()` and writes `gates.md`; its tests are on `task/T-32-gate-report` (worker briefed). T-32 also makes `analyse()` refuse every cross-variant comparison until the null control exists and is not detected and the positive control exists (plan §8.1, §9.3, §9.4). **For Phil**: that refusal is the loop's reading of the plan.
+- No code applies the edge rule and the tie rule of plan §7.4 or reports a sweep, and a diverged run cannot write a manifest today (a completed manifest needs a finite loss), so "record everything, including divergences" is not met. T-33.
+- No Arm B table (plan §8.3), no command line for the RQ-W estimate (§8.5), no intervals for the context-use gaps (§10.3), and `make_tables.py` cannot read the timing-pass and benchmark files into the headline table. T-34.
+- Plot 5 shows the ladder at 300M only and plot 4 cannot show the null-control verdict, because `analyse()` did not expose them. T-35.
+- MHA's Arm A runs need the 200M branch point as well as the 100M one (plan §12.1: "plus 200M branches on L8"), so their run specs must say `branches: [100M, 200M]` from the start. For `RUNBOOK.md`.
+
 ## Blocked
 
 - **T-21 probes**, branch `task/T-21-probes` (pushed, one commit marked WIP and UNREVIEWED). The generators, the oracle, the stream and the training script exist, and 115 of 116 tests pass. The one that fails is the task's acceptance test, "a tiny MHA solves 4-pair MQAR on CPU": the worker could not reach a sequence accuracy of 1.0 and did not lower the bar. Measured afterwards on the synthetic task, with a 2-layer model of width 64 (8 heads of 8), 64 sequences per step:
