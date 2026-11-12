@@ -85,6 +85,8 @@ ARM_B_COLUMNS = (
     "Arm A 100M val loss, every seed",
     "Arm A minus Arm B [95% CI]",
     "verdict (Arm A minus Arm B)",
+    "Arm B peak LR",
+    "Arm A 100M peak LR",
 )
 CONTEXT_COLUMNS = (
     "variant",
@@ -248,7 +250,9 @@ class ArmBResult:
     losses: dict  # {init_seed: val_loss}, the variant's standalone Arm B runs (registered seeds)
     arm_a_losses: dict  # {init_seed: val_loss}, its Arm A 100M branches (the arm's seeds)
     vs_mha: object  # primary_test.Comparison or None: Arm B against MHA's Arm A 100M branches
-    arm_a_minus_arm_b: object  # primary_test.Comparison or None: Arm A 100M minus Arm B
+    arm_a_minus_arm_b: object  # primary_test.Comparison or None: Arm A 100M minus Arm B; None if the rates differ
+    peak_lr: float | None  # peak learning rate of the variant's Arm B runs; None without runs
+    arm_a_peak_lr: float | None  # peak learning rate of the variant's Arm A runs; None without them
 
 
 @dataclass(frozen=True)
@@ -296,6 +300,7 @@ class _Collected(NamedTuple):
     null_100m: dict
     data_order_100m: dict
     context: dict  # {variant: {init_seed: {"late_context": x or None, "icl": y or None}}}, 300M
+    peak_lr: dict  # {variant: peak learning rate of its 300M and 100M runs (Arm A)}
 
 
 # The number of non-embedding parameters of each manifest's configuration, by
@@ -409,7 +414,7 @@ def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
     if DATA_ORDER_INIT_SEED in branch_100m:
         data_order[arm["data_seed"]] = branch_100m[DATA_ORDER_INIT_SEED]
     return _Collected(
-        losses, losses_100m, losses_200m, reruns, examples, null_100m, data_order, context
+        losses, losses_100m, losses_200m, reruns, examples, null_100m, data_order, context, lr
     )
 
 
@@ -515,8 +520,9 @@ def _positive_control(losses: Mapping, selection, prereg: Mapping, notes: list[s
         return None
 
 
-def _collect_arm_b(results: Sequence[dict], arm: Mapping) -> tuple[dict, dict]:
-    """Arm B's standalone runs: ({variant: {init_seed: loss}} on the registered seeds, {variant: [seeds]} outside them).
+def _collect_arm_b(results: Sequence[dict], arm: Mapping) -> tuple[dict, dict, dict]:
+    """Arm B's standalone runs: ({variant: {init_seed: loss}} on the registered seeds, {variant: [seeds]} outside them,
+    {variant: peak learning rate}).
 
     Raises TableError when one variant's Arm B runs were trained at two peak learning rates.
     """
@@ -545,12 +551,13 @@ def _collect_arm_b(results: Sequence[dict], arm: Mapping) -> tuple[dict, dict]:
             problems.append(f"{variant} has {arm['budget']} Arm B runs at more than one peak learning rate: {listed}")
     if problems:
         raise TableError(_listing("two learning rates of one variant cannot be mixed", problems))
-    return losses, {variant: sorted(found) for variant, found in outside.items()}
+    rates = {variant: next(iter(by_lr)) for variant, by_lr in lr_runs.items()}
+    return losses, {variant: sorted(found) for variant, found in outside.items()}, rates
 
 
 def _arm_b_comparisons(
     variant: str, own: Mapping, arm_a: Mapping, mha_100: Mapping, *, arm: Mapping, selection, prereg: Mapping,
-    notes: list[str],
+    notes: list[str], compare_arm_minus: bool,
 ) -> tuple[object, object]:
     """(Arm B against MHA, Arm A minus Arm B) for one variant, both None with the reasons in `notes`."""
     seeds = list(arm["init_seeds"])
@@ -579,7 +586,9 @@ def _arm_b_comparisons(
         except pt.PreregError as exc:
             notes.append(f"Arm B {variant}: {exc}")
     missing_a = _missing(seeds, arm_a)
-    if missing_a:
+    if not compare_arm_minus:
+        pass  # the rates differ: _arm_b_results says so
+    elif missing_a:
         notes.append(f"Arm B {variant}: Arm A 100M branches for seeds {missing_a} are missing; Arm A minus Arm B is not computed")
     else:
         try:
@@ -597,12 +606,17 @@ def _arm_b_comparisons(
 
 
 def _arm_b_results(
-    results: Sequence[dict], losses_100m: Mapping, *, selection, comparing: bool, prereg: Mapping, notes: list[str]
+    results: Sequence[dict], losses_100m: Mapping, arm_a_lr: Mapping, *, selection, comparing: bool,
+    prereg: Mapping, notes: list[str],
 ) -> dict:
-    """{variant: ArmBResult} in the arm file's order (plan §8.3). Comparisons only when `comparing`."""
+    """{variant: ArmBResult} in the arm file's order (plan §8.3). Comparisons only when `comparing`.
+
+    Arm A minus Arm B is not computed for a variant whose two arms ran at different peak learning
+    rates: the difference would mix the MLP width with the learning rate.
+    """
     arm = config.load_arm(ARM_B)
     seeds = tuple(arm["init_seeds"])
-    runs, outside = _collect_arm_b(results, arm)
+    runs, outside, rates = _collect_arm_b(results, arm)
     # An arm that has not been run at all is not a missing input of this analysis: arm_b.md says
     # so by its blanks, and the shared notes stay as they are. Once any run exists, a variant
     # without one is noted.
@@ -621,12 +635,24 @@ def _arm_b_results(
             notes.append(f"Arm B {variant}: no standalone {arm['budget']} run of the arm (seeds {list(seeds)})")
         arm_a_all = losses_100m.get(variant, {})
         arm_a = {s: arm_a_all[s] for s in seeds if s in arm_a_all}
+        b_lr = rates.get(variant)
+        a_lr = arm_a_lr.get(variant)
+        differ = b_lr is not None and a_lr is not None and b_lr != a_lr
         vs_mha = arm_minus = None
         if comparing and own_all:
+            if differ:
+                notes.append(
+                    f"Arm B {variant}: Arm B runs at peak learning rate {mf.format_lr(b_lr)} and Arm A runs at "
+                    f"{mf.format_lr(a_lr)}; Arm A minus Arm B is not computed, since the rates differ"
+                )
             vs_mha, arm_minus = _arm_b_comparisons(
-                variant, own, arm_a, mha_100, arm=arm, selection=selection, prereg=prereg, notes=notes
+                variant, own, arm_a, mha_100, arm=arm, selection=selection, prereg=prereg, notes=notes,
+                compare_arm_minus=not differ,
             )
-        out[variant] = ArmBResult(variant, own, arm_a, vs_mha, arm_minus)
+        out[variant] = ArmBResult(
+            variant=variant, losses=own, arm_a_losses=arm_a, vs_mha=vs_mha, arm_a_minus_arm_b=arm_minus,
+            peak_lr=b_lr, arm_a_peak_lr=a_lr,
+        )
     return out
 
 
@@ -901,7 +927,7 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
     # while the gate is shut; the comparisons wait for it.
     comparing = gate_open and selection is not None
     arm_b = _arm_b_results(
-        results, losses_100m, selection=selection, comparing=comparing, prereg=prereg, notes=notes
+        results, losses_100m, collected.peak_lr, selection=selection, comparing=comparing, prereg=prereg, notes=notes
     )
 
     # 8. Context use (plan §10.3): secondary, at 300M, every headline variant but MHA.
@@ -1243,6 +1269,8 @@ def arm_b_values(analysis: Analysis) -> dict:
             "vs MHA": None if result is None else result.vs_mha,
             "Arm A 100M losses": {} if result is None else result.arm_a_losses,
             "Arm A minus Arm B": None if result is None else result.arm_a_minus_arm_b,
+            "Arm B peak LR": None if result is None else result.peak_lr,
+            "Arm A 100M peak LR": None if result is None else result.arm_a_peak_lr,
         }
     rankings = None
     same = None
@@ -1276,6 +1304,8 @@ def render_arm_b(analysis: Analysis) -> str:
                 "Arm A 100M val loss, every seed": _seed_cell(seeds, row["Arm A 100M losses"]),
                 "Arm A minus Arm B [95% CI]": _gap_text(row["Arm A minus Arm B"]),
                 "verdict (Arm A minus Arm B)": _verdict_text(row["Arm A minus Arm B"]),
+                "Arm B peak LR": BLANK if row["Arm B peak LR"] is None else mf.format_lr(row["Arm B peak LR"]),
+                "Arm A 100M peak LR": BLANK if row["Arm A 100M peak LR"] is None else mf.format_lr(row["Arm A 100M peak LR"]),
             }
         )
     lines += _md_table(ARM_B_COLUMNS, rows)

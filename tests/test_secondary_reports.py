@@ -540,3 +540,68 @@ def test_main_blank_writes_all_five_files_equal_to_the_committed_ones(tmp_path):
     assert mt.main(["--blank", "--out", str(tmp_path)]) == 0
     for name in BLANK_NAMES:
         assert (tmp_path / name).read_bytes() == (BLANK_DIR / name).read_bytes(), name
+
+
+# --- Peak learning rates of the two arms (a difference at two rates would mix MLP width and LR) ----
+
+
+@pytest.fixture(scope="module")
+def mixed_rates(arm_a_campaign):
+    """mqa's Arm B runs at another peak learning rate from its Arm A runs; gqa4 and gqa2 at the same."""
+    manifests = arm_a_campaign + arm_b_manifests(arm_a_campaign, variants=("gqa4", "gqa2"))
+    manifests += arm_b_manifests(arm_a_campaign, variants=("mqa",), peak_lr=3e-3)
+    return manifests, mt.analyse(manifests)
+
+
+def _lr_of(manifests, *, variant, arm, tokens, branch=None) -> float:
+    return mf.parse_run_name(find(manifests, variant=variant, arm=arm, init_seed=1, tokens=tokens, branch=branch)["name"]).peak_lr
+
+
+def test_same_rates_are_computed_and_both_rates_are_the_manifests_rates(paired):
+    manifests, analysis = paired
+    for variant in ARM_B_VARIANTS:
+        result = analysis.arm_b[variant]
+        assert result.arm_a_minus_arm_b is not None
+        assert result.peak_lr == _lr_of(manifests, variant=variant, arm="isobackbone", tokens="100M")
+        assert result.arm_a_peak_lr == _lr_of(manifests, variant=variant, arm="isoparam", tokens="300M", branch="100M")
+        assert result.peak_lr == result.arm_a_peak_lr
+
+
+def test_different_rates_drop_arm_a_minus_arm_b_and_name_both_rates(mixed_rates):
+    manifests, analysis = mixed_rates
+    mqa = analysis.arm_b["mqa"]
+    b_lr = _lr_of(manifests, variant="mqa", arm="isobackbone", tokens="100M")
+    a_lr = _lr_of(manifests, variant="mqa", arm="isoparam", tokens="300M", branch="100M")
+    assert b_lr != a_lr
+    assert mqa.peak_lr == b_lr and mqa.arm_a_peak_lr == a_lr
+    assert mqa.arm_a_minus_arm_b is None
+    notes = [n for n in analysis.notes if n.startswith("Arm B mqa") and "not computed" in n]
+    assert len(notes) == 1
+    assert "mqa" in notes[0] and mf.format_lr(b_lr) in notes[0] and mf.format_lr(a_lr) in notes[0]
+    # vs MHA is still computed: a variant at its own rate against MHA at MHA's rate.
+    test = analysis.selection.test
+    mha_seeds = ARM_B_SEEDS if test == pt.PAIRED else TEST_SELECTION_SEEDS
+    expected = pt.secondary(
+        "mqa",
+        {s: _loss(manifests, "mqa", s, arm="isobackbone", tokens="100M") for s in ARM_B_SEEDS},
+        {s: _loss(manifests, "mha", s, tokens="300M", branch="100M") for s in mha_seeds},
+        reference="mha",
+        seeds=ARM_B_SEEDS,
+        test=test,
+    )
+    assert mqa.vs_mha == expected
+    for variant in ("gqa4", "gqa2"):
+        assert analysis.arm_b[variant].arm_a_minus_arm_b is not None
+        assert analysis.arm_b[variant].peak_lr == analysis.arm_b[variant].arm_a_peak_lr
+
+
+def test_the_rendered_row_shows_both_peak_rates(mixed_rates, paired):
+    manifests, analysis = mixed_rates
+    text = mt.render_arm_b(analysis)
+    cells = _cells(text, "mqa")
+    b_index, a_index = mt.ARM_B_COLUMNS.index("Arm B peak LR"), mt.ARM_B_COLUMNS.index("Arm A 100M peak LR")
+    assert cells[b_index] == mf.format_lr(3e-3)
+    assert cells[a_index] == mf.format_lr(_lr_of(manifests, variant="mqa", arm="isoparam", tokens="300M", branch="100M"))
+    assert cells[5] == mt.BLANK  # Arm A minus Arm B is not computed
+    gqa_cells = _cells(text, "gqa4")
+    assert gqa_cells[b_index] == gqa_cells[a_index] == mf.format_lr(1e-3)
