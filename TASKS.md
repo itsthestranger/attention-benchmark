@@ -76,8 +76,9 @@ The plan requires these outputs, and no task above produces them. Added by the o
 | --- | --- | --- | --- | --- | --- |
 | T-32 ✅ | Controls, σ_data, ladder fits by budget and the gate report in `make_tables.py` | O+W | T-27 | §8.1, §8.4, §9.3, §9.4 | `tests/test_gate_report.py` passes; no comparison is computed before the controls; the blank `gates.md` is committed |
 | T-33 ✅ | LR-sweep report and selection: edge rule, tie rule, divergences recorded | O+W | T-29, T-32 | §7.4, §13.15 | Constructed sweeps give the pre-registered choice; a winner at the grid edge asks for another point; a diverged run is recorded, not lost |
-| T-34 | Secondary reports and command-line wiring: Arm B table, RQ-W estimate from the timing-pass file, context-use gaps with intervals, the timing and decode columns of the headline table | O+W | T-23, T-32 | §8.3, §8.5, §10.1, §10.3 | Each builds blank and from fake manifests; no verdict outside `primary_test.py` |
+| T-34 ✅ | Secondary reports and command-line wiring: Arm B table, RQ-W estimate from the timing-pass file, context-use gaps with intervals, the timing and decode columns of the headline table | O+W | T-23, T-32 | §8.3, §8.5, §10.1, §10.3 | Each builds blank and from fake manifests; no verdict outside `primary_test.py` |
 | T-35 ✅ | Plots 4 and 5 read the controls and the per-budget ladder fits | W | T-28, T-32 | §10.5 | The null-control verdict is shown verbatim; the ladder is drawn and fitted at 100M, 200M and 300M |
+| T-36 | Command-line gaps found while writing the runbook: a standalone short run from flags, plots with unfinished runs left out, the timing-pass id of an Arm C run | W | T-29, T-28 | §7.4, §8.1, §8.5, §10.6 | Each gap has a test that fails without its fix |
 
 ## M5 — Operations and handover
 
