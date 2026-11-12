@@ -55,19 +55,19 @@ A fresh agent that wrote none of the code reviewed the harness against plan §5 
 
 | # | Finding | Status |
 | --- | --- | --- |
-| F1 | One run that skipped more than 0.5% of its steps made every table, plot and the sweep report refuse, even when no comparison read it. | Fix in T-37: step parity is checked among the runs the analysis reads; the sweep lists such a run as diverged. |
-| F2 | The seed-count rule was fed a ladder fit over every MHA seed present, so adding the seeds it asked for could reverse it (reproduced). | Fix in T-37: the rule reads the registered base seeds only. **Still open for Phil**: the committed seed count lives in the pre-registration text only; no frozen file holds it, so nothing refuses a run set that disagrees with it. |
-| F3 | The FlexAttention path of SWA could not be selected by any entry point. | Fix in T-37: `opt_path` in `configs/variants/swa256.yaml`, part of the config hash. Phil sets it after the T4 verification, before any SWA run. |
+| F1 | One run that skipped more than 0.5% of its steps made every table, plot and the sweep report refuse, even when no comparison read it. | Fixed in T-37: step parity is checked among the runs the analysis reads; the sweep lists such a run as diverged. A skippy run that is read is still refused. |
+| F2 | The seed-count rule was fed a ladder fit over every MHA seed present, so adding the seeds it asked for could reverse it (reproduced). | Fixed in T-37: the rule reads the registered base seeds only (`Analysis.rule_fit`). **Still open for Phil**: the committed seed count lives in the pre-registration text only; no frozen file holds it, so nothing refuses a run set that disagrees with it. |
+| F3 | The FlexAttention path of SWA could not be selected by any entry point. | Fixed in T-37: `opt_path` in `configs/variants/swa256.yaml` (`chunked` by default), part of the config hash. Phil sets it after the T4 verification, before any SWA run. |
 | F4 | The test of the trainer's in-loop backend enforcement could not fail. | Fixed in T-37: `tests/test_backend_enforcement.py` observes the restriction during the forward pass; removing the enforcement fails four tests. `gpu` and `t4` versions for all seven variants are written, never run. |
-| F5 | With the comparison gate closed, the headline table and three plots still showed the variants' losses. | Fix in T-37: withheld in the tables and plots until the controls pass. |
-| F6 | Nothing refused a sweep on a seed an arm uses. | Fix in T-37: `select_lr` refuses registered seeds. This builds in the recommendation on the open sweep-seed question; it is removed if Phil decides otherwise. |
+| F5 | With the comparison gate closed, the headline table and three plots still showed the variants' losses. | Fixed in T-37 for the headline table and plots 1 to 3. **Listed, not fixed**: plots 6 and 7 and `arm_b.md` still show variant values while the gate is closed (existing tests pin that with fixtures that have no null control). It needs variant runs before the controls, which the runbook's order prevents. |
+| F6 | Nothing refused a sweep on a seed an arm uses. | Fixed in T-37: `select_lr` refuses registered seeds. This builds in the recommendation on the open sweep-seed question; it is removed if Phil decides otherwise. |
 | F7 | The runbook's 100-step smoke runs decayed from step 80, a milder schedule than a real run's first 100 steps. | Fixed in `RUNBOOK.md`: smoke runs are real 300M runs stopped with `--until 100`. |
-| F8 | The disclosures of plan §13.2, §13.4 and §13.5 were generated nowhere; §13.3 only in one plot caption. | Fix in T-37: a fixed "Disclosures" block in `headline.md`. `README.md` states the scope. |
+| F8 | The disclosures of plan §13.2, §13.4 and §13.5 were generated nowhere; §13.3 only in one plot caption. | Fixed in T-37: a fixed "Disclosures" block in `headline.md`. `README.md` states the scope. |
 | F9 | `STATUS.md` was stale and omitted four `gpu` tests. | Fixed here. |
 | F10 | Arm C has no generated report: the 3% elapsed-time flag and the step-time spread of plan §8.5 have no code. | **Listed, not built.** Arm C is optional and first on the cut list. If it runs, those numbers need code first. |
 | F11 | The `gpu` memory test of GQA/MQA decode compares with MHA's whole cache and could miss one expanded layer. | **Listed.** It implements the plan's wording; the `cpu` shape test is the real guard and catches the break. |
 | F12 | The comment in `configs/prereg.yaml` says the context buckets are half-open; the top bucket is closed (decision 95). | **Listed for Phil**: the file is frozen. |
-| — | A `ref`-mode run recorded the fused kernel it did not use. | Fix in T-37: the manifest's backend is null for `ref`. |
+| — | A `ref`-mode run records the kernel restriction it ran under although no fused kernel ran. | **Listed, not fixed**: the manifest validator requires a backend whenever a GPU is named. The manifest's `mode` says `ref`. |
 
 Suspicions the auditor could not confirm without hardware are under "To check on real hardware".
 
@@ -152,7 +152,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 | `test_causality.py` | 14 | | Causal leak under fp16, every variant and mode. |
 | `test_checkpoint.py` | 9 | | GradScaler state after a resume, resume fidelity in fp16, a checkpoint on CUDA. |
 | `test_determinism.py` | 14 | 7 | `ref` bit-identical over 100 steps in fp16 (needs `CUBLAS_WORKSPACE_CONFIG=:4096:8`); the `opt` reproducibility measurement, which applies no threshold. |
-| `test_entry_points.py` | 1 (2 after T-37) | | Cold start and resume on CUDA in fp16; the recorded backend and scale. |
+| `test_entry_points.py` | 1 | | Cold start and resume on CUDA in fp16; the recorded backend and scale. |
 | `test_eval_lm.py` | 1 | | fp16 evaluation against fp32. |
 | `test_grouped_decode.py` | 3 | 3 | `opt` decode peak memory and decode time at cache 8k below MHA's. |
 | `test_inference_bench.py` | 8 | | Measured against analytic KV bytes for every variant; the benchmark on CUDA. |
