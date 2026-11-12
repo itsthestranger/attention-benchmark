@@ -68,7 +68,8 @@ class GatedRecurrence(AttnBase):
         new_cache = None if cache is None else RecurrenceState(s)
         return y, new_cache
 
-    def init_cache(self) -> RecurrenceState:
+    def init_cache(self, capacity: int | None = None) -> RecurrenceState:
+        # The state does not grow with the number of tokens, so a capacity hint is ignored.
         return RecurrenceState(None)
 
     @property
