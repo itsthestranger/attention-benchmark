@@ -115,6 +115,11 @@ class LatentAttention(AttnBase):
         # The latent c_KV and the shared positional key k_R.
         return (self.d_c + self._rope_dim) * bytes_per_value(self.cfg.kv_dtype)
 
+    @property
+    def sdpa_backend(self) -> str | None:
+        # The fused kernel recorded by whoever enforced one (set_sdpa_backend), or None.
+        return self._sdpa_backend
+
     def mixing_flops_per_token(self, T: int, causal_skip: bool = True) -> int:
         # Scores are (head_dim + rope_dim) wide: content and positional parts; values are head_dim wide.
         return mixing_flops(

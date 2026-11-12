@@ -98,6 +98,11 @@ class GroupedAttention(AttnBase):
         # Keys and values for each KV head.
         return 2 * self.n_kv_heads * self.head_dim * bytes_per_value(self.cfg.kv_dtype)
 
+    @property
+    def sdpa_backend(self) -> str | None:
+        # The fused kernel recorded by whoever enforced one (set_sdpa_backend), or None.
+        return self._sdpa_backend
+
     def mixing_flops_per_token(self, T: int, causal_skip: bool = True) -> int:
         # Every query head scores head_dim wide, whatever the number of KV heads.
         return mixing_flops(T, self.n_heads, self.head_dim, self.head_dim, causal_skip=causal_skip)

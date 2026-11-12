@@ -123,8 +123,13 @@ class AttnBase(nn.Module):
 
     @property
     def sdpa_backend(self) -> str | None:
-        """The fused kernel recorded for this module, or None if none was enforced."""
-        return self._sdpa_backend
+        """Which fused kernel this variant used, or None.
+
+        A module that calls a fused kernel returns `self._sdpa_backend`, the
+        kernel recorded with `set_sdpa_backend`. The base class does not
+        answer, so a module cannot leave the question open by accident.
+        """
+        raise NotImplementedError
 
     def set_sdpa_backend(self, name: str | None) -> None:
         """Record the fused kernel an experiment enforced. Never called from a forward pass."""

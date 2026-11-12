@@ -424,7 +424,8 @@ class _Bare(AttnBase):
 def test_base_class_defaults():
     bare = _Bare(_full_attn("mha").cfg)
     assert bare.kv_cache_max_tokens is None
-    assert bare.sdpa_backend is None
+    with pytest.raises(NotImplementedError):
+        _ = bare.sdpa_backend  # a module must say whether it calls a fused kernel
     with pytest.raises(NotImplementedError):
         _ = bare.kv_bytes_per_token
 
