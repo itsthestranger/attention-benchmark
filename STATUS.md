@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, end of session 1. 11 of 32 tasks merged; `cpu` tier green on `main` (819 tests).
+Last updated: 2026-11-12, session 2. 12 of 32 tasks merged; `cpu` tier green on `main` (939 tests).
 
 ## Done
 
@@ -16,10 +16,11 @@ Last updated: 2026-11-12, end of session 1. 11 of 32 tasks merged; `cpu` tier gr
 - T-04 grouped attention: MHA, GQA, MQA (#9).
 - T-15 trainer (#10).
 - T-07 sliding-window attention (#11).
+- T-05 MLA naive path (#13).
 
 ## In progress
 
-- **T-05 MLA naive path**, branch `task/T-05-mla` (pushed). The acceptance tests are committed and final (`tests/test_mla.py`, plus MLA cases in `tests/variants.py`). The last commit is the worker's implementation exactly as it stood when the session ended: **unreviewed**. `tests/test_mla.py` passed on it (39 tests); the full suite was not run. Still to do: run the full `cpu` tier, review the diff (it adds `src/attention/token_cache.py` and refactors `grouped.py`), break it on purpose, add bookkeeping, open the pull request.
+- Nothing.
 
 ## Blocked
 
@@ -27,8 +28,6 @@ Last updated: 2026-11-12, end of session 1. 11 of 32 tasks merged; `cpu` tier gr
 
 ## Open questions
 
-- **Welch multipliers in plan §1.3 (blocks T-25).** The table's Welch rows, 2.5 at 5 seeds and 1.8 at 8, are the values for a pooled-variance t-test. Welch's test as specified in §1.2 needs 2.63 and 1.83 for 80% power; at the plan's 2.5 it has 76%. Both calculations are in `primary_test.py`. Which one feeds the seed-count rule (§1.4) and the reported detectable-effect bound? Recommendation: the exact one.
-- **Seed-count rule under the paired test (blocks T-25).** §1.4 step 1 wants the 5-seed detectable gap in nats from sigma_init. For the paired test the multiplier is in units of sigma_d, which is unknown before any variant is read. Use the table's worst case, 3.2 × sigma_init? Recommendation: yes; it is the only value computable from MHA data alone.
 - Which PyTorch, Python and CUDA versions does Kaggle's GPU image ship? Needed to pin the environment. Until then: torch 2.15.0, Python 3.12 in CI.
 
 ## Readings of the plan for Phil to confirm
@@ -44,10 +43,13 @@ These do not block the build. Each is implemented as described and can be change
 
 - fp32 `ref`/`opt` agreement tolerance is 1e-5, not 1e-6 (plan §5). Approved by Phil on 2026-11-12. Reason: 1e-6 is at the fp32 rounding floor; correct implementations measured up to 1.8e-6.
 - The agreement tests also run in float64 at 1e-12, an addition to "CPU tests use fp32". Approved by Phil on 2026-11-12.
+- The seed-count rule and the reported detectable-effect bound use the exact power of Welch's test, 2.63 × σ_init at 5 seeds and 1.83 at 8, not the 2.5 and 1.8 of the plan's §1.3 table (decision 79). Decided by Phil on 2026-11-12. Reason: the table's Welch rows are pooled-variance values, at which Welch's test has 76% power instead of 80%. The plan's table itself is unchanged; correcting it needs a pull request to the frozen plan.
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–78 so far).
+All decisions are in `docs/decisions.md` (rows 1–85 so far).
+
+Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
 ## Hardware tests written, never run
 
@@ -80,9 +82,9 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. Finish T-05 (see "In progress"). Then T-06 MLA absorbed path (O+W) and T-10 step-0 logit scale (O).
+1. T-25 ladder fit and seed-count rule (O), now unblocked. T-06 MLA absorbed path (O+W) and T-10 step-0 logit scale (O).
 2. T-18 manifest (W), T-20 evaluation (W), T-16 checkpoint and resume (O+W): all unblocked, none started.
-3. T-19 determinism (W), T-08 properties and FLOPs (W, after T-05), T-25 ladder fit (O, waits for Phil's two answers).
+3. T-19 determinism (W), T-08 properties and FLOPs (W).
 
 ## Notes for the next session
 
