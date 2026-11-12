@@ -26,7 +26,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
 | T-02 ✅ | Backbone: RMSNorm, SwiGLU, RoPE, tied embeddings, pre-norm blocks, attention registry | W | T-01 | §3.1, §4.2 | Shape tests pass; non-attention parameter counts match the formula |
-| T-03 | Per-parameter seeded init and the init rule | O+W | T-02 | §3.1, §4.5 | Same-name, same-shape tensors are identical across variants; different seeds differ; stds and depth scaling match the rule |
+| T-03 ✅ | Per-parameter seeded init and the init rule | O+W | T-02 | §3.1, §4.5 | Same-name, same-shape tensors are identical across variants; different seeds differ; stds and depth scaling match the rule |
 | T-04 | `grouped.py`: MHA/GQA/MQA, `ref` and `opt`, KV cache, grouped-query decode | O+W | T-02 | §2.3, §4.4, §5 | Causal leak, GQA limits, `ref`/`opt` agreement and KV-cache decode at ctx 1024 pass; K/V never expanded in `opt` decode; `gpu` and `t4` tests written |
 | T-05 | `mla.py` naive path: decoupled RoPE, latent norms, softmax scale, factor init | O+W | T-03 | §3.2, §3.3 | 562,560 params per layer at d_c 192; scale is 1/√72; causal leak and KV-cache decode pass; cache holds 216 values per token per layer |
 | T-06 | MLA absorbed path for inference | O+W | T-05 | §3.3 | Matches the naive path to 1e-4 |
