@@ -61,7 +61,7 @@ class AttnBase(nn.Module):
         """
         raise NotImplementedError
 
-    def init_cache(self) -> Any:
+    def init_cache(self, capacity: int | None = None) -> Any:
         """An empty cache for decode."""
         raise NotImplementedError
 

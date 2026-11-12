@@ -13,10 +13,11 @@ Last updated: 2026-11-12, session 1.
 - T-03 per-parameter seeded init (#6).
 - T-14 WSD schedule and optimizer parameter groups (#7).
 - T-12 recurrence anchor (#8).
+- T-04 grouped attention: MHA, GQA, MQA (#9).
 
 ## In progress
 
-- T-04 grouped attention, branch `task/T-04-grouped`: tests committed, worker implementing.
+- Nothing.
 
 ## Blocked
 
@@ -44,7 +45,18 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–58 so far).
+All decisions are in `docs/decisions.md` (rows 1–65 so far).
+
+## Hardware tests written, never run
+
+These skip without the hardware. A skip is not a pass. List them with `pytest --collect-only -q -m "gpu or t4"`.
+
+- `gpu`: causal leak under fp16 (`test_causality.py`), `ref`/`opt` agreement under fp16 (`test_reference.py`), `opt` decode peak memory at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
+- `t4`: `opt` decode time at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
+
+## To check on real hardware
+
+- Whether the fused kernel copies K and V when given a slice of the cache storage (plan §2.3). If it does, decode needs an explicit matmul, disclosed.
 
 ## Environment
 
