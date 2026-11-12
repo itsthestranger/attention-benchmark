@@ -35,6 +35,8 @@ Last updated: 2026-11-12, during session 3. 26 of 32 tasks merged; `cpu` tier gr
 - T-29 entry points and Kaggle shim (#30).
 - T-28 plots (#31).
 - T-32 controls, noise components and the gate report (#32).
+- T-35 plots 4 and 5 read the controls and the per-budget ladder fits (#33).
+- T-33 LR-sweep rules, sweep report and diverged runs (#34).
 
 ## In progress
 
