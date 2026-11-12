@@ -34,6 +34,7 @@ Last updated: 2026-11-12, during session 3. 26 of 32 tasks merged; `cpu` tier gr
 - T-23 inference benchmark and training timing pass (#29).
 - T-29 entry points and Kaggle shim (#30).
 - T-28 plots (#31).
+- T-32 controls, noise components and the gate report (#32).
 
 ## In progress
 
