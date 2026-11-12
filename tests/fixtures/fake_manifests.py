@@ -33,6 +33,7 @@ def fake_manifest(
     budget: str | None = None,
     steps: int | None = None,
     branch: str | None = None,
+    branches: list[str] | None = None,
     kind: str | None = None,
     completed: bool = True,
     val_loss: float = 3.0,
@@ -41,7 +42,11 @@ def fake_manifest(
 ) -> dict:
     """A VALID synthetic manifest, built through build_manifest.
 
-    `branch` is a budget label; it makes a branch manifest. `kind` may be
+    `branch` is a budget label; it makes a branch manifest. `branches` are the
+    budget labels the run branches at (default: the arm's). A run at a short
+    budget has none of its own, so a standalone 100M run (a reproducibility
+    rerun, the null control, a data-seed run, a sweep point) is
+    `budget="100M", branches=[]`. `kind` may be
     "trunk_checkpoint" (pass completed=False). An iso_wallclock run needs
     `steps`. Any keyword in `changes` overrides a build_manifest argument and is
     validated like the rest, so an invalid change raises ManifestError.
@@ -58,6 +63,7 @@ def fake_manifest(
         data_seed=data_seed,
         budget=budget,
         steps=steps,
+        branches=branches,
     )
     run = resolved["run"]
     recipe = resolved["recipe"]
