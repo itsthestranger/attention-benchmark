@@ -105,13 +105,13 @@ Check: `train`, `branch` and `evaluate` refuse to start until both hashes are se
 
 ### 2.2 Smoke runs, all seven variants, then the recipe freeze
 
-`configs/recipe.yaml` leaves `micro_batch`, `init_scale` and `growth_interval` unset. Find them here, with overrides, on runs of 100 steps. (The plan says 5M tokens, which is 76 steps, and also judges skipped steps "in the first 100"; 100 steps is the loop's reading.)
+`configs/recipe.yaml` leaves `micro_batch`, `init_scale` and `growth_interval` unset. Find them here, with overrides. A smoke run is the first 100 steps of a real 300M run, stopped with `--until 100`, so its warmup and learning rate are those of the real run. (A separate 100-step run would start its decay at step 80.)
 
-First the micro-batch: the largest that fits MLA-192 in `ref` mode (plan §7.1). Try 64, then 32, 16, 8:
+First the micro-batch: the largest that fits MLA-192 in `ref` mode (plan §7.1). Try 64, then 32, 16, 8; twenty steps are enough to see whether it fits:
 
 ```bash
-python -m scripts.train --variant mla192 --init-seed 1 --peak-lr 1e-3 --steps 100 --branches \
-  --mode ref --data $DATA --out $OUT/smoke --gpu-shared $SHARED --expected-backend $BACKEND \
+python -m scripts.train --variant mla192 --init-seed 1 --peak-lr 1e-3 --until 20 \
+  --mode ref --data $DATA --out $OUT/smoke_ref --gpu-shared $SHARED --expected-backend $BACKEND \
   --override recipe.batch.micro_batch=$MICRO \
   --override recipe.grad_scaler.init_scale=$INIT_SCALE \
   --override recipe.grad_scaler.growth_interval=$GROWTH
@@ -121,7 +121,7 @@ Then every variant in `opt` mode with that micro-batch and one global pair of sc
 
 ```bash
 for v in mha gqa4 gqa2 mqa mla192 mla96 swa256; do
-  python -m scripts.train --variant $v --init-seed 1 --peak-lr 1e-3 --steps 100 --branches \
+  python -m scripts.train --variant $v --init-seed 1 --peak-lr 1e-3 --until 100 \
     --data $DATA --out $OUT/smoke --gpu-shared $SHARED --expected-backend $BACKEND \
     --override recipe.batch.micro_batch=$MICRO \
     --override recipe.grad_scaler.init_scale=$INIT_SCALE \
@@ -129,9 +129,11 @@ for v in mha gqa4 gqa2 mqa mla192 mla96 swa256; do
 done
 ```
 
-Check, in each manifest under `$OUT/smoke/manifests/opt/`: `steps.skipped_in_first_100` is at most 3 for every variant (plan §7.3); `backend` is the expected one; `precision` is `fp16`; no run exited with a backend or dtype error. If any variant skips more, change the global scaler settings and rerun all seven. Never tune per variant. A variant that cannot be made stable in fp16 is a reportable finding (plan §13.6). Also read `step_seconds` and rescale the budget of plan §12.1 if a 300M run will not take about 80 minutes.
+Each run stops at step 100 and writes an unfinished manifest. Check, in each manifest under `$OUT/smoke/manifests/opt/`: `steps.attempted` is 100 and `steps.skipped_in_first_100` is at most 3, for every variant (plan §7.3); `backend` is the expected one; `precision` is `fp16`; no run exited with a backend or dtype error. If any variant skips more, change the global scaler settings and rerun all seven into a fresh directory. Never tune per variant. A variant that cannot be made stable in fp16 is a reportable finding (plan §13.6). Also read `step_seconds` and rescale the budget of plan §12.1 if a 300M run will not take about 80 minutes.
 
-Then write the three values into `configs/recipe.yaml` (a pull request you approve) and freeze it. From here on no command carries an `--override`. The smoke directory is not a result; do not point the tables at it.
+The learning rate here is a placeholder, because the sweep comes later. After the sweep, look at `steps.skipped_in_first_100` again in the real runs' manifests; the same limit applies.
+
+Then write the three values into `configs/recipe.yaml` (a pull request you approve) and freeze it. From here on no command carries an `--override`. The smoke directories are not results; do not point the tables at them, and do not resume them.
 
 ### 2.3 Phase 1 probes, Gate 1
 
