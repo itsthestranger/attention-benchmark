@@ -13,11 +13,13 @@ in by hand. It judges nothing itself: verdicts are `Comparison.verdict` from
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import functools
+import numbers
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping, NamedTuple, Sequence
 
 from analysis import ladder_fit as lf
 from analysis import primary_test as pt
@@ -28,6 +30,15 @@ from src.utils import manifest as mf
 HEADLINE_VARIANTS = ("mha", "gqa4", "mqa", "mla192", "gqa2", "mla96", "swa256")
 BLANK = "—"
 ARM = "iso_token"
+# Budget labels of the calibration ladder's branches (plan §7.2, §8.4). The 100M
+# budget is the test-selection budget in prereg.yaml; 200M is the ladder's middle branch.
+LADDER_BUDGETS = ("100M", "200M", "300M")
+MID_BUDGET = "200M"
+# Plan §8.1: the data-order noise is MHA at init seed 1 under three data orders.
+# Data seed 1 is the Arm A data seed (its run is the 100M branch of init seed 1);
+# seeds 2 and 3 are standalone 100M runs at MHA's learning rate. Not in prereg.yaml.
+DATA_ORDER_INIT_SEED = 1
+DATA_ORDER_EXTRA_SEEDS = (2, 3)
 # Plan §7.3 and §13.6: a difference above 0.5% of the steps invalidates the comparison.
 STEPS_TAKEN_PARITY = 0.005
 LEFT_ARM = "left Arm A (seed-count rule)"
@@ -171,11 +182,29 @@ class Analysis:
     losses_100m: dict  # {name: {init_seed: val_loss}}, 100M branches
     reruns_100m: dict  # {init_seed: val_loss}, MHA standalone 100M reruns
     selection: object  # primary_test.TestSelection or None
-    fit: object  # ladder_fit.LadderFit or None
+    fit: object  # ladder_fit.LadderFit or None: the 300M fit, the primary one
     decision: object  # ladder_fit.SeedCountDecision or None
     comparisons: dict  # {variant: primary_test.Comparison}
     multipliers: dict  # {variant: ladder_fit.Multiplier}
     notes: tuple  # reasons for everything not computed, in a fixed order
+    losses_200m: dict  # {name: {init_seed: val_loss}}, 200M branches
+    fits: dict  # {"100M" | "200M" | "300M": ladder_fit.LadderFit or None}
+    null_100m: dict  # {init_seed: val_loss}, the null control's standalone 100M runs
+    data_order_100m: dict  # {data_seed: val_loss}, MHA init seed 1 at 100M
+    sigma_data: float | None  # SD over the three data orders, when complete
+    sigma_init_null: float | None  # SD over the registered null seeds, when complete
+    null_control: object  # primary_test.Comparison or None
+    positive_control: object  # primary_test.Comparison or None
+
+
+class _Collected(NamedTuple):
+    losses: dict
+    losses_100m: dict
+    losses_200m: dict
+    reruns: dict
+    examples: dict
+    null_100m: dict
+    data_order_100m: dict
 
 
 # The number of non-embedding parameters of each manifest's configuration, by
@@ -190,7 +219,7 @@ def _non_embedding_params(manifest: dict) -> int:
     return _PARAM_CACHE[key]
 
 
-def _collect(results: Sequence[dict], prereg: Mapping):
+def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
     """Losses by name and seed, from the runs this table reads. Raises on mixed learning rates."""
     seen: set[str] = set()
     for manifest in results:
@@ -232,16 +261,21 @@ def _collect(results: Sequence[dict], prereg: Mapping):
 
     losses: dict[str, dict[int, float]] = {}
     losses_100m: dict[str, dict[int, float]] = {}
+    losses_200m: dict[str, dict[int, float]] = {}
     reruns: dict[int, float] = {}
+    # One manifest per variant, for its parameter count. Every run of a variant has the
+    # same model, so the first one read will do.
     examples: dict[str, dict] = {}
     for manifest, parsed in selected:
         loss = float(manifest["final_metrics"]["val_loss"])
         variant = parsed.variant
+        examples.setdefault(variant, manifest)
         if parsed.branch is None and parsed.tokens == budget:
             losses.setdefault(variant, {})[parsed.init_seed] = loss
-            examples.setdefault(variant, manifest)
         elif parsed.branch == small and parsed.tokens == budget and parsed.peak_lr == lr.get(variant):
             losses_100m.setdefault(variant, {})[parsed.init_seed] = loss
+        elif parsed.branch == MID_BUDGET and parsed.tokens == budget and parsed.peak_lr == lr.get(variant):
+            losses_200m.setdefault(variant, {})[parsed.init_seed] = loss
         elif (
             variant == "mha"
             and parsed.branch is None
@@ -249,11 +283,127 @@ def _collect(results: Sequence[dict], prereg: Mapping):
             and parsed.peak_lr == lr.get("mha")
         ):
             reruns[parsed.init_seed] = loss
-    return losses, losses_100m, reruns, examples
+
+    # The null control and the data-order runs are not in `selected`: the null variant is
+    # not a headline variant, and the data-order runs carry other data seeds (plan §8.1).
+    null_spec = prereg["null_control"]
+    null_seeds = set(null_spec["init_seeds"])
+    null_100m: dict[int, float] = {}
+    data_order: dict[int, float] = {}
+    for manifest in results:
+        parsed = mf.parse_run_name(manifest["name"])
+        if parsed.arm != arm["tag"] or parsed.branch is not None:
+            continue
+        loss = float(manifest["final_metrics"]["val_loss"])
+        if (
+            parsed.variant == null_spec["variant"]
+            and parsed.tokens == null_spec["budget"]
+            and parsed.data_seed == null_spec["data_seed"]
+            and parsed.init_seed in null_seeds
+            and parsed.peak_lr == lr.get("mha")
+        ):
+            null_100m[parsed.init_seed] = loss
+        elif (
+            parsed.variant == "mha"
+            and parsed.tokens == small
+            and parsed.init_seed == DATA_ORDER_INIT_SEED
+            and parsed.data_seed in DATA_ORDER_EXTRA_SEEDS
+            and parsed.peak_lr == lr.get("mha")
+        ):
+            data_order[parsed.data_seed] = loss
+    # Data seed 1 is the Arm A data seed: its value is the 100M branch of the same init seed.
+    branch_100m = losses_100m.get("mha", {})
+    if DATA_ORDER_INIT_SEED in branch_100m:
+        data_order[arm["data_seed"]] = branch_100m[DATA_ORDER_INIT_SEED]
+    return _Collected(losses, losses_100m, losses_200m, reruns, examples, null_100m, data_order)
 
 
 def _missing(seeds, have: Mapping) -> list[int]:
     return [s for s in seeds if s not in have]
+
+
+def _ladder_fit(by_name: Mapping, examples: Mapping, *, budget: str, prefix: str, notes: list[str]):
+    """The ladder fit of one budget (plan §8.4), or None with the reason in `notes`.
+
+    `by_name[name] = {init_seed: loss}` for MHA and the ladder points at that budget.
+    MHA and mha_L6 are required; mha_L10 is used when present.
+    """
+    if not by_name.get("mha"):
+        notes.append(f"{prefix}: MHA {budget} results are missing")
+        return None
+    if not by_name.get("mha_L6"):
+        notes.append(f"{prefix}: mha_L6 {budget} results are missing")
+        return None
+    points = {"mha": (_non_embedding_params(examples["mha"]), by_name["mha"])}
+    for name in ("mha_L6", "mha_L10"):
+        if by_name.get(name):
+            points[name] = (_non_embedding_params(examples[name]), by_name[name])
+    try:
+        return lf.fit_ladder(points)
+    except lf.LadderError as exc:
+        notes.append(f"{prefix}: {exc}")
+        return None
+
+
+def _null_control(null_100m: Mapping, mha_100: Mapping, selection, prereg: Mapping, notes: list[str]):
+    """The null control (plan §8.1), against MHA's 100M branches of the test-selection seeds."""
+    spec = prereg["null_control"]
+    missing = _missing(spec["init_seeds"], null_100m)
+    if missing:
+        notes.append(
+            f"null control: {spec['variant']} 100M runs at MHA's peak learning rate for seeds "
+            f"{missing} are missing"
+        )
+        return None
+    if selection is None:
+        notes.append("null control skipped: no test selection")
+        return None
+    sel_seeds = list(prereg["test_selection"]["sigma_init"]["init_seeds"])
+    missing_ref = _missing(sel_seeds, mha_100)
+    if missing_ref:
+        notes.append(f"null control: MHA 100M branches for seeds {missing_ref} are missing")
+        return None
+    try:
+        return pt.null_control(
+            null_100m,
+            {s: mha_100[s] for s in sel_seeds},
+            test=selection.test,
+            prereg=prereg,
+        )
+    except pt.PreregError as exc:
+        notes.append(f"null control: {exc}")
+        return None
+
+
+def _positive_control(losses: Mapping, selection, prereg: Mapping, notes: list[str]):
+    """L6 against L8 at 300M on exactly the registered seeds (plan §8.4)."""
+    spec = prereg["positive_control"]
+    seeds = list(spec["init_seeds"])
+    small = losses.get(spec["small"], {})
+    reference = losses.get(spec["reference"], {})
+    miss_small = _missing(seeds, small)
+    miss_ref = _missing(seeds, reference)
+    if miss_small or miss_ref:
+        parts = []
+        if miss_small:
+            parts.append(f"{spec['small']} 300M results for seeds {miss_small}")
+        if miss_ref:
+            parts.append(f"{spec['reference']} 300M results for seeds {miss_ref}")
+        notes.append(f"positive control: {' and '.join(parts)} are missing")
+        return None
+    if selection is None:
+        notes.append("positive control skipped: no test selection")
+        return None
+    try:
+        return pt.positive_control(
+            {s: small[s] for s in seeds},
+            {s: reference[s] for s in seeds},
+            test=selection.test,
+            prereg=prereg,
+        )
+    except pt.PreregError as exc:
+        notes.append(f"positive control: {exc}")
+        return None
 
 
 def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
@@ -261,7 +411,11 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
     check_comparable(results)
     if prereg is None:
         prereg = config.load_prereg()
-    losses, losses_100m, reruns, examples = _collect(results, prereg)
+    collected = _collect(results, prereg)
+    losses = collected.losses
+    losses_100m = collected.losses_100m
+    reruns = collected.reruns
+    examples = collected.examples
     notes: list[str] = []
 
     # 1. Test selection, from MHA runs only (plan §1.2).
@@ -287,22 +441,37 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
         except pt.PreregError as exc:
             notes.append(f"test selection: {exc}")
 
+    # 1b. The null control (plan §8.1): before any ladder or cross-variant number is read.
+    null_control = _null_control(collected.null_100m, mha_100, selection, prereg, notes)
+
     # 2. Ladder fit at 300M (plan §8.4).
-    fit = None
     mha_300 = losses.get("mha", {})
-    if not mha_300:
-        notes.append("ladder fit: MHA 300M results are missing")
-    elif not losses.get("mha_L6"):
-        notes.append("ladder fit: mha_L6 300M results are missing")
+    fit = _ladder_fit(losses, examples, budget="300M", prefix="ladder fit", notes=notes)
+
+    # 2b. The positive control (plan §8.4, §9.4): L6 against L8 at 300M.
+    positive_control = _positive_control(losses, selection, prereg, notes)
+
+    # 2c. The same ladder at the two branch budgets (plan §8.4): a fit per budget, read only.
+    fit_100m = _ladder_fit(
+        losses_100m, examples, budget="100M", prefix="ladder fit at 100M", notes=notes
+    )
+    fit_200m = _ladder_fit(
+        collected.losses_200m, examples, budget=MID_BUDGET, prefix="ladder fit at 200M", notes=notes
+    )
+
+    # The noise components of plan §8.1, from their registered runs only.
+    null_100m = collected.null_100m
+    data_order = collected.data_order_100m
+    sigma_init_null = None
+    if all(s in null_100m for s in prereg["null_control"]["init_seeds"]):
+        sigma_init_null = float(pt.sample_sd([null_100m[s] for s in prereg["null_control"]["init_seeds"]]))
+    needed_data = (config.load_arm(ARM)["data_seed"], *DATA_ORDER_EXTRA_SEEDS)
+    sigma_data = None
+    missing_data = [d for d in needed_data if d not in data_order]
+    if missing_data:
+        notes.append(f"sigma_data: data-order runs for data seeds {missing_data} are missing")
     else:
-        points = {"mha": (_non_embedding_params(examples["mha"]), mha_300)}
-        for name in ("mha_L6", "mha_L10"):
-            if losses.get(name):
-                points[name] = (_non_embedding_params(examples[name]), losses[name])
-        try:
-            fit = lf.fit_ladder(points)
-        except lf.LadderError as exc:
-            notes.append(f"ladder fit: {exc}")
+        sigma_data = float(pt.sample_sd([data_order[d] for d in needed_data]))
 
     # 3. Seed count (plan §1.4).
     decision = None
@@ -323,10 +492,33 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
             except lf.LadderError as exc:
                 notes.append(f"seed count rule: {exc}")
 
+    # The gate (plan §8.1, §8.4, §9.3, §9.4): no cross-variant number before the controls.
+    gate_open = True
+    if null_control is None:
+        gate_open = False
+        notes.append("comparisons skipped: null control not computed")
+    elif null_control.verdict == pt.VERDICT_DETECTED:
+        gate_open = False
+        notes.append(
+            "comparisons skipped: the null control is detected, so a bug in pairing, seeding, the "
+            "statistics code or determinism is possible; nothing downstream is valid until it passes "
+            "(plan §9.3)"
+        )
+    if positive_control is None:
+        gate_open = False
+        notes.append("comparisons skipped: positive control not computed")
+    elif positive_control.verdict != pt.VERDICT_DETECTED:
+        notes.append(
+            "positive control not detected: the pipeline cannot see an effect of the size of a 25% "
+            "capacity cut, so every null in this report is uninformative (plan §8.4)"
+        )
+
     # 4. The three primary comparisons, Holm-corrected together (plan §1.2).
     comparisons: dict[str, pt.Comparison] = {}
     primary_names = [prereg["primary"]["reference"], *prereg["primary"]["comparisons"]]
-    if decision is None:
+    if not gate_open:
+        pass  # the gate notes above say why
+    elif decision is None:
         notes.append("primary comparisons skipped: no seed count decision")
     else:
         missing = {
@@ -354,7 +546,9 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
 
     # 5. Exploratory comparisons (plan §1.2, §1.4).
     ex_seeds = list(prereg["exploratory"]["init_seeds"])
-    if decision is None:
+    if not gate_open:
+        pass  # the gate notes above say why
+    elif decision is None:
         notes.append("exploratory comparisons skipped: no seed count decision")
     else:
         for name in prereg["exploratory"]["variants"]:
@@ -383,7 +577,7 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
                 notes.append(f"exploratory {name}: {exc}")
 
     # Runs with seeds outside the registered sets are shown in the table but never tested.
-    if decision is not None:
+    if gate_open and decision is not None:
         registered = {name: set(decision.seeds) for name in primary_names}
         registered.update({name: set(ex_seeds) for name in prereg["exploratory"]["variants"]})
         for name in sorted(registered):
@@ -415,6 +609,14 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
         comparisons=comparisons,
         multipliers=multipliers,
         notes=tuple(notes),
+        losses_200m=collected.losses_200m,
+        fits={"100M": fit_100m, "200M": fit_200m, "300M": fit},
+        null_100m=null_100m,
+        data_order_100m=data_order,
+        sigma_data=sigma_data,
+        sigma_init_null=sigma_init_null,
+        null_control=null_control,
+        positive_control=positive_control,
     )
 
 
@@ -530,6 +732,142 @@ def render_markdown(rows: Sequence[Mapping[str, str]], notes: Sequence[str] = ()
     return text
 
 
+# --- The gate report (plan §9.3, §9.4) ----------------------------------------------
+
+# Section headings and row labels, in order. The report, RUNBOOK.md and the plots use them.
+GATE_SECTIONS: dict[str, tuple[str, ...]] = {
+    "Noise floor at 100M (Gate 2)": (
+        "sigma_init, MHA seeds 1-5",
+        "sigma_init, null-control seeds",
+        "sigma_data, MHA seed 1 over data seeds 1-3",
+        "s_rep",
+        "s_rep / sigma_init",
+        "pairing threshold",
+        "test chosen",
+    ),
+    "Null control (Gate 2)": (
+        "null seeds",
+        "MHA seeds",
+        "mean gap, nats",
+        "95% interval",
+        "p",
+        "verdict",
+    ),
+    "Positive control: L6 against L8 at 300M": (
+        "seeds",
+        "mean gap, nats",
+        "95% interval",
+        "p",
+        "verdict",
+    ),
+    "Seed count and detectable effect": (
+        "sigma_init at 300M, MHA seeds 1-5",
+        "ladder slope b at 300M",
+        "5-seed detectable gap, nats",
+        "undetectable parameter fraction at 5 seeds",
+        "threshold",
+        "seeds per primary",
+        "variants leaving Arm A",
+        "detectable gap of the chosen design, nats",
+    ),
+    "Ladder slope b by budget": ("100M", "200M", "300M"),
+}
+
+NULL_WARNING = (
+    "**NULL CONTROL DETECTED (plan §9.3).** A detected null control means a bug in pairing, "
+    "seeding, the statistics code or determinism. Nothing downstream is valid until it passes. "
+    "No cross-variant comparison is computed in this report."
+)
+
+
+def _attr(obj, name: str):
+    return None if obj is None else getattr(obj, name)
+
+
+def gate_values(analysis: Analysis) -> dict[str, dict[str, object]]:
+    """The raw value of every row of the gate report, from the analysis objects. No rounding."""
+    sel, nc, pc, d = analysis.selection, analysis.null_control, analysis.positive_control, analysis.decision
+    fit = analysis.fit
+    null_interval = None if nc is None else (nc.ci_low, nc.ci_high)
+    control_interval = None if pc is None else (pc.ci_low, pc.ci_high)
+    leaves = None if d is None else (d.leaves_arm_a if d.extended else ())
+    return {
+        "Noise floor at 100M (Gate 2)": {
+            "sigma_init, MHA seeds 1-5": _attr(sel, "sigma_init"),
+            "sigma_init, null-control seeds": analysis.sigma_init_null,
+            "sigma_data, MHA seed 1 over data seeds 1-3": analysis.sigma_data,
+            "s_rep": _attr(sel, "s_rep"),
+            "s_rep / sigma_init": _attr(sel, "ratio"),
+            "pairing threshold": _attr(sel, "threshold"),
+            "test chosen": _attr(sel, "test"),
+        },
+        "Null control (Gate 2)": {
+            "null seeds": _attr(nc, "seeds"),
+            "MHA seeds": _attr(nc, "reference_seeds"),
+            "mean gap, nats": _attr(nc, "mean_gap"),
+            "95% interval": null_interval,
+            "p": _attr(nc, "p"),
+            "verdict": _attr(nc, "verdict"),
+        },
+        "Positive control: L6 against L8 at 300M": {
+            "seeds": _attr(pc, "seeds"),
+            "mean gap, nats": _attr(pc, "mean_gap"),
+            "95% interval": control_interval,
+            "p": _attr(pc, "p"),
+            "verdict": _attr(pc, "verdict"),
+        },
+        "Seed count and detectable effect": {
+            "sigma_init at 300M, MHA seeds 1-5": _attr(d, "sigma_init"),
+            "ladder slope b at 300M": _attr(fit, "b"),
+            "5-seed detectable gap, nats": _attr(d, "detectable_gap"),
+            "undetectable parameter fraction at 5 seeds": _attr(d, "undetectable_param_fraction"),
+            "threshold": _attr(d, "threshold"),
+            "seeds per primary": _attr(d, "n_seeds"),
+            "variants leaving Arm A": leaves,
+            "detectable gap of the chosen design, nats": _attr(d, "bound_gap"),
+        },
+        "Ladder slope b by budget": {
+            budget: _attr(analysis.fits.get(budget), "b") for budget in LADDER_BUDGETS
+        },
+    }
+
+
+def _format_value(value) -> str:
+    if value is None:
+        return BLANK
+    if isinstance(value, str):
+        return _cell(value)
+    if isinstance(value, numbers.Integral):
+        return str(int(value))
+    if isinstance(value, numbers.Real):
+        return f"{float(value):.6g}"
+    if isinstance(value, tuple):
+        if not value:
+            return "none"
+        if all(isinstance(x, float) for x in value):
+            return "[" + ", ".join(_format_value(x) for x in value) + "]"
+        return ", ".join(_format_value(x) for x in value)
+    raise TypeError(f"no rendering for {value!r}")
+
+
+def render_gates(analysis: Analysis) -> str:
+    """The gate report as Markdown: one table per section, then the analysis notes verbatim."""
+    values = gate_values(analysis)
+    lines: list[str] = []
+    nc = analysis.null_control
+    if nc is not None and nc.verdict == pt.VERDICT_DETECTED:
+        lines += [f"> {NULL_WARNING}", ""]
+    for section, labels in GATE_SECTIONS.items():
+        lines += [f"## {section}", "", "| item | value |", "|---|---|"]
+        for label in labels:
+            lines.append(f"| {_cell(label)} | {_format_value(values[section][label])} |")
+        lines.append("")
+    lines.append("Notes:")
+    lines.append("")
+    lines += [f"- {note}" for note in analysis.notes] or ["none"]
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the headline table from run manifests.")
     parser.add_argument("--manifests", default="results/manifests", help="directory of manifests")
@@ -554,11 +892,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if skipped:
         notes.append("unfinished runs left out: " + ", ".join(skipped))
     text = render_markdown(headline_rows(analysis), notes)
+    report = render_gates(dataclasses.replace(analysis, notes=tuple(notes)))
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     path = out / "headline.md"
     path.write_text(text, encoding="utf-8")
     print(path)
+    gates = out / "gates.md"
+    gates.write_text(report, encoding="utf-8")
+    print(gates)
     return 0
 
 

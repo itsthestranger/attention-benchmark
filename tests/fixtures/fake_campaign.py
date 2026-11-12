@@ -21,6 +21,14 @@ Parts that can be left out with `without=(...)`:
 - "exploratory": gqa2, mla96, swa256 at 300M, seeds 1-3
 - "ladder": mha_L6 at 300M, seeds 1-5
 - "ladder_l10": mha_L10 at 300M, seeds 1-3
+- "null": the null control, MHA under the name `null`, standalone 100M runs, seeds 11-15
+- "data_order": MHA init seed 1 with data seeds 2 and 3, standalone 100M runs
+
+With `ladder_branches=True` MHA and the ladder points run with 100M and 200M
+branches (plan §7.2, §12.1) and the campaign holds those branch manifests too. A
+200M branch is its run's 300M loss plus a constant, like a 100M branch. A null
+run is a 100M MHA loss with its own noise stream plus `null_gap`; a data-order
+run is MHA seed 1's 100M branch loss plus `data_sigma` times its own noise.
 
 The returned manifests are unwritten dicts built by `fake_manifest`; write them
 with `manifest.write_manifest` or edit a deep copy.
@@ -38,11 +46,16 @@ from src import config
 from src.model import build_model
 from tests.fixtures.fake_manifests import fake_manifest
 
-PARTS = ("mha", "branches", "reruns", "primaries", "exploratory", "ladder", "ladder_l10")
+PARTS = (
+    "mha", "branches", "reruns", "primaries", "exploratory", "ladder", "ladder_l10", "null", "data_order",
+)
 PRIMARY_VARIANTS = ("gqa4", "mqa", "mla192")
 EXPLORATORY_VARIANTS = ("gqa2", "mla96", "swa256")
 BASE_LOSS = 3.2
 BRANCH_OFFSET = 0.3  # 100M-branch loss minus 300M loss, a constant
+BRANCH_OFFSET_200M = 0.1  # 200M-branch loss minus 300M loss, a constant
+NULL_SEEDS = (11, 12, 13, 14, 15)  # plan §8.1
+DATA_ORDER_SEEDS = (2, 3)  # plan §8.1: MHA init seed 1 under two other data orders
 # Non-embedding parameter counts of the calibration ladder (plan §8.4), synthetic
 # copies of the values build_model gives; the tests check they agree.
 LADDER_PARAMS = {"mha_L6": 10_621_824, "mha": 14_162_304, "mha_L10": 17_702_784}
@@ -57,6 +70,8 @@ VARIANT_INDEX = {
     "swa256": 6,
     "mha_L6": 7,
     "mha_L10": 8,
+    "null": 9,
+    "data_order": 10,
 }
 
 
@@ -86,6 +101,9 @@ def fake_campaign(
     seed: int = 1,
     rerun_sigma: float | None = None,
     without: Iterable[str] = (),
+    null_gap: float = 0.0,
+    data_sigma: float | None = None,
+    ladder_branches: bool = False,
 ) -> list[dict]:
     """A synthetic campaign as a list of manifests. See the module docstring.
 
@@ -93,7 +111,9 @@ def fake_campaign(
     slope per e-fold of parameters). `gaps`: loss added to a variant at 300M
     (its 100M branch carries it too). `n_primary_seeds`: 5 or 8 seeds for MHA
     and the primaries. `rerun_sigma` defaults to sigma / 10. `without`: parts to
-    leave out, from PARTS.
+    leave out, from PARTS. `null_gap`: loss added to every null-control run (0 for
+    a true null). `data_sigma`: SD of data-order noise, default sigma.
+    `ladder_branches`: MHA and the ladder points also branch at 200M.
     """
     unknown = set(without) - set(PARTS)
     if unknown:
@@ -101,6 +121,8 @@ def fake_campaign(
     skip = set(without)
     gaps = dict(gaps or {})
     rerun_sigma = sigma / 10.0 if rerun_sigma is None else rerun_sigma
+    data_sigma = sigma if data_sigma is None else data_sigma
+    ladder_run_branches = ["100M", "200M"] if ladder_branches else None
     common = dict(seed=seed, base=BASE_LOSS, slope=slope, gaps=gaps, sigma=sigma)
     manifests: list[dict] = []
     seeds = range(1, n_primary_seeds + 1)
@@ -113,6 +135,8 @@ def fake_campaign(
     def run(key: str, init_seed: int, loss: float, **kwargs) -> dict:
         variant = "mha" if key.startswith("mha") else key
         ladder = key if key.startswith("mha_L") else None
+        if key.startswith("mha") and ladder_run_branches is not None:
+            kwargs.setdefault("branches", ladder_run_branches)
         return fake_manifest(variant, ladder=ladder, init_seed=init_seed, val_loss=loss, **kwargs)
 
     # The 300M runs of each part, and whether that part has 100M branches.
@@ -126,6 +150,8 @@ def fake_campaign(
             manifests.append(run(key, s, loss_at_300m(key, s)))
             if "branches" not in skip:
                 manifests.append(run(key, s, loss_at_300m(key, s) + BRANCH_OFFSET, branch="100M"))
+                if key == "mha" and ladder_branches:
+                    manifests.append(run(key, s, loss_at_300m(key, s) + BRANCH_OFFSET_200M, branch="200M"))
     if "reruns" not in skip:
         for s in range(1, 4):
             branch_loss = loss_at_300m("mha", s) + BRANCH_OFFSET
@@ -138,10 +164,24 @@ def fake_campaign(
         for variant in EXPLORATORY_VARIANTS:
             for s in range(1, 4):
                 manifests.append(run(variant, s, loss_at_300m(variant, s)))
-    if "ladder" not in skip:
-        for s in range(1, 6):
-            manifests.append(run("mha_L6", s, loss_at_300m("mha_L6", s)))
-    if "ladder_l10" not in skip:
-        for s in range(1, 4):
-            manifests.append(run("mha_L10", s, loss_at_300m("mha_L10", s)))
+    for part, key, key_seeds in (("ladder", "mha_L6", range(1, 6)), ("ladder_l10", "mha_L10", range(1, 4))):
+        if part in skip:
+            continue
+        for s in key_seeds:
+            manifests.append(run(key, s, loss_at_300m(key, s)))
+            if ladder_branches and "branches" not in skip:
+                manifests.append(run(key, s, loss_at_300m(key, s) + BRANCH_OFFSET, branch="100M"))
+                manifests.append(run(key, s, loss_at_300m(key, s) + BRANCH_OFFSET_200M, branch="200M"))
+    if "null" not in skip:
+        for s in NULL_SEEDS:
+            loss = _loss("mha", _non_embedding("mha"), s, **{**common, "gaps": {}}) + BRANCH_OFFSET + null_gap
+            manifests.append(fake_manifest("null", budget="100M", branches=[], init_seed=s, val_loss=loss))
+    if "data_order" not in skip:
+        branch_loss = loss_at_300m("mha", 1) + BRANCH_OFFSET
+        for d in DATA_ORDER_SEEDS:
+            rng = np.random.default_rng([seed, VARIANT_INDEX["data_order"], d])
+            loss = branch_loss + data_sigma * float(rng.standard_normal())
+            manifests.append(
+                fake_manifest("mha", budget="100M", branches=[], init_seed=1, data_seed=d, val_loss=loss)
+            )
     return manifests
