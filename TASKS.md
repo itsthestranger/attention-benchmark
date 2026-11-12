@@ -65,7 +65,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | T-24 ✅ | `primary_test.py` reading `prereg.yaml`, and `test_primary_stats.py` | O | T-01 | §1.2, §1.3 | Simulated nulls give family-wise error ≤ 5% with the test switch and both seed counts; the §1.3 table is reproduced within 0.05; no other code emits a verdict |
 | T-25 ✅ | `ladder_fit.py` with the seed-count rule | O | T-24 | §1.4, §8.4 | A known slope is recovered; the multiplier interval carries both uncertainties; the rule returns 5 or 8 on constructed cases |
 | T-26 ✅ | `rqw_estimate.py` | W | T-18 | §8.5 | Interpolation is correct on constructed manifests; a variant missing from Arm A reports its step-time ratio only |
-| T-27 | `make_tables.py` with its refusal gates | W | T-18, T-24 | §8.7, §10.1 | The headline table builds from fake manifests; each refusal (steps, backend, versions, trunk checkpoint) has a test |
+| T-27 ✅ | `make_tables.py` with its refusal gates | W | T-18, T-24 | §8.7, §10.1 | The headline table builds from fake manifests; each refusal (steps, backend, versions, trunk checkpoint) has a test |
 | T-28 | Plots | W | T-27 | §10.5 | All ten build from fake manifests and build blank; every seed is a visible dot |
 
 ## M5 — Operations and handover
