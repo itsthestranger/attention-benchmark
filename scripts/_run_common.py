@@ -44,10 +44,12 @@ from src.utils import manifest as mf
 
 RUN_SPEC_KEYS = (
     "variant", "arm", "ladder", "init_seed", "data_seed", "peak_lr",
-    "budget", "steps", "branches", "lr_source", "overrides",
+    "budget", "steps", "branches", "lr_source", "overrides", "timing_pass_id",
 )
 # Keys a command line may give or override, by the name the spec file uses.
 SPEC_FLAGS = ("variant", "arm", "ladder", "init_seed", "data_seed", "peak_lr", "steps", "lr_source")
+# The other keys a flag of the same name gives (train.py gives timing_pass_id; the others take it from the spec).
+OTHER_SPEC_FLAGS = ("budget", "branches", "timing_pass_id")
 OPS_KEYS = (
     "checkpoint_every_seconds", "checkpoint_every_steps", "eval_every_steps",
     "eval_curve_windows", "eval_batch_size", "keep_checkpoints",
@@ -88,7 +90,10 @@ def spec_arguments(parser: argparse.ArgumentParser, *, parent_budget: bool) -> N
     if parent_budget:
         parser.add_argument("--budget", dest="budget", metavar="LABEL", help="budget label of the run")
     parser.add_argument("--steps", type=int, help="step count, instead of a budget label")
-    parser.add_argument("--branches", nargs="+", metavar="LABEL", help="branch budget labels")
+    parser.add_argument("--branches", nargs="*", metavar="LABEL",
+                        help="branch budget labels. Give the flag with no label (`--branches`) for a run with "
+                             "no branch, e.g. a standalone 100M run. Not given, the run spec's branches or the "
+                             "arm's default apply.")
     parser.add_argument("--lr-source", dest="lr_source", metavar="RUN_NAME",
                         help="name of the LR-sweep run that chose the peak LR")
     parser.add_argument("--override", action="append", metavar="PATH=VALUE",
@@ -135,7 +140,7 @@ def build_spec(args) -> dict:
     path = _spec_path(args)
     spec = load_run_spec(path) if path is not None else {key: None for key in RUN_SPEC_KEYS}
     spec["overrides"] = dict(spec["overrides"] or {})
-    for key in SPEC_FLAGS + ("budget", "branches"):
+    for key in SPEC_FLAGS + OTHER_SPEC_FLAGS:
         value = getattr(args, key, None)
         if value is not None:
             spec[key] = value
@@ -148,6 +153,29 @@ def build_spec(args) -> dict:
         except yaml.YAMLError as exc:
             raise EntryError(f"--override {item!r}: the value is not valid YAML: {exc}") from exc
     return spec
+
+
+def check_timing_pass(resolved: dict, timing_pass_id) -> str | None:
+    """The timing pass a run takes its step count from (plan §8.5, §10.6), checked before any work.
+
+    Required for the wall-clock arm, refused for every other arm. The manifest validator checks the
+    same rule at the end of a run; this refuses at the start, so an Arm C run cannot train and then fail.
+    """
+    if timing_pass_id is not None and (not isinstance(timing_pass_id, str) or not timing_pass_id):
+        raise EntryError(f"--timing-pass-id must be a non-empty string, got {timing_pass_id!r}")
+    wallclock = resolved["arm"] == mf.WALLCLOCK_ARM
+    if wallclock and timing_pass_id is None:
+        raise EntryError(
+            f"--timing-pass-id is required: arm {mf.WALLCLOCK_ARM!r} takes its step count from a timing "
+            "pass (plan §8.5). Give the timing_pass_id that the timing pass wrote (or the run-spec key "
+            "timing_pass_id)."
+        )
+    if not wallclock and timing_pass_id is not None:
+        raise EntryError(
+            f"--timing-pass-id is refused: only arm {mf.WALLCLOCK_ARM!r} has a timing pass, and this run's "
+            f"arm is {resolved['arm']!r}"
+        )
+    return timing_pass_id
 
 
 def resolve_spec(spec: dict) -> dict:
@@ -554,6 +582,7 @@ class Job:
     branch: dict | None
     until: int | None
     branch_points: tuple[int, ...] = ()
+    timing_pass_id: str | None = None  # required for the wall-clock arm, null otherwise (check_timing_pass)
 
 
 def run_job(trainer, job: Job) -> int:
@@ -641,7 +670,7 @@ def write_manifest(job: Job, trainer, sessions: list[str], *, completed: bool, f
         final_metrics=final,
         branch=job.branch,
         lr_source=job.lr_source,
-        timing_pass_id=None,
+        timing_pass_id=job.timing_pass_id,
     )
     return mf.write_manifest(manifest, job.layout.manifests)
 
