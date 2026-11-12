@@ -46,7 +46,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | T-15 ✅ | Trainer: autocast and GradScaler with unscale before clipping, accumulation, skip and steps-taken logging, in-loop backend and dtype assertions | O+W | T-04, T-13, T-14 | §2.3, §7, §13.6 | A tiny model overfits on CPU; an injected inf gradient is counted as a skipped step; accumulation matches the large batch; `gpu` tests written |
 | T-16 | Checkpoint and resume | O+W | T-15 | §5, §12.3 | Kill at step 500 and resume gives the uninterrupted curve; the last two checkpoints are kept; resume needs no human input |
 | T-17 | `branch.py` | O+W | T-16 | §5, §7.2 | A branch from a trunk checkpoint matches an uninterrupted run; its manifest records parent and branch step |
-| T-18 | Manifest and run naming | W | T-15 | §10.6, §11 | Schema test covers every field; names parse and round-trip |
+| T-18 ✅ | Manifest and run naming | W | T-15 | §10.6, §11 | Schema test covers every field; names parse and round-trip |
 | T-19 ✅ | Determinism test for `ref` and the reproducibility measurement script | W | T-15 | §5 | 100 steps are bit-identical twice on CPU; the `gpu` measurement is written |
 
 ## M3 — Evaluation

@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 2. 15 of 32 tasks merged; `cpu` tier green on `main` (1,183 tests).
+Last updated: 2026-11-12, session 2. 16 of 32 tasks merged; `cpu` tier green on `main` (1,694 tests).
 
 ## Done
 
@@ -20,10 +20,11 @@ Last updated: 2026-11-12, session 2. 15 of 32 tasks merged; `cpu` tier green on 
 - T-25 ladder fit, effective-parameter multiplier and seed-count rule (#14).
 - T-20 evaluation with context-bucketed loss (#15).
 - T-19 determinism test and reproducibility measurement (#16).
+- T-18 manifest and run naming (#17).
 
 ## In progress
 
-- **T-18 manifest**: implemented by a worker in `/home/user/wt/T-18`, committed locally on `task/T-18-manifest`. **Not yet reviewed, not pushed.** The worker raised one open point: a trunk-checkpoint manifest has the same name as its run's manifest, so the two would overwrite each other in one directory.
+- Nothing.
 
 ## Blocked
 
@@ -53,7 +54,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–100 so far).
+All decisions are in `docs/decisions.md` (rows 1–106 so far).
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
@@ -92,9 +93,9 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. Review and merge T-18 (see "In progress").
-2. T-06 MLA absorbed path (O+W), T-10 step-0 logit scale (O), T-16 checkpoint and resume (O+W).
-3. T-08 properties and FLOPs (W), T-26 wall-clock estimate (W, after T-18), T-27 tables (W, after T-18).
+1. T-16 checkpoint and resume (O+W), T-06 MLA absorbed path (O+W), T-10 step-0 logit scale (O).
+2. T-08 properties and FLOPs (W), T-26 wall-clock estimate (W), T-27 tables with refusal gates (W): all unblocked.
+3. T-21 probes (W), T-22 retrieval generators (W), then T-09, T-17, T-23.
 
 ## Notes for the next session
 
@@ -108,8 +109,7 @@ How the loop has been run:
 
 Designs already worked out for tasks not yet started:
 
-- **T-18 manifest.** Run names: `{variant}-{arm tag}-{tokens}-lr{lr}-s{init}-d{data}[-b{branch}]`, with the learning rate in shortest scientific notation and the exponent's minus sign dropped (1e-3 is `lr1e3`, 1.2e-3 is `lr1.2e3`), a ladder name such as `mha_L6` in the variant field, and `{steps}steps` in the tokens field for runs defined by steps. Manifest: one JSON per run or branch with `kind` in run / branch / trunk_checkpoint, a `completed` flag, steps attempted / taken / skipped, scaler scale, versions, GPU, hashes of dataset, tokenizer and data order, the step-time series, `final_metrics` with at least `val_loss`, and the branch's parent run, checkpoint and step. `validate_manifest` reports every problem at once.
 - **T-10 logit scale.** Needs a common way to read pre-softmax scores from every attention module; only the sliding-window module exposes weights so far.
 - **T-06 absorbed MLA.** Replaces `opt` decode in `mla.py`; the cache already holds only the latent and the positional key.
-- **T-16 checkpoint.** The trainer keeps no hidden position: data and schedule are functions of `trainer.step`. A checkpoint needs the model, the optimizer, the scaler, `step`, `steps_taken` and the step records.
+- **T-16 checkpoint.** Manifests come from `src/utils/manifest.py` (`build_manifest`, `write_manifest`); an unfinished run writes `completed: false` and is not a result. The trainer keeps no hidden position: data and schedule are functions of `trainer.step`. A checkpoint needs the model, the optimizer, the scaler, `step`, `steps_taken` and the step records.
 - **T-23 benchmark.** Compare sliding-window memory with its cap, not with per-token growth (decision 77).
