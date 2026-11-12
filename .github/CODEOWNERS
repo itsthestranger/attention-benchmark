@@ -1,0 +1,15 @@
+# Frozen files (plan §17.3). A change to any of these needs Phil's approval.
+# Requires "Require review from Code Owners" in the branch protection of main.
+
+/docs/plan_v5.md        @itsthestranger
+/configs/base.yaml      @itsthestranger
+/configs/recipe.yaml    @itsthestranger
+/configs/prereg.yaml    @itsthestranger
+/tests/tolerances.py    @itsthestranger
+
+# The pre-registration lives in a section of README.md. CODEOWNERS works per
+# file, so the whole file is covered.
+/README.md              @itsthestranger
+
+# This file, so the protection cannot be removed without the same approval.
+/.github/CODEOWNERS     @itsthestranger
