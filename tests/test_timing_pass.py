@@ -268,6 +268,23 @@ def test_the_pass_refuses_to_run_without_the_recipe_values(tmp_path):
     assert not (tmp_path / "x.json").exists()
 
 
+def test_every_track_hands_the_expected_backend_to_its_trainer():
+    # The Trainer refuses an expected backend off CUDA, so the refusal shows that the
+    # name reaches it, on the opt and on the ref track. Added in review.
+    steps = 2
+    stream = TrainStream(
+        synthetic_split(steps * 8 * 32 + 1, tp.SYNTHETIC_VOCAB, seed=0),
+        context_length=32, sequences_per_step=8, data_seed=1,
+    )
+    setup = tp.TimingSetup(stream=stream, overrides=dict(tp.SYNTHETIC_DIMS), peak_lr=1e-3, steps=steps,
+                           discarded=0, device=CPU, expected_backend="efficient")
+    for track in (tp.Track("mha", "mha", "opt"), tp.Track("swa256/ref", "swa256", "ref")):
+        with pytest.raises(ValueError, match="CUDA only"):
+            tp.time_repetition(track, setup)
+        with pytest.raises(ValueError, match="CUDA only"):
+            tp.measure_share(track, setup)
+
+
 def test_the_expected_backend_is_required_on_cuda_and_refused_on_cpu(tmp_path):
     from src.eval import inference as inf
 
