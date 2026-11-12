@@ -35,7 +35,7 @@ VARIANT_TABLE = {
     "gqa4": ({"type": "grouped", "n_kv_heads": 4}, 1152),
     "gqa2": ({"type": "grouped", "n_kv_heads": 2}, 1216),
     "mqa": ({"type": "grouped", "n_kv_heads": 1}, 1248),
-    "swa256": ({"type": "sliding_window", "n_kv_heads": 8, "window": 256}, 1024),
+    "swa256": ({"type": "sliding_window", "n_kv_heads": 8, "window": 256, "opt_path": "chunked"}, 1024),
     "mla192": ({"type": "mla", "d_c": 192, "d_c_q": 192, "rope_dim": 24}, 1048),
     "mla96": ({"type": "mla", "d_c": 96, "d_c_q": 96, "rope_dim": 24}, 1224),
     "null": ({"type": "grouped", "n_kv_heads": 8}, 1024),
@@ -726,3 +726,23 @@ def test_hash_stable_across_processes_with_different_hash_seeds():
             check=True,
         )
         assert out.stdout.strip() == expected
+
+
+# --- F3 (T-37): the sliding-window opt path is a config key, and only SWA has it ----------------
+
+
+def test_swa256_resolves_with_the_chunked_opt_path():
+    assert res("swa256")["model"]["attention"]["opt_path"] == "chunked"
+
+
+def test_only_swa256_has_an_opt_path_key_in_its_resolved_attention_block():
+    for name in config.variant_names():
+        has_key = "opt_path" in res(name)["model"]["attention"]
+        assert has_key == (name == "swa256"), name
+
+
+def test_the_opt_path_is_part_of_the_config_hash():
+    chunked = res("swa256")
+    flex = res("swa256", overrides={"model.attention.opt_path": "flex"})
+    assert flex["model"]["attention"]["opt_path"] == "flex"
+    assert config.config_hash(chunked) != config.config_hash(flex)
