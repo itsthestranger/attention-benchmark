@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, session 2. 19 of 32 tasks merged; `cpu` tier green on `main` (2,185 tests, about two minutes).
+Last updated: 2026-11-12, session 2. 21 of 32 tasks merged; `cpu` tier green on `main` (2,284 tests, about two minutes).
 
 ## Done
 
@@ -24,10 +24,12 @@ Last updated: 2026-11-12, session 2. 19 of 32 tasks merged; `cpu` tier green on 
 - T-08 attention properties and FLOP counts (#18).
 - T-16 checkpoint and resume (#19).
 - T-10 step-0 logit-scale test (#21).
+- T-09 config solver and exact parameter counts (#22).
+- T-26 computed wall-clock estimate (#23).
 
 ## In progress
 
-- **T-09 config solver**, **T-26 wall-clock estimate**, **T-27 headline table**: each implemented by a worker in its worktree under `/home/user/wt/`, committed locally on `task/T-09-solver`, `task/T-26-rqw`, `task/T-27-tables`. **Not yet reviewed, not pushed.** T-27's worker raised two points to settle in review: without the ladder there is no seed count and so no primary verdict (the brief contradicted itself; the code follows the plan's order), and it changed the synthetic campaign's default noise seed after seeing an outlier draw.
+- **T-27 headline table**: implemented by a worker in `/home/user/wt/T-27`, reviewed (three tests added, one rule changed), committed locally on `task/T-27-tables`, not pushed. **Not yet reviewed, not pushed.** T-27's worker raised two points to settle in review: without the ladder there is no seed count and so no primary verdict (the brief contradicted itself; the code follows the plan's order), and it changed the synthetic campaign's default noise seed after seeing an outlier draw.
 
 ## Blocked
 
@@ -48,6 +50,7 @@ These do not block the build. Each is implemented as described and can be change
 - **Multiplier interval (decisions 87, 88, 92).** The interval of the effective-parameter multiplier is the set of gap / slope ratios the data do not reject, with the noise the 8-layer MHA runs contribute to both counted once. It reports no interval when the ladder slope cannot be told from zero. No simulated coverage test is committed, because `tests/tolerances.py` has no allowance for one; say if you want one and with what allowance.
 - **Reproducibility in `opt` mode (decision 99).** Plan §5 asks that two identical runs "land within a measured, recorded tolerance". No tolerance exists before the measurement, so the `gpu` and `t4` tests measure and record the difference and apply no threshold.
 - **Step-0 logit scale (decision 118).** "Attention-logit std" is pooled over all layers, heads and causal pairs of the full-size model, at two init seeds. The seven variants land between 0.965 and 1.019 of MHA. A single deep layer moves by up to about 10% between seeds of one variant, so the test does not compare layer by layer.
+- **Wall-clock estimate below 100M (decision 123).** A variant slower than MHA affords fewer than 1,526 steps. Its loss is then read off the same line in ln(tokens), extended below the 100M branch, and flagged as extrapolated.
 - **`configs/data.yaml` (decision 38).** Not frozen. Consider adding it to CODEOWNERS once the hashes are filled in.
 
 ## Deviations from the plan
@@ -58,7 +61,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–119 so far).
+All decisions are in `docs/decisions.md` (rows 1–124 so far).
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80).
 
@@ -98,7 +101,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. Review and merge T-09, T-26 and T-27 (see "In progress").
+1. Merge T-27 (see "In progress").
 2. T-17 branch (O+W): write `tests/test_wsd_branch.py` first. T-06 MLA absorbed path (O+W).
 3. T-11 graph diff (W, after T-09), T-28 plots (W, after T-27), T-21 probes (W), T-22 retrieval generators (W), T-23 benchmark scripts (W, after T-06).
 

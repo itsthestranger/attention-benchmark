@@ -32,7 +32,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | T-06 | MLA absorbed path for inference | O+W | T-05 | §3.3 | Matches the naive path to 1e-4 |
 | T-07 ✅ | `sliding_window.py`: `ref`, chunked `opt`, FlexAttention path behind an availability check | O+W | T-02 | §2.3 | Weights outside the window are exactly zero, boundaries included; `ref`/`opt` agree; chunked path scores at most 512 keys per query; `t4` timing test written |
 | T-08 ✅ | `AttnBase` properties and `utils/flops.py` | W | T-04, T-05, T-07 | §3.1, §3.2, §4.2 | KV bytes match §3.2 for every variant; attention FLOP shares at ctx 512/1,024/2,048 are 8/15/27% causal and 15/27/42% dense, within one point |
-| T-09 | `solve_config.py` and `test_params.py` | W | T-08 | §3.2, §4.3, §8.4 | 17,308,032 exactly for non-MLA variants; MLA offsets +3,072 and +1,536; ladder at 10,621,824 and 17,702,784 non-embedding; fails loudly instead of rounding |
+| T-09 ✅ | `solve_config.py` and `test_params.py` | W | T-08 | §3.2, §4.3, §8.4 | 17,308,032 exactly for non-MLA variants; MLA offsets +3,072 and +1,536; ladder at 10,621,824 and 17,702,784 non-embedding; fails loudly instead of rounding |
 | T-10 ✅ | Step-0 logit-scale test across all variants | O | T-04, T-05, T-07 | §3.3, §5 | Attention-logit std agrees within 10% across the seven variants |
 | T-11 | CI graph-diff check | W | T-09 | §4.1 | Fails when anything outside the attention subtree differs, except d_ff in Arm A and layer count in the ladder |
 | T-12 ✅ | Recurrence anchor module | W | T-02 | §9.2 | Causal and shape tests pass; the state is one d_model vector |
@@ -64,7 +64,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | --- | --- | --- | --- | --- | --- |
 | T-24 ✅ | `primary_test.py` reading `prereg.yaml`, and `test_primary_stats.py` | O | T-01 | §1.2, §1.3 | Simulated nulls give family-wise error ≤ 5% with the test switch and both seed counts; the §1.3 table is reproduced within 0.05; no other code emits a verdict |
 | T-25 ✅ | `ladder_fit.py` with the seed-count rule | O | T-24 | §1.4, §8.4 | A known slope is recovered; the multiplier interval carries both uncertainties; the rule returns 5 or 8 on constructed cases |
-| T-26 | `rqw_estimate.py` | W | T-18 | §8.5 | Interpolation is correct on constructed manifests; a variant missing from Arm A reports its step-time ratio only |
+| T-26 ✅ | `rqw_estimate.py` | W | T-18 | §8.5 | Interpolation is correct on constructed manifests; a variant missing from Arm A reports its step-time ratio only |
 | T-27 | `make_tables.py` with its refusal gates | W | T-18, T-24 | §8.7, §10.1 | The headline table builds from fake manifests; each refusal (steps, backend, versions, trunk checkpoint) has a test |
 | T-28 | Plots | W | T-27 | §10.5 | All ten build from fake manifests and build blank; every seed is a visible dot |
 
