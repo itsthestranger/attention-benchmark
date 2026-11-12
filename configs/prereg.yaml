@@ -62,7 +62,7 @@ context_use:
   buckets: [[0, 64], [64, 256], [256, 512], [512, 1024]]
   late_context_min: 512
   # In-context-learning score: mean loss at c in `late` minus mean loss at c
-  # in `early`.
+  # in `early`. Both windows include their end points: 450 <= c <= 550.
   icl_score:
     late: [450, 550]
     early: [40, 60]
