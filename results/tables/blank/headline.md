@@ -23,3 +23,11 @@ Notes:
 - seed count rule skipped: no ladder fit
 - comparisons skipped: null control not computed
 - comparisons skipped: positive control not computed
+
+Disclosures:
+
+- MLA bundles two changes, low-rank KV compression and decoupled RoPE; they cannot be fully separated, and compression alone was not measured (plan §13.2).
+- Kernel maturity is not architecture: MHA, GQA and MQA use a mature fused kernel, while SWA's block-skipping path and MLA's absorbed path are newer or hand-written, so any SWA or MLA timing gap is partly implementation (plan §13.3).
+- Hardware: every number here is from a T4 (sm75) with the memory-efficient kernel, not FlashAttention-2 and no fp8; rankings may differ on Ampere and later (plan §13.4).
+- Scale: 17M parameters, context 1,024, 300M tokens, one corpus and one tokenizer; nothing here extrapolates to production scale (plan §13.5).
+- Parameter matching moves capacity into the MLP: iso-parameter variants spend their KV-projection savings on a wider MLP, so iso-parameter does not isolate attention; see the Arm B table (plan §13.1).
