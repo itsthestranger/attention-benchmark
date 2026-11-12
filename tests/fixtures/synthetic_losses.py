@@ -86,3 +86,36 @@ def simulate_experiments(
     reruns = stable + sr * rng.standard_normal((n_experiments, n_pairs))
     deltas = mha_select[:, :n_pairs] - reruns
     return SyntheticExperiments(mha_select, deltas, reruns, test[:, 0, :], test[:, 1:, :])
+
+
+# --- SYNTHETIC ladder (plan §8.4): MHA at three sizes --------------------------
+
+# Non-embedding parameter counts of the plan's ladder table, and its seed counts.
+LADDER_SIZES = {"mha_L6": 10_621_824, "mha": 14_162_304, "mha_L10": 17_702_784}
+LADDER_SEEDS = {"mha_L6": (1, 2, 3, 4, 5), "mha": (1, 2, 3, 4, 5), "mha_L10": (1, 2, 3)}
+
+
+def synthetic_ladder(
+    rng: np.random.Generator | None,
+    *,
+    a: float,
+    b: float,
+    sigma: float = 0.0,
+    seeds: dict[str, tuple[int, ...]] | None = None,
+) -> dict[str, tuple[int, dict[int, float]]]:
+    """SYNTHETIC ladder runs: loss = a - b ln N + sigma * noise, per seed.
+
+    The shape `analysis.ladder_fit.fit_ladder` takes. With sigma 0 (rng may be
+    None) the points lie exactly on the line.
+    """
+    seeds = dict(LADDER_SEEDS if seeds is None else seeds)
+    out = {}
+    for name, size in LADDER_SIZES.items():
+        if name not in seeds:
+            continue
+        line = a - b * float(np.log(size))
+        noise = (
+            np.zeros(len(seeds[name])) if sigma == 0.0 else sigma * rng.standard_normal(len(seeds[name]))
+        )
+        out[name] = (size, {s: float(line + e) for s, e in zip(seeds[name], noise)})
+    return out
