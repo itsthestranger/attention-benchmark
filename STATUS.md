@@ -15,10 +15,11 @@ Last updated: 2026-11-12, session 1.
 - T-12 recurrence anchor (#8).
 - T-04 grouped attention: MHA, GQA, MQA (#9).
 - T-15 trainer (#10).
+- T-07 sliding-window attention (#11).
 
 ## In progress
 
-- T-07 sliding-window attention, branch `task/T-07-sliding-window`: implemented, in review.
+- Nothing.
 
 ## Blocked
 
@@ -46,7 +47,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–72 so far).
+All decisions are in `docs/decisions.md` (rows 1–78 so far).
 
 ## Hardware tests written, never run
 
@@ -54,10 +55,13 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 - `gpu`, trainer (`test_trainer.py`): fp16 training with unscaled gradient norms, a skipped step with scaler back-off, scaler growth, refusal without scaler settings, the backend restriction. **The fp16, GradScaler and backend code in the trainer has never executed.**
 - `gpu`: causal leak under fp16 (`test_causality.py`), `ref`/`opt` agreement under fp16 (`test_reference.py`), `opt` decode peak memory at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
+- `gpu`, sliding window (`test_sliding_window.py`): both `opt` paths against `ref` in fp32 and fp16, including compiled FlexAttention.
 - `t4`: `opt` decode time at cache 8k below MHA's (`test_grouped_decode.py`), the tier canary (`test_scaffold.py`).
+- `t4`, sliding window (`test_sliding_window.py`): SWA attention time at ctx 1,024 below MHA's, for the chunked and the FlexAttention path.
 
 ## To check on real hardware
 
+- Whether FlexAttention compiles and runs on the T4 (plan §2.3), and which SWA path is faster there.
 - Whether the fused kernel copies K and V when given a slice of the cache storage (plan §2.3). If it does, decode needs an explicit matmul, disclosed.
 
 ## Environment
@@ -76,6 +80,6 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. T-07 sliding window (O+W) and T-05 MLA naive path (O+W): tests first.
-2. T-15 trainer (O+W), after T-04.
+1. T-05 MLA naive path (O+W): tests first. T-16 checkpoint and resume (O+W).
+2. T-18 manifest (W), T-20 evaluation (W), T-19 determinism (W).
 3. T-25 ladder fit (O), waits for Phil's two answers.
