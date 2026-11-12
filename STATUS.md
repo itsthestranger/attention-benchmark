@@ -8,10 +8,10 @@ Last updated: 2026-11-12, session 1.
 - T-00 scaffold (#1).
 - T-01 config system (#2).
 - T-02 backbone and attention registry (#3).
+- T-13 data pipeline (#4).
 
 ## In progress
 
-- T-13 data pipeline, branch `task/T-13-data`: worker implementing.
 - T-24 primary test, branch `task/T-24-primary-test`: orchestrator implementing.
 
 ## Blocked
@@ -22,6 +22,15 @@ Last updated: 2026-11-12, session 1.
 
 - Which PyTorch, Python and CUDA versions does Kaggle's GPU image ship? Needed to pin the environment. Until then: torch 2.15.0, Python 3.12 in CI.
 
+## Readings of the plan for Phil to confirm
+
+These do not block the build. Each is implemented as described and can be changed in one place.
+
+- **Data order (decision 28).** The data seed gives a shuffled order of the 1,024-token windows, also for data seed 1. A run reads a prefix of that order. Plan §6 says "from token 0 in the same order"; §4.5 gives the order its own seeded generator.
+- **EOS ownership (decision 31).** The EOS after a document counts as part of that document, so the first token of the next document has context c = 0.
+- **In-context-learning windows (decision 20).** End points included: 450 ≤ c ≤ 550 and 40 ≤ c ≤ 60.
+- **`configs/data.yaml` (decision 38).** Not frozen. Consider adding it to CODEOWNERS once the hashes are filled in.
+
 ## Deviations from the plan
 
 - fp32 `ref`/`opt` agreement tolerance is 1e-5, not 1e-6 (plan §5). Approved by Phil on 2026-11-12. Reason: 1e-6 is at the fp32 rounding floor; correct implementations measured up to 1.8e-6.
@@ -29,7 +38,7 @@ Last updated: 2026-11-12, session 1.
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–27 so far).
+All decisions are in `docs/decisions.md` (rows 1–38 so far).
 
 ## Environment
 
@@ -40,6 +49,7 @@ All decisions are in `docs/decisions.md` (rows 1–27 so far).
 
 - Confirm or change the two proposed thresholds in `configs/prereg.yaml` before the pre-registration commit: `paired_if_s_rep_ratio_below: 0.6` and `max_undetectable_param_fraction: 0.05`.
 - `recipe.yaml` leaves `micro_batch`, `init_scale` and `growth_interval` unset until the smoke runs.
+- After tokenizing the corpus with `python -m scripts.prepare_data`, paste the two hashes it prints into `configs/data.yaml`.
 
 - Protect `main`: pull requests only, the `cpu` check required, and "Require review from Code Owners" enabled, otherwise CODEOWNERS has no effect.
 - Create the labels `needs-phil` and `question`.

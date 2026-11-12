@@ -1,0 +1,25 @@
+# Data constants (plan §6). The two hashes are unset until Phil has tokenized
+# the corpus, once. After that they never change: re-tokenizing makes every
+# earlier run incomparable to every later one, and no metric shows it.
+
+corpus: fineweb-edu
+text_column: text
+
+tokenizer:
+  kind: byte_level_bpe
+  vocab_size: 8192
+  eos_token: "<|endoftext|>"
+  sha256: null             # UNSET until the tokenizer is trained
+
+context_length: 1024
+
+# Split sizes in tokens. Splits are disjoint at document level.
+splits:
+  train: 400000000
+  val: 4000000
+  test: 4000000
+
+# First tokens of the train split, for implementation smoke tests only.
+smoke_tokens: 5000000
+
+dataset_sha256: null       # UNSET until the corpus is tokenized

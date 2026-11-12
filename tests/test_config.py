@@ -100,7 +100,7 @@ def _reverse_keys(node):
 
 def test_every_yaml_file_loads_to_a_dict():
     paths = sorted(CONFIGS.rglob("*.yaml"))
-    assert len(paths) == 16  # 3 top-level, 8 variants, 2 ladder, 3 arms
+    assert len(paths) == 17  # 4 top-level, 8 variants, 2 ladder, 3 arms
     for path in paths:
         assert isinstance(yaml.safe_load(path.read_text()), dict), path
 
