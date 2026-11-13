@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-12, end of session 3. Every task of `TASKS.md` is merged except T-21 (waits for two decisions by Phil) and T-31 (this handover, closed by the pull request that carries this file). The `cpu` tier is green on `main`: 3,163 tests, about four minutes.
+Last updated: 2026-11-13, during session 4. T-21 (probes) and T-38 (probe report) are merged. A second independent review found two defects that block the handover and eight to fix before the first reported GPU hour; they are tasks T-39 to T-44 and none is fixed yet. The `cpu` tier is green on `main`: 3,429 tests, about four and a half minutes.
 
 ## Done
 
@@ -41,26 +41,87 @@ Last updated: 2026-11-12, end of session 3. Every task of `TASKS.md` is merged e
 - T-36 three command-line gaps (#37).
 - T-30 `RUNBOOK.md` with `tests/test_runbook.py` (#38).
 - T-37 fixes for the handover audit (#39).
+- T-38 probe report for Gate 1 and the 1/n line in plot 9 (#41).
+- T-21 probe generators and probe training script (#42).
 
 ## In progress
 
-- Nothing is running. Every worker has stopped and every branch is pushed.
-- T-21 probes: waits for two decisions (see "Blocked" and "Open questions").
+- T-39 to T-44, the fixes for the session-4 review: not started. T-39 and T-40 are `O+W`: the orchestrator writes their tests first.
+- `RUNBOOK.md` §2.3 (probe commands): waits for the probe grid from Phil.
 
 ## Handover checklist (plan §17.4)
 
 | # | Item | State |
 | --- | --- | --- |
-| 1 | Every task merged, `cpu` tier green in CI | **Not met**: T-21 (probes) is unmerged and waits for Phil. Everything else is merged and green. |
-| 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met for everything merged; listed below. T-21's are not written. |
-| 3 | Headline table and all ten plots generate from fake manifests and blank | Met. Plot 9 (probes) has no producer for its records until T-21. |
-| 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | Met except §2.3 (probes, Gate 1) and the sweep seed, which wait for Phil. Its commands are parsed by `tests/test_runbook.py`; none has run on a GPU. |
-| 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 188. |
-| 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Done; see the next section. |
+| 1 | Every task merged, `cpu` tier green in CI | **Not met**: T-39 to T-44 are open. T-21 is merged. |
+| 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met for everything merged; listed below. |
+| 3 | Headline table and all ten plots generate from fake manifests and blank | Met, with the defects of the review: plot 7 draws runs the analysis does not read (G3), and the timing and inference tables do not exist (G5). |
+| 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | **Not met**: §2.3 has no commands (probe grid open), one statement about resuming is false (G1), the final commands refuse after a recorded divergence (G6), and there is no pruning step (G7). |
+| 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 201. The review found deviations that were not listed; they are below now. |
+| 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Two reviews done (sessions 3 and 4). The second one's findings are listed below; none is fixed yet. |
 
-The harness is ready for Phil's verification step except for the probes. It is not "done" by the checklist until T-21 is merged.
+The harness is **not** ready for the GPU weeks. Week 1's MHA runs are final results that are never rerun, so G1 to G8 come first.
 
-## Handover audit (plan §17.4 item 6)
+## Session-4 review (2026-11-13)
+
+Phil asked for a second review of everything built so far. A fresh agent on the full model, which wrote none of the code, reviewed `main` at `384e8b3`; its report is `docs/review_s4.md`. It checked every number it looked at against the plan (all match), made 50 deliberate breaks (44 caught) and ran the runbook's whole command sequence on CPU with tiny budgets. The orchestrator re-ran its reproductions of H1, H2, G1, G6 and G8 and got the same results.
+
+| # | Finding | Status |
+| --- | --- | --- |
+| H1 | The analysis compares, and gives verdicts on, runs trained under different recipes, init rules, precision or with `--override`; the headline's parameter and `d_ff` columns come from `configs/`, not from the manifests. | Open: T-39. |
+| H2 | The seed-count rule is computed and printed from an incomplete ladder; in synthetic campaigns near the threshold the decision differed from the complete ladder's. | Open: T-39. |
+| G1 | A stop at `--until` leaves no checkpoint to resume from, so an MHA trunk re-runs up to ten minutes of steps and overwrites the branch-point checkpoint its 100M branch used. `RUNBOOK.md` says it resumes from step 1,221. | Open: T-40, T-44. |
+| G2 | A manifest records only the last session's environment and GPU, and a resume after an image change is not refused. | Open: T-40. |
+| G3 | Plot 7 draws every manifest in the directory in the variant's colour, sweep points at rejected learning rates included, and shows variant losses while the gate is closed. The session-3 note that the runbook's order prevents this was wrong: the variant sweeps are such runs. | Open: T-39. |
+| G4 | Peak memory, GPU utilisation and the context-bucketed loss at every evaluation (plan §10.2) are not recorded for a training run. | Open: T-41. GPU utilisation and time-to-loss-X need a definition from Phil. |
+| G5 | Attention's measured share, peak memory, the `ref` track, the spread, prefill, maximum batch at 8k and measured KV bytes are written to JSON and read by nothing. | Open: T-42. |
+| G6 | One recorded diverged run makes `make_tables` and `make_plots` refuse without `--skip-unfinished`, which the runbook's final step forbids. | Open: T-39, T-44. |
+| G7 | Checkpoints reach about 20 GB in week 1 and nothing prunes them. | Open: T-43, T-44. |
+| G8 | The plots skip the timing-source refusals the tables apply. | Open: T-39. |
+| M1 | The hardware disclosure in `headline.md` is fixed text, printed whatever the manifests say. | Open: T-39. |
+| M2 | A non-finite loss on the last training step blocks the manifest for good. | Open: T-40. |
+| M3 | The positive control is two-sided: L6 significantly better than L8 would read as detected. | **For Phil.** |
+| M4 | `bench.py --with-ref` repeats the `opt` KV check and the maximum-batch search for each `ref` document and labels the result `ref`. | Listed; looked at in T-42. |
+| M5 | The timing pass compares no dataset hash while `configs/data.yaml` is unset, and with `--with-ref` and the share runs it is about 8,800 steps against the plan's 4,620. | Listed: T-44 states the budget; the step count is **for Phil**. |
+| M6 | A resume is refused when the number of visible CUDA devices changes; the shim does not set `CUDA_VISIBLE_DEVICES`. | Listed: T-44. |
+| M7 | The shim can only call `scripts.train`, and its example config collides by name with the runbook's MHA runs. | Listed: T-44. |
+| M8 | `lr_source` and `timing_pass_id` are free text, never checked against an existing run or file. | Listed, not fixed. |
+| M9 | A FlexAttention SWA run would record the backend `efficient`, a kernel it never called. | Listed; to settle on the T4. |
+| M10 | `gates.md` prints two "slope at 300M" values that differ once MHA has 8 seeds, unexplained. | Open: T-39. |
+| M11 | CODEOWNERS does not cover the files that decide what CI runs: `ci.yml`, `tests/conftest.py`, `tests/hardware.py`, `pyproject.toml`. | Open: T-44. |
+| M12 | No smoke run reaches an evaluation, which runs at batch 64 and not at the micro-batch. | Open: T-44. |
+| M13 | The `opt` reproducibility measurement is built and then dropped; the runbook has no step for `scripts/measure_reproducibility.py`. The session-3 statement that the tests "measure and record" was wrong. | Open: T-44. |
+| M14 | Six breaks no test caught: B10 (Arm B outside the step-parity scope), B22 (`gpu_shared` always false), B36 (reruns not limited to registered seeds), B45 (`skipped_in_first_100` counts step 100), B46 (seed-count threshold `>=`), B47 (in-run validation ignores `eval_curve_windows`). | Open: T-39 (B10, B36, B46), T-40 (B22, B45, B47). |
+
+What the review did not cover, by its own account: anything on a GPU; `scripts/graph_diff.py` and `src/utils/flops.py` beyond running them; `src/eval/retrieval.py`; `src/attention/recurrence.py`; most test files line by line; plots 3, 9 and 10 visually; T-21 and T-38; GitHub (CI, branch protection).
+
+### Decisions the review says are Phil's
+
+Rows of `docs/decisions.md` that change what is measured or how it is judged and were not marked for him. Each is implemented as described and can be changed in one place.
+
+- **41**: under the paired test the null control pairs seeds 11 to 15 with MHA seeds 1 to 5 in list order.
+- **42**: exploratory intervals use MHA seeds 1 to 3 when paired, and all 5 or 8 MHA seeds under Welch.
+- **53**: the first update runs at learning rate 0, so every run has one effective update fewer than its step count.
+- **86**: the ladder fit weights every run, so L8 (5 or 8 seeds) outweighs L10 (3). It sets the slope behind the seed-count rule and every multiplier.
+- **126**: no primary verdict without a seed-count decision, so a missing or non-positive ladder slope means the primaries are never tested.
+- **127**: one learning rate per variant in Arm A; the "side by side" of plan §7.4 item 5 is two single-seed sweep losses at 100M.
+- **145**: benchmark points: prefill at batch 1 only; a decode number is the mean of 10 steps after 3 warm-ups, one repetition, no spread.
+- **150**: "SWA attention time below MHA's" is judged as share × ms per step from a separate instrumented run.
+- **177, 178**: Arm B and the context-use gaps use the Gate 2 test and seed sets.
+- **184, 185**: step parity is checked among the runs the analysis reads; the rule reads the registered-seed fit while the reported fit uses every seed.
+- Lower weight: **25**, **32**, **122**, **140**.
+
+### Plan problems the review found
+
+- **§2.3**: SWA's attention time must be below MHA's or the timing run fails, yet the chunked fallback is predicted to save "near zero" at context 1,024. With the default `opt_path: chunked` the timing pass will probably exit 1.
+- **§7.4 item 5**: the plan does not say whether Arm A runs each variant at its tuned rate only.
+- **§7.3 against §15**: the scaler settings are frozen from smoke runs made before any learning rate is known.
+- **§10.6**: PyTorch does not report the kernel it selected; the harness records the one it enforced.
+- **§8.4**: the plan does not say that a positive control detected in the wrong direction fails.
+- **§12.3**: "20 GB holds about 100 checkpoints" is below what week 1 writes.
+- **§10.2**: "GPU utilization" and "time-to-loss-X" are required with no definition.
+
+## Session-3 audit (plan §17.4 item 6)
 
 A fresh agent that wrote none of the code reviewed the harness against plan §5 and §13 at commit `6697a42`. It ran the `cpu` tier (3,103 passed), made 34 deliberate one-line breaks (33 caught) and compared the frozen configs with the plan value by value (they match). Its verdict: the core is sound on CPU; four defects had to be fixed or decided before the handover. Findings and what happened to each:
 
@@ -98,26 +159,17 @@ Not built, and outside the task list: a run script for Phase 6 (plan §9.7; the 
 
 ## Blocked
 
-- **T-21 probes**, branch `task/T-21-probes` (pushed, one commit marked WIP and UNREVIEWED). The generators, the oracle, the stream and the training script exist, and 115 of 116 tests pass. The one that fails is the task's acceptance test, "a tiny MHA solves 4-pair MQAR on CPU": the worker could not reach a sequence accuracy of 1.0 and did not lower the bar. Measured afterwards on the synthetic task, with a 2-layer model of width 64 (8 heads of 8), 64 sequences per step:
-  - 64 keys and values, learning rate 3e-3: 0.87 after 6,000 steps and still rising. At 1e-3: 0.05 after 6,000.
-  - 16 keys and values, 3e-3: 1.0 after 4,000 steps. The same at 6e-3: 0.06 after 3,000.
-  - 8 keys and values: 0.06 to 0.11 after 3,000 steps at 3e-3, 6e-3 and 1e-2, and for three init seeds.
-  - Deeper models (4 and 8 layers) were slower in the worker's runs. Wider ones were not measured; a head dim of 8 gives RoPE only four frequencies, which may be why "attend to the previous token" is slow to form.
-  Session 3 measurements (scratch script, 2 layers, 8 heads, 64 sequences per step, learning rate 3e-3, held-out accuracy on 1,024 sequences every 250 steps):
-  - Width 128, 64 keys and values, 3,000 steps, 3 seeds each: the layout of the WIP branch (answers fed back as input) sits on the shortcut plateau, token accuracy 0.53, sequence accuracy 0.04 to 0.05. With the answers blanked in the input (the layout of Zoology's own generator, checked in `zoology/data/multiquery_ar.py`: each key queried once, values distinct, the answer only in the labels) it sits at the no-recall level, 0.27. Neither solves. A wider model is not the fix.
-  - Width 64, 16 keys and values, 5,000 steps, 3 seeds each. Answers blanked: a sharp jump from 0.33 to 0.98 token accuracy at steps 3,250, 500 and 1,250; sequence accuracy first 1.0 at 4,250, 2,250 and 3,000; 3 of 3 end at 1.0. Answers fed back: a slow climb from the 0.55 plateau; first 1.0 at 4,500 and 5,000, and one seed ends at 0.998.
-  - One run costs 150 to 190 s here (25 to 75 ms per step on one or two threads).
-  So the criterion can be met only by a test of several thousand steps (half a minute to a few minutes on CPU) whose outcome hangs on a phase transition and may differ on CI's CPU. Options: accept one long test after checking it across seeds and thread counts; change the criterion; or change the task. **Not decided.** See also the first open question.
+- **`RUNBOOK.md` §2.3, the probe commands** (part of T-44): the plan fixes the five probes but not their run grid, and its numbers disagree. See the first open question.
 
 ## Open questions
 
-Recommendations were given to Phil in session 3; none is answered yet.
-
-- **MQAR layout (blocks T-21).** The layout of the WIP branch feeds each answer back as input, which lets "a context value not given yet" score 52% at 4 pairs with no recall. Zoology's own generator does not feed answers back. Recommendation: never feed answers back, one query per key, values without replacement, token accuracy against the 1/n line with sequence accuracy as a second column; the same for multi-hop and fuzzy recall.
-- **T-21 acceptance criterion (blocks T-21).** With identical settings the jump to recall came at steps 500, 1,250 and 3,250, and one 5,000-step run takes 150 to 190 s here. Recommendation: on `cpu`, the property tests plus exact memorisation of one fixed batch; the "solves held-out 4-pair MQAR" assertion as a `gpu` test over 3 seeds with a step budget of three times the slowest CPU solve.
-- **The sweep seed.** A sweep on seed 1, 2 or 3 gives the winning point the name and config hash of a reproducibility rerun, and makes that seed's MHA run a selected one. Recommendation: every sweep on one seed no arm uses, for example 21, written into `configs/prereg.yaml` (frozen: Phil's pull request). `select_lr` takes the seed as an argument and, after T-37, refuses registered seeds.
+- **The probe grid (blocks `RUNBOOK.md` §2.3).** Plan §12.1 budgets about 250 short runs in 3 GPU-hours. Plan §9.2 asks for 10+ seeds per point for 7 variants and the anchor, which is 80 runs per difficulty of one probe; MQAR alone at 4 to 256 pairs in powers of two is 560. Nothing fixes width, steps or learning rate per probe, and the runs are not "seconds": a 2-layer, width-64 model needs 2,000 to 4,000 steps for 4 pairs. Options: fit the budget (for example MQAR at 4, 16 and 64 pairs for all 8 models at 10 seeds, 240 runs, and probes 2 to 5 at one size with fewer seeds or not at all), or keep the grid and raise the budget. Recommendation either way: one fixed width, step count and learning rate per point for every model, found by a short pilot on MHA and the anchor only.
+- **The sweep seed.** A sweep on seed 1, 2 or 3 gives the winning point the name and config hash of a reproducibility rerun, and makes that seed's MHA run a selected one. Recommendation: every sweep on one seed no arm uses, for example 21, written into `configs/prereg.yaml` (frozen: Phil's pull request). `select_lr` takes the seed as an argument and refuses registered seeds.
 - **Kaggle's torch, Python and CUDA versions.** Needed to pin the environment; `RUNBOOK.md` §1.5 has the cell to run. Until then: torch 2.15.0, Python 3.12 in CI.
-- **Where the committed seed count lives** (audit F2): see the audit table.
+- **Where the committed seed count lives** (session-3 audit F2): it exists in the pre-registration text only, so nothing refuses a run set that disagrees with it.
+- **The decisions and plan problems of the session-4 review**, listed above. M3 (direction of the positive control), the definition of GPU utilisation and time-to-loss-X (G4), and the timing-pass step count (M5) are the ones a task waits on.
+
+Answered by Phil on 2026-11-13: the MQAR layout and the T-21 acceptance criterion (decisions 189, 190).
 
 ## Readings of the plan for Phil to confirm
 
@@ -146,16 +198,21 @@ These do not block the build. Each is implemented as described and can be change
 - fp32 `ref`/`opt` agreement tolerance is 1e-5, not 1e-6 (plan §5). Approved by Phil on 2026-11-12. Reason: 1e-6 is at the fp32 rounding floor; correct implementations measured up to 1.8e-6.
 - The agreement tests also run in float64 at 1e-12, an addition to "CPU tests use fp32". Approved by Phil on 2026-11-12.
 - The seed-count rule and the reported detectable-effect bound use the exact power of Welch's test, 2.63 × σ_init at 5 seeds and 1.83 at 8, not the 2.5 and 1.8 of the plan's §1.3 table (decision 79). Decided by Phil on 2026-11-12. Reason: the table's Welch rows are pooled-variance values, at which Welch's test has 76% power instead of 80%. The plan's table itself is unchanged; correcting it needs a pull request to the frozen plan.
+- Plan §10.2 asks for peak allocated and reserved memory, GPU utilisation and the context-bucketed loss at every evaluation per run. None is recorded for a training run; buckets exist at the final step only (review G4, task T-41). Found by the session-4 review; it was not listed before.
+- Plan §2.3, §8.5, §8.6 and §10.4 ask for timing and inference tables. Only `ms_per_step` of the `opt` track and one decode point reach a table (review G5, task T-42).
+- Plan §5 asks that the `opt` reproducibility tolerance be measured once and recorded. The tests measure it and keep nothing (review M13, task T-44).
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–188). Rows marked "for Phil" are readings of the plan or numbers the loop chose.
+All decisions are in `docs/decisions.md` (rows 1–201). Rows marked "for Phil" are readings of the plan or numbers the loop chose.
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80). Approved by Phil in session 1: the fp32 agreement tolerance of 1e-5, the float64 checks, and the Monte-Carlo allowance of the family-wise error test (0.05 plus three standard errors, decision 7).
 
+Answered by Phil in session 4: the probe layout and reporting (decision 189) and the T-21 acceptance split (decision 190).
+
 ## Hardware tests written, never run
 
-These skip without the hardware. A skip is not a pass. List them with `pytest --collect-only -q -m "gpu or t4"`. Counts are collected test cases after T-37.
+These skip without the hardware. A skip is not a pass. List them with `pytest --collect-only -q -m "gpu or t4"`. Counts are collected test cases after T-21.
 
 | File | `gpu` | `t4` | What they check |
 | --- | --- | --- | --- |
@@ -168,6 +225,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 | `test_grouped_decode.py` | 3 | 3 | `opt` decode peak memory and decode time at cache 8k below MHA's. |
 | `test_inference_bench.py` | 8 | | Measured against analytic KV bytes for every variant; the benchmark on CUDA. |
 | `test_mla_absorbed.py` | 2 | | Absorbed decode against the naive path in fp16. |
+| `test_probes.py` | 3 | | A tiny MHA solves held-out 4-pair MQAR in fp16, seeds 1 to 3, 12,750 steps each. The same settings reach 1.0 on CPU in fp32. |
 | `test_reference.py` | 7 | | `ref`/`opt` agreement under fp16. |
 | `test_scaffold.py` | 1 | 1 | The tier canaries. |
 | `test_sliding_window.py` | 2 | 2 | Both `opt` paths against `ref`, including compiled FlexAttention; SWA attention time below MHA's. |
@@ -175,7 +233,7 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 | `test_trainer.py` | 5 | | fp16 training with unscaled gradient norms, a skipped step with scaler back-off, scaler growth, refusals. |
 | `test_wsd_branch.py` | 7 | | Branch fidelity in fp16 with the scaler state carried over. |
 
-**The fp16, GradScaler and backend-enforcement code paths have never executed.** Neither have `scripts/bench.py` and `scripts/timing_pass.py` on a GPU, the shim notebook, or anything on the real corpus.
+**The fp16, GradScaler and backend-enforcement code paths have never executed.** Neither have `scripts/bench.py`, `scripts/timing_pass.py` and the CUDA path of `scripts/train_probe.py` on a GPU, the shim notebook, or anything on the real corpus.
 
 ## To check on real hardware
 
@@ -202,15 +260,20 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. T-21, once Phil has answered the two questions: change the layout, review the WIP branch from scratch with deliberate breaks, add the probe commands to `RUNBOOK.md` §2.3 and a producer for plot 9's records.
-2. Pin torch to Kaggle's version when Phil reports it, and run the `cpu` tier on it.
-3. Apply Phil's answers on the readings marked "for Phil" in `docs/decisions.md`.
+1. T-39 and T-40: the orchestrator writes the tests (start from the review's reproductions, described in `docs/review_s4.md`), then one worker each. Their files do not overlap.
+2. T-42 and T-43 can run beside them; T-41 after T-40.
+3. T-44 last: the runbook corrections, and §2.3 once Phil has fixed the probe grid.
 
-Remaining: T-21.
+Remaining: T-39, T-40, T-41, T-42, T-43, T-44, then T-31.
 
 ## Notes for the next session
 
 How the loop has been run:
+
+- Session 4: workers are Haiku subagents started with the Agent tool; a review round is the orchestrator reading the diff and running deliberate one-line breaks from a spec file in a separate detached worktree. A worker that hands back is resumed with the findings. T-21 took three rounds, T-38 two.
+- A deliberate break that passes is not always a gap: check whether the change is equivalent (session 4 had two) before sending it back.
+- The task-flow of `CLAUDE.md` (task branches, a pull request each, squash-merge on green CI) was followed in session 4 although the session was started with a single designated branch.
+- The independent review ran on the full model for about 40 minutes beside two workers without slowing them much, as long as every pytest ran with `OMP_NUM_THREADS=1`.
 
 - **Run every pytest with `OMP_NUM_THREADS=1`.** On this container torch with four threads is far slower on tiny models (a worker measured a factor of about a thousand on a small matmul). With one thread the full `cpu` tier takes about four minutes.
 - Deliberate breaks are run in a separate detached worktree of the branch under review, never in the worker's own worktree, so that a worker's test run and the review cannot disturb each other.
