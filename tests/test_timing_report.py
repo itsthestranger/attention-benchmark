@@ -466,6 +466,18 @@ def single_repetition(doc: dict) -> dict:
     return doc
 
 
+def test_a_list_shorter_than_the_repetitions_is_refused_even_when_its_statistics_agree():
+    """Added in review: a point measured twice in a three-repetition document, with median, min and max
+    that ARE the statistics of its two values, is still not a three-repetition point."""
+    doc = hand_bench_doc()
+    assert doc["repetitions"] == 3
+    row = doc["decode"][0]
+    row["ms_per_token_by_repetition"] = [2.0, 4.0]
+    row["ms_per_token"], row["ms_per_token_min"], row["ms_per_token_max"] = 3.0, 2.0, 4.0
+    with pytest.raises(report.TimingReportError, match="ms_per_token_by_repetition"):
+        report.check_bench_documents([doc])
+
+
 def test_a_by_repetition_list_of_the_wrong_length_is_refused():
     doc = hand_bench_doc()
     doc["prefill"][0]["latency_ms_by_repetition"] = [3.5, 4.0]
