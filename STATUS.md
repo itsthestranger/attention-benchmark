@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-13, during session 4. T-21 (probes) and T-38 (probe report) are merged. A second independent review found two defects that block the handover and eight to fix before the first reported GPU hour; they are tasks T-39 to T-44 and none is fixed yet. The `cpu` tier is green on `main`: 3,429 tests, about four and a half minutes.
+Last updated: 2026-11-13, during session 4. T-21 (probes) and T-38 (probe report) are merged. A second independent review found two defects that block the handover and eight to fix before the first reported GPU hour. The two blockers (H1, H2) and G1, G2 and G6 are fixed and merged (T-39, T-40); T-41, T-43 and T-45 are with workers; T-42 and T-44 are not started. The `cpu` tier is green on `main`: 3,496 tests, about five minutes.
 
 ## Done
 
@@ -43,24 +43,29 @@ Last updated: 2026-11-13, during session 4. T-21 (probes) and T-38 (probe report
 - T-37 fixes for the handover audit (#39).
 - T-38 probe report for Gate 1 and the 1/n line in plot 9 (#41).
 - T-21 probe generators and probe training script (#42).
+- T-39 analysis refusals: recipe and backbone, the complete ladder, recorded divergences (#44).
+- T-40 checkpoint and resume: the stop checkpoint, branch points, the environment (#45).
 
 ## In progress
 
-- T-39 to T-44, the fixes for the session-4 review: not started. T-39 and T-40 are `O+W`: the orchestrator writes their tests first.
+- T-45 (plots and report text), branch `task/T-45-plots-and-text`: with a worker.
+- T-43 (pruning), branch `task/T-43-prune`: with a worker.
+- T-41 (per-run records), branch `task/T-41-run-records`: with a worker.
+- T-42 (timing and inference tables) and T-44 (runbook): not started.
 - `RUNBOOK.md` §2.3 (probe commands): waits for the probe grid from Phil.
 
 ## Handover checklist (plan §17.4)
 
 | # | Item | State |
 | --- | --- | --- |
-| 1 | Every task merged, `cpu` tier green in CI | **Not met**: T-39 to T-44 are open. T-21 is merged. |
+| 1 | Every task merged, `cpu` tier green in CI | **Not met**: T-41 to T-45 are open. T-21, T-39 and T-40 are merged. |
 | 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met for everything merged; listed below. |
 | 3 | Headline table and all ten plots generate from fake manifests and blank | Met, with the defects of the review: plot 7 draws runs the analysis does not read (G3), and the timing and inference tables do not exist (G5). |
 | 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | **Not met**: §2.3 has no commands (probe grid open), one statement about resuming is false (G1), the final commands refuse after a recorded divergence (G6), and there is no pruning step (G7). |
-| 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 201. The review found deviations that were not listed; they are below now. |
-| 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Two reviews done (sessions 3 and 4). The second one's findings are listed below; none is fixed yet. |
+| 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 208. The review found deviations that were not listed; they are below now. |
+| 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Two reviews done (sessions 3 and 4). The second one's findings are listed below with their status. |
 
-The harness is **not** ready for the GPU weeks. Week 1's MHA runs are final results that are never rerun, so G1 to G8 come first.
+The harness is **not** ready for the GPU weeks. Week 1's MHA runs are final results that are never rerun, so the remaining findings G3 to G5, G7 and G8 come first.
 
 ## Session-4 review (2026-11-13)
 
@@ -68,18 +73,18 @@ Phil asked for a second review of everything built so far. A fresh agent on the 
 
 | # | Finding | Status |
 | --- | --- | --- |
-| H1 | The analysis compares, and gives verdicts on, runs trained under different recipes, init rules, precision or with `--override`; the headline's parameter and `d_ff` columns come from `configs/`, not from the manifests. | Open: T-39. |
-| H2 | The seed-count rule is computed and printed from an incomplete ladder; in synthetic campaigns near the threshold the decision differed from the complete ladder's. | Open: T-39. |
-| G1 | A stop at `--until` leaves no checkpoint to resume from, so an MHA trunk re-runs up to ten minutes of steps and overwrites the branch-point checkpoint its 100M branch used. `RUNBOOK.md` says it resumes from step 1,221. | Open: T-40, T-44. |
-| G2 | A manifest records only the last session's environment and GPU, and a resume after an image change is not refused. | Open: T-40. |
-| G3 | Plot 7 draws every manifest in the directory in the variant's colour, sweep points at rejected learning rates included, and shows variant losses while the gate is closed. The session-3 note that the runbook's order prevents this was wrong: the variant sweeps are such runs. | Open: T-39. |
+| H1 | The analysis compares, and gives verdicts on, runs trained under different recipes, init rules, precision or with `--override`; the headline's parameter and `d_ff` columns come from `configs/`, not from the manifests. | **Fixed in T-39** (#44): such runs are refused, and the static columns come from the manifests. |
+| H2 | The seed-count rule is computed and printed from an incomplete ladder; in synthetic campaigns near the threshold the decision differed from the complete ladder's. | **Fixed in T-39** (#44): no decision until MHA, L6 and L10 have their registered seeds; `--l10-cut` declares the two-point ladder. **For Phil**: where that declaration should live. |
+| G1 | A stop at `--until` leaves no checkpoint to resume from, so an MHA trunk re-runs up to ten minutes of steps and overwrites the branch-point checkpoint its 100M branch used. `RUNBOOK.md` says it resumes from step 1,221. | **Fixed in T-40** (#45): a stop leaves a checkpoint, a trunk resumes from its newest state including the branch point, and a branch point is never overwritten. The runbook's statement is now true. |
+| G2 | A manifest records only the last session's environment and GPU, and a resume after an image change is not refused. | **Fixed in T-40** (#45): the environment is in every checkpoint, and a resume or branch under another torch, CUDA, driver or GPU is refused. `gpu_shared` is still the last session's value. |
+| G3 | Plot 7 draws every manifest in the directory in the variant's colour, sweep points at rejected learning rates included, and shows variant losses while the gate is closed. The session-3 note that the runbook's order prevents this was wrong: the variant sweeps are such runs. | Open: T-45. |
 | G4 | Peak memory, GPU utilisation and the context-bucketed loss at every evaluation (plan §10.2) are not recorded for a training run. | Open: T-41. GPU utilisation and time-to-loss-X need a definition from Phil. |
 | G5 | Attention's measured share, peak memory, the `ref` track, the spread, prefill, maximum batch at 8k and measured KV bytes are written to JSON and read by nothing. | Open: T-42. |
-| G6 | One recorded diverged run makes `make_tables` and `make_plots` refuse without `--skip-unfinished`, which the runbook's final step forbids. | Open: T-39, T-44. |
+| G6 | One recorded diverged run makes `make_tables` and `make_plots` refuse without `--skip-unfinished`, which the runbook's final step forbids. | **Fixed in T-39** (#44): a diverged run is left out and named in a note. |
 | G7 | Checkpoints reach about 20 GB in week 1 and nothing prunes them. | Open: T-43, T-44. |
-| G8 | The plots skip the timing-source refusals the tables apply. | Open: T-39. |
-| M1 | The hardware disclosure in `headline.md` is fixed text, printed whatever the manifests say. | Open: T-39. |
-| M2 | A non-finite loss on the last training step blocks the manifest for good. | Open: T-40. |
+| G8 | The plots skip the timing-source refusals the tables apply. | Open: T-45. |
+| M1 | The hardware disclosure in `headline.md` is fixed text, printed whatever the manifests say. | Open: T-45. |
+| M2 | A non-finite loss on the last training step blocks the manifest for good. | **Fixed in T-40** (#45). |
 | M3 | The positive control is two-sided: L6 significantly better than L8 would read as detected. | **For Phil.** |
 | M4 | `bench.py --with-ref` repeats the `opt` KV check and the maximum-batch search for each `ref` document and labels the result `ref`. | Listed; looked at in T-42. |
 | M5 | The timing pass compares no dataset hash while `configs/data.yaml` is unset, and with `--with-ref` and the share runs it is about 8,800 steps against the plan's 4,620. | Listed: T-44 states the budget; the step count is **for Phil**. |
@@ -87,11 +92,11 @@ Phil asked for a second review of everything built so far. A fresh agent on the 
 | M7 | The shim can only call `scripts.train`, and its example config collides by name with the runbook's MHA runs. | Listed: T-44. |
 | M8 | `lr_source` and `timing_pass_id` are free text, never checked against an existing run or file. | Listed, not fixed. |
 | M9 | A FlexAttention SWA run would record the backend `efficient`, a kernel it never called. | Listed; to settle on the T4. |
-| M10 | `gates.md` prints two "slope at 300M" values that differ once MHA has 8 seeds, unexplained. | Open: T-39. |
+| M10 | `gates.md` prints two "slope at 300M" values that differ once MHA has 8 seeds, unexplained. | Open: T-45. |
 | M11 | CODEOWNERS does not cover the files that decide what CI runs: `ci.yml`, `tests/conftest.py`, `tests/hardware.py`, `pyproject.toml`. | Open: T-44. |
 | M12 | No smoke run reaches an evaluation, which runs at batch 64 and not at the micro-batch. | Open: T-44. |
 | M13 | The `opt` reproducibility measurement is built and then dropped; the runbook has no step for `scripts/measure_reproducibility.py`. The session-3 statement that the tests "measure and record" was wrong. | Open: T-44. |
-| M14 | Six breaks no test caught: B10 (Arm B outside the step-parity scope), B22 (`gpu_shared` always false), B36 (reruns not limited to registered seeds), B45 (`skipped_in_first_100` counts step 100), B46 (seed-count threshold `>=`), B47 (in-run validation ignores `eval_curve_windows`). | Open: T-39 (B10, B36, B46), T-40 (B22, B45, B47). |
+| M14 | Six breaks no test caught: B10 (Arm B outside the step-parity scope), B22 (`gpu_shared` always false), B36 (reruns not limited to registered seeds), B45 (`skipped_in_first_100` counts step 100), B46 (seed-count threshold `>=`), B47 (in-run validation ignores `eval_curve_windows`). | **Fixed**: each has a test now, checked against its break (#44, #45). |
 
 What the review did not cover, by its own account: anything on a GPU; `scripts/graph_diff.py` and `src/utils/flops.py` beyond running them; `src/eval/retrieval.py`; `src/attention/recurrence.py`; most test files line by line; plots 3, 9 and 10 visually; T-21 and T-38; GitHub (CI, branch protection).
 
@@ -167,6 +172,7 @@ Not built, and outside the task list: a run script for Phase 6 (plan §9.7; the 
 - **The sweep seed.** A sweep on seed 1, 2 or 3 gives the winning point the name and config hash of a reproducibility rerun, and makes that seed's MHA run a selected one. Recommendation: every sweep on one seed no arm uses, for example 21, written into `configs/prereg.yaml` (frozen: Phil's pull request). `select_lr` takes the seed as an argument and refuses registered seeds.
 - **Kaggle's torch, Python and CUDA versions.** Needed to pin the environment; `RUNBOOK.md` §1.5 has the cell to run. Until then: torch 2.15.0, Python 3.12 in CI.
 - **Where the committed seed count lives** (session-3 audit F2): it exists in the pre-registration text only, so nothing refuses a run set that disagrees with it.
+- **Where the L10 cut is declared** (decision 203): `--l10-cut` on the command line, or a key in the frozen `configs/prereg.yaml`.
 - **The decisions and plan problems of the session-4 review**, listed above. M3 (direction of the positive control), the definition of GPU utilisation and time-to-loss-X (G4), and the timing-pass step count (M5) are the ones a task waits on.
 
 Answered by Phil on 2026-11-13: the MQAR layout and the T-21 acceptance criterion (decisions 189, 190).
@@ -204,7 +210,7 @@ These do not block the build. Each is implemented as described and can be change
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–201). Rows marked "for Phil" are readings of the plan or numbers the loop chose.
+All decisions are in `docs/decisions.md` (rows 1–208). Rows marked "for Phil" are readings of the plan or numbers the loop chose.
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80). Approved by Phil in session 1: the fp32 agreement tolerance of 1e-5, the float64 checks, and the Monte-Carlo allowance of the family-wise error test (0.05 plus three standard errors, decision 7).
 
@@ -260,11 +266,11 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. T-39 and T-40: the orchestrator writes the tests (start from the review's reproductions, described in `docs/review_s4.md`), then one worker each. Their files do not overlap.
-2. T-42 and T-43 can run beside them; T-41 after T-40.
-3. T-44 last: the runbook corrections, and §2.3 once Phil has fixed the probe grid.
+1. Review and merge T-45, T-43 and T-41 as their workers hand back (read the diff, deliberate breaks in a detached worktree, then the pull request).
+2. T-42: `timing.md` and `inference.md` from the timing-pass and bench files, with blank forms. Not briefed yet; read `scripts/timing_pass.py` and `scripts/bench.py` for the document shapes first.
+3. T-44 last: the runbook corrections (pruning step, `--l10-cut`, an evaluation in a smoke run, the reproducibility record, the timing-pass budget, the shim), the CODEOWNERS additions (M11), and §2.3 once Phil has fixed the probe grid. Remove the "do not start" notice from `RUNBOOK.md` only when T-41 to T-45 are merged.
 
-Remaining: T-39, T-40, T-41, T-42, T-43, T-44, then T-31.
+Remaining: T-41, T-42, T-43, T-44, T-45, then T-31.
 
 ## Notes for the next session
 
