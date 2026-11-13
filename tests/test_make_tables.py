@@ -414,7 +414,10 @@ def test_without_l10_the_fit_uses_the_two_other_points():
     a = mt.analyse(fake_campaign(without=("ladder_l10",)))
     assert a.fit is not None
     assert set(p.name for p in a.fit.points) == {"mha", "mha_L6"}
-    assert a.decision.n_seeds == 5
+    # The seed-count rule is applied "after ... the ladder" (plan §1.4): absent L10 runs are not
+    # a decision to cut them (review S4, H2). Declared cut (plan §12.2 item 4), the rule is two-point.
+    assert a.decision is None
+    assert mt.analyse(fake_campaign(without=("ladder_l10",)), l10_cut=True).decision.n_seeds == 5
 
 
 # --- Learning rates, ignored runs and refusals -----------------------------------------
