@@ -187,6 +187,16 @@ def test_a_stop_at_until_leaves_a_checkpoint_at_that_step(specs, synthetic, trun
     assert_same_result(out, reference("opt"), "opt", trunk_resolved, RESUME_TOL["opt"], name)
 
 
+def test_the_checkpoint_left_at_a_stop_stores_the_resume_count(specs, synthetic, trunk_resolved, tmp_path):
+    """Found by a deliberate break in review: the stop checkpoint carries the session's resume count."""
+    out = tmp_path / "counted"
+    directory = trunk_dir(out, trunk_resolved)
+    assert run_train(specs.trunk, out, synthetic.root, extra=("--until", "13")) == 0
+    assert ck.load_checkpoint(directory / "step00000013.pt")["resume_count"] == 0
+    assert run_train(specs.trunk, out, synthetic.root, extra=("--until", "21")) == 0
+    assert ck.load_checkpoint(directory / "step00000021.pt")["resume_count"] == 1
+
+
 @pytest.mark.parametrize("mode", ["ref", "opt"])
 def test_a_trunk_stopped_at_its_branch_point_resumes_from_it_and_keeps_it(
     mode, specs, synthetic, trunk_resolved, reference, resumes, tmp_path
