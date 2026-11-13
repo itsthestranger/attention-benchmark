@@ -9,6 +9,7 @@ with known readings through monkeypatch.
 from __future__ import annotations
 
 import json
+import shutil
 import signal
 import subprocess
 import sys
@@ -29,6 +30,7 @@ from src.utils import manifest as mf
 from tests.test_entry_points import (  # noqa: F401  (fixtures are used by name)
     CKPT_EVERY,
     EVAL_EVERY,
+    branch_source,
     MODES,
     RESUME_TOL,
     ROOT,
@@ -268,6 +270,18 @@ def test_a_session_killed_after_a_checkpoint_still_counts(specs, synthetic, trun
     m = manifest_of(out, "opt", mf.run_name(trunk_resolved))
     assert len(m["session_ids"]) == 3 and m["completed"] is True
     assert m["final_metrics"]["peak_memory"] == MAX_OVER_THREE
+
+
+def test_a_branch_session_resets_its_peak_statistics_and_reads_its_own(
+    branch_source, specs, synthetic, trunk_resolved, readings, tmp_path
+):
+    work = tmp_path / "branch_reset"
+    shutil.copytree(branch_source, work)
+    readings["pair"] = THIRD
+    assert run_branch(specs.trunk, work, synthetic.root) == 0
+    assert readings["resets"] == 1
+    m = manifest_of(work, "opt", mf.run_name(trunk_resolved, SHORT_LABEL))
+    assert m["final_metrics"]["peak_memory"] == {"allocated_bytes": THIRD[0], "reserved_bytes": THIRD[1]}
 
 
 def test_the_peak_file_is_not_a_checkpoint(reference, trunk_resolved):
