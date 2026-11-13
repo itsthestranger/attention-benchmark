@@ -6,11 +6,22 @@ symbols, noise), in the order a task needs them.
 
 Every generator returns (x, y), both int64 of shape (batch, T). y[b, t] is the
 token the model must predict after reading x[b, :t+1], or IGNORE where nothing
-is scored. Teacher forcing: y[b, t] == x[b, t+1] at every scored t < T-1.
+is scored.
+
+Recall tasks (mqar, multihop, fuzzy) never feed an answer back as an input. In
+their query section the slot that holds the answer holds BLANK instead, and the
+answer appears only in y. So for these tasks the input after every scored
+position is BLANK, and no answer token appears in the input after SEP.
+
+Teacher forcing: y[b, t] == x[b, t+1] at every scored t < T-1, for selective_copy
+and induction only.
 
 `solve` is the oracle. It reads only the input tokens of one sequence, parses
 the sequence by the task's rules, and returns the scored positions with their
 answers. It never looks at targets. Tests check that the two agree.
+
+Values of mqar and fuzzy are drawn without replacement within a sequence, so a
+sequence has n_pairs distinct values and n_values >= n_pairs is required.
 
 A generator is a pure function of its numpy Generator. Nothing here reads or
 seeds the global RNGs.
@@ -65,7 +76,7 @@ _DEFAULTS: dict[str, dict] = {
     "mqar": {
         "n_pairs": _REQUIRED,
         "n_keys": lambda p: max(64, 2 * p["n_pairs"]),
-        "n_values": 64,
+        "n_values": lambda p: max(64, 2 * p["n_pairs"]),
     },
     "multihop": {
         "n_chains": _REQUIRED,
@@ -76,7 +87,7 @@ _DEFAULTS: dict[str, dict] = {
         "key_len": 3,
         "n_noise": 1,
         "n_keys": lambda p: max(64, 2 * p["n_pairs"]),
-        "n_values": 64,
+        "n_values": lambda p: max(64, 2 * p["n_pairs"]),
         "n_noise_tokens": 16,
     },
     "selective_copy": {
@@ -124,6 +135,10 @@ def _resolve_params(task: str, params: Mapping) -> dict:
         raise ValueError(
             f"{task}: {resolved['n_pairs']} distinct keys do not fit in a key range of {resolved['n_keys']}"
         )
+    if task in ("mqar", "fuzzy") and resolved["n_values"] < resolved["n_pairs"]:
+        raise ValueError(
+            f"{task}: {resolved['n_pairs']} distinct values do not fit in a value range of {resolved['n_values']}"
+        )
     if task == "fuzzy" and resolved["n_noise"] >= resolved["key_len"]:
         raise ValueError(f"fuzzy: n_noise ({resolved['n_noise']}) must be less than key_len ({resolved['key_len']})")
     if task == "multihop" and resolved["n_symbols"] < 3 * resolved["n_chains"]:
@@ -166,6 +181,33 @@ def make_spec(task: str, **params) -> ProbeSpec:
     )
 
 
+def difficulty(spec: ProbeSpec) -> int:
+    """The size of the task: the number of items a model must keep apart."""
+    p = spec.as_dict()
+    if spec.task in ("mqar", "fuzzy"):
+        return p["n_pairs"]
+    if spec.task == "multihop":
+        return p["n_chains"]
+    if spec.task == "selective_copy":
+        return p["n_data"]
+    if spec.task == "induction":
+        return p["length"]
+    raise ValueError(f"unknown task {spec.task!r}")
+
+
+def chance_level(spec: ProbeSpec) -> float | None:
+    """Token accuracy of a model that knows the context but cannot recall which answer belongs to the query.
+
+    1/difficulty for the recall tasks, where the answer is one of `difficulty` items; None for the
+    copy tasks, which have no such level.
+    """
+    if spec.task in ("mqar", "multihop", "fuzzy"):
+        return 1 / difficulty(spec)
+    if spec.task in ("selective_copy", "induction"):
+        return None
+    raise ValueError(f"unknown task {spec.task!r}")
+
+
 def _ranges(spec: ProbeSpec) -> dict[str, tuple[int, int]]:
     """Half-open id ranges per role for a spec."""
     p = spec.as_dict()
@@ -192,10 +234,11 @@ def _ranges(spec: ProbeSpec) -> dict[str, tuple[int, int]]:
 def _row_mqar(p: dict, r: dict, rng: np.random.Generator):
     n = p["n_pairs"]
     keys = rng.choice(p["n_keys"], n, replace=False) + r["keys"][0]
-    vals = rng.integers(0, p["n_values"], n) + r["values"][0]
+    vals = rng.choice(p["n_values"], n, replace=False) + r["values"][0]
     order = rng.permutation(n)
     ctx = np.stack([keys, vals], axis=1).reshape(-1)
-    qa = np.stack([keys[order], vals[order]], axis=1).reshape(-1)
+    # Each query is a key followed by BLANK in the answer's slot; the answer is only in y.
+    qa = np.stack([keys[order], np.full(n, BLANK, dtype=np.int64)], axis=1).reshape(-1)
     x = np.concatenate([ctx, [SEP], qa])
     scored = [(2 * n + 1 + 2 * j, int(vals[order[j]])) for j in range(n)]
     return x, scored
@@ -208,7 +251,7 @@ def _row_multihop(p: dict, r: dict, rng: np.random.Generator):
     pairs = np.concatenate([np.stack([a, b], axis=1), np.stack([b, c], axis=1)], axis=0)
     ctx = pairs[rng.permutation(2 * n)].reshape(-1)
     q = rng.permutation(n)
-    qa = np.stack([a[q], c[q]], axis=1).reshape(-1)
+    qa = np.stack([a[q], np.full(n, BLANK, dtype=np.int64)], axis=1).reshape(-1)
     x = np.concatenate([ctx, [SEP], qa])
     scored = [(4 * n + 1 + 2 * j, int(c[q[j]])) for j in range(n)]
     return x, scored
@@ -220,7 +263,7 @@ def _row_fuzzy(p: dict, r: dict, rng: np.random.Generator):
     for j in range(k):
         # Distinct within each position: any single position identifies the key.
         keytok[:, j] = rng.choice(p["n_keys"], n, replace=False) + r["keys"][0]
-    vals = rng.integers(0, p["n_values"], n) + r["values"][0]
+    vals = rng.choice(p["n_values"], n, replace=False) + r["values"][0]
     ctx = np.concatenate([keytok, vals[:, None]], axis=1).reshape(-1)
 
     order = rng.permutation(n)
@@ -231,7 +274,8 @@ def _row_fuzzy(p: dict, r: dict, rng: np.random.Generator):
         block = keytok[i].copy()
         noise_at = rng.choice(k, m, replace=False)
         block[noise_at] = r["noise"][0] + rng.integers(0, p["n_noise_tokens"], m)
-        blocks.append(np.concatenate([block, [vals[i]]]))
+        # The answer's slot holds BLANK; the value itself is only in y.
+        blocks.append(np.concatenate([block, [BLANK]]))
         scored.append((s + 1 + j * (k + 1) + (k - 1), int(vals[i])))
     x = np.concatenate([ctx, [SEP], np.concatenate(blocks)])
     return x, scored

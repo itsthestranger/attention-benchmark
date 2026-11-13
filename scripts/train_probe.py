@@ -1,27 +1,53 @@
-"""Train one probe model on one synthetic task and report its held-out accuracy (plan §9.2).
+"""Train one probe model on one synthetic task and write one result record (plan §9.2).
 
 The probe model keeps the backbone's depth and head count and shrinks width only as
 the task forces (see `probe_resolved`). Training runs through the same `Trainer` as
-the language-model runs. Held-out batches come from a different stream seed.
+the language-model runs, and on CUDA the held-out evaluation runs under the same
+enforced kernel and autocast setting as an LM evaluation. Held-out sequences come
+from a different stream seed.
+
+    python -m scripts.train_probe --variant V --task T --param K=V ... --d-model N --seed S
+        --steps N --peak-lr X --out DIR [--data-seed N] [--sequences-per-step N]
+        [--eval-sequences N] [--n-layers N] [--mode opt|ref] [--device cpu|cuda]
+        [--precision fp32|fp16] [--expected-backend NAME] [--panel NAME]
+        [--difficulty-param NAME] [--force]
+
+The record is one JSON object with schema "probe/1" (see `run_probe`). It is written
+to DIR under a file name that is known before training:
+    {task}-{variant}-n{difficulty}-s{init_seed}-{h}.json
+where h is the first 8 hex digits of the SHA-256 of the canonical JSON of the
+configuration hash, the spec, the data seed, the eval size and the mode. If that file
+exists, nothing is trained and the script exits 0; --force retrains and replaces it.
+A refusal exits 2 and a training error or interrupt writes no file.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
 import src.attention.recurrence  # noqa: F401  (registers "recurrence")
+import torch
+
+from scripts import _run_common as rc
 from src import config
-from src.eval.synthetic import ProbeSpec, ProbeStream, counts, make_spec
+from src.eval.synthetic import ProbeSpec, ProbeStream, chance_level, counts, difficulty, make_spec
 from src.model import build_model
 from src.training.trainer import Trainer
+from src.utils import manifest as mf
 
+SCHEMA = "probe/1"
 RECURRENCE = "recurrence"
 BACKBONE_HEADS = 8
 BACKBONE_D_MODEL = 384
 HELD_OUT_OFFSET = 1_000_003
+DEFAULT_EVAL_SEQUENCES = 1024
+_LABEL = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def probe_resolved(
@@ -107,7 +133,34 @@ def _pool(total: dict, part: dict) -> None:
         total[key] = total.get(key, 0) + value
 
 
-def run_probe(
+def _check_int(name: str, value, minimum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"{name} must be an int >= {minimum}, got {value!r}")
+    return value
+
+
+def _label(spec: ProbeSpec, panel: str | None) -> str:
+    """The task label of the record: the panel name if given, else the generator's task."""
+    if panel is None:
+        return spec.task
+    if not isinstance(panel, str) or not _LABEL.fullmatch(panel):
+        raise ValueError(f"panel must be letters, digits, '_' or '-', got {panel!r}")
+    return panel
+
+
+def _difficulty(spec: ProbeSpec, difficulty_param: str | None) -> int:
+    if difficulty_param is None:
+        return difficulty(spec)
+    params = spec.as_dict()
+    if difficulty_param not in params:
+        raise ValueError(f"{spec.task} has no parameter {difficulty_param!r}; known: {sorted(params)}")
+    value = params[difficulty_param]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"difficulty parameter {difficulty_param!r} must be an int, got {value!r}")
+    return value
+
+
+def _plan(
     variant: str,
     spec: ProbeSpec,
     *,
@@ -116,15 +169,21 @@ def run_probe(
     steps: int,
     peak_lr: float,
     data_seed: int = 0,
-    eval_batches: int = 4,
+    eval_sequences: int = DEFAULT_EVAL_SEQUENCES,
     sequences_per_step: int = 32,
     n_layers: int | None = None,
     mode: str = "opt",
-    device: str = "cpu",
+    panel: str | None = None,
+    difficulty_param: str | None = None,
 ) -> dict:
-    """Train one probe model and evaluate it on held-out batches. Returns a JSON-serialisable dict."""
-    if isinstance(eval_batches, bool) or not isinstance(eval_batches, int) or eval_batches < 1:
-        raise ValueError(f"eval_batches must be a positive int, got {eval_batches!r}")
+    """Everything a run's record and file name depend on, computed before any training.
+
+    The defaults are those of run_probe.
+    """
+    _check_int("eval_sequences", eval_sequences, 1)
+    _check_int("data_seed", data_seed, 0)
+    if mode not in rc.MODES:
+        raise ValueError(f"mode must be one of {rc.MODES}, got {mode!r}")
     resolved = probe_resolved(
         variant,
         spec,
@@ -135,45 +194,194 @@ def run_probe(
         sequences_per_step=sequences_per_step,
         n_layers=n_layers,
     )
-    model = build_model(resolved)
-    train_stream = ProbeStream(spec, sequences_per_step=sequences_per_step, seed=data_seed, max_steps=steps)
-    trainer = Trainer(model, resolved, train_stream, device=device, mode=mode)
-    trainer.train()
-    final_loss = trainer.records[-1].loss
+    spec_record = {"seq_len": spec.seq_len, "vocab_size": spec.vocab_size, "params": spec.as_dict()}
+    task = _label(spec, panel)
+    level = _difficulty(spec, difficulty_param)
+    identity = {
+        "config_hash": config.config_hash(resolved),
+        "spec": spec_record,
+        "data_seed": data_seed,
+        "eval_sequences": eval_sequences,
+        "mode": mode,
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    ).hexdigest()
+    return {
+        "resolved": resolved,
+        "spec": spec_record,
+        "task": task,
+        "difficulty": level,
+        "file_name": f"{task}-{variant}-n{level}-s{init_seed}-{digest[:8]}.json",
+    }
 
+
+def probe_path(out_dir, variant: str, spec: ProbeSpec, **plan_args) -> Path:
+    """The file a run with these arguments writes to, known before training."""
+    return Path(out_dir) / _plan(variant, spec, **plan_args)["file_name"]
+
+
+def _held_out_counts(trainer: Trainer, spec: ProbeSpec, *, data_seed: int, eval_sequences: int,
+                     sequences_per_step: int, mode: str, backend: str | None) -> dict:
+    """Pooled counts over `eval_sequences` held-out sequences, under the run's kernel and autocast."""
+    n_batches = -(-eval_sequences // sequences_per_step)
     held_out = ProbeStream(
         spec,
         sequences_per_step=sequences_per_step,
         seed=data_seed + HELD_OUT_OFFSET,
-        max_steps=eval_batches,
+        max_steps=n_batches,
+    )
+    autocast = (
+        torch.autocast("cuda", dtype=torch.float16) if trainer.precision == "fp16" else contextlib.nullcontext()
     )
     pooled: dict = {}
-    for i in range(eval_batches):
-        x, y = held_out.batch(i)
-        _pool(pooled, counts(trainer.model, x.to(device), y.to(device), mode=mode))
-    if pooled["n_scored"] == 0:
-        raise ValueError("held-out batches have no scored positions")
+    with rc.enforced_backend(backend), autocast:
+        for i in range(n_batches):
+            x, y = held_out.batch(i)
+            keep = min(sequences_per_step, eval_sequences - i * sequences_per_step)
+            _pool(pooled, counts(trainer.model, x[:keep].to(trainer.device), y[:keep].to(trainer.device), mode=mode))
+    if pooled.get("n_scored", 0) == 0:
+        raise ValueError("held-out sequences have no scored positions")
+    return pooled
 
+
+def run_probe(
+    variant: str,
+    spec: ProbeSpec,
+    *,
+    d_model: int,
+    init_seed: int,
+    steps: int,
+    peak_lr: float,
+    data_seed: int = 0,
+    eval_sequences: int = DEFAULT_EVAL_SEQUENCES,
+    sequences_per_step: int = 32,
+    n_layers: int | None = None,
+    mode: str = "opt",
+    device: str = "cpu",
+    precision: str | None = None,
+    expected_backend: str | None = None,
+    panel: str | None = None,
+    difficulty_param: str | None = None,
+) -> dict:
+    """Train one probe model, evaluate it on held-out sequences, and return the record (schema probe/1).
+
+    Keys: schema, variant, task (panel label or generator task), generator, difficulty,
+    init_seed, accuracy (held-out token accuracy), sequence_accuracy, chance (no-recall
+    level, or None), n_scored, n_sequences, spec {seq_len, vocab_size, params}, d_model,
+    n_layers, data_seed, steps, steps_taken, skipped_steps, peak_lr, sequences_per_step,
+    eval_sequences, final_train_loss, config_hash, mode, precision, backend (CUDA only,
+    else None), device, environment, git_sha.
+    """
+    plan = _plan(
+        variant,
+        spec,
+        d_model=d_model,
+        init_seed=init_seed,
+        steps=steps,
+        peak_lr=peak_lr,
+        data_seed=data_seed,
+        eval_sequences=eval_sequences,
+        sequences_per_step=sequences_per_step,
+        n_layers=n_layers,
+        mode=mode,
+        panel=panel,
+        difficulty_param=difficulty_param,
+    )
+    resolved = plan["resolved"]
+    dev = rc.choose_device(device)
+    backend = rc.backend_for(dev, expected_backend, required=True)
+    environment = mf.collect_environment()
+    git_sha = mf.git_sha()
+
+    train_stream = ProbeStream(spec, sequences_per_step=sequences_per_step, seed=data_seed, max_steps=steps)
+    trainer = Trainer(
+        build_model(resolved),
+        resolved,
+        train_stream,
+        device=dev,
+        mode=mode,
+        precision=precision,
+        expected_backend=backend,
+    )
+    rc.enforce_backend(trainer.model, backend)
+    trainer.train()
+    final_loss = trainer.records[-1].loss
+
+    pooled = _held_out_counts(
+        trainer,
+        spec,
+        data_seed=data_seed,
+        eval_sequences=eval_sequences,
+        sequences_per_step=sequences_per_step,
+        mode=mode,
+        backend=backend,
+    )
     return {
+        "schema": SCHEMA,
         "variant": variant,
-        "task": spec.task,
-        "spec": {"seq_len": spec.seq_len, "vocab_size": spec.vocab_size, "params": spec.as_dict()},
+        "task": plan["task"],
+        "generator": spec.task,
+        "difficulty": plan["difficulty"],
+        "init_seed": init_seed,
+        "accuracy": pooled["n_correct_tokens"] / pooled["n_scored"],
+        "sequence_accuracy": pooled["n_correct_sequences"] / pooled["n_sequences"],
+        "chance": chance_level(spec),
+        "n_scored": pooled["n_scored"],
+        "n_sequences": pooled["n_sequences"],
+        "spec": plan["spec"],
         "d_model": d_model,
         "n_layers": resolved["model"]["n_layers"],
-        "init_seed": init_seed,
         "data_seed": data_seed,
         "steps": steps,
         "steps_taken": trainer.steps_taken,
         "skipped_steps": trainer.skipped_steps,
         "peak_lr": float(peak_lr),
         "sequences_per_step": sequences_per_step,
-        "eval_batches": eval_batches,
+        "eval_sequences": eval_sequences,
         "final_train_loss": float(final_loss),
-        "token_accuracy": pooled["n_correct_tokens"] / pooled["n_scored"],
-        "sequence_accuracy": pooled["n_correct_sequences"] / pooled["n_sequences"],
-        "n_scored": pooled["n_scored"],
         "config_hash": config.config_hash(resolved),
+        "mode": mode,
+        "precision": trainer.precision,
+        "backend": backend,
+        "device": dev.type,
+        "environment": environment,
+        "git_sha": git_sha,
     }
+
+
+def run_to_dir(
+    out_dir,
+    variant: str,
+    spec: ProbeSpec,
+    *,
+    force: bool = False,
+    device: str = "cpu",
+    precision: str | None = None,
+    expected_backend: str | None = None,
+    **plan_args,
+) -> tuple[Path, bool]:
+    """Write the record of one run to out_dir unless its file exists. Returns (path, trained).
+
+    `plan_args` are the keyword arguments of `run_probe` other than device, precision and
+    expected_backend. An existing file is left untouched unless force is true.
+    """
+    dev = rc.choose_device(device)
+    rc.backend_for(dev, expected_backend, required=True)  # refuse before anything is read or written
+    path = probe_path(out_dir, variant, spec, **plan_args)
+    if path.exists() and not force:
+        return path, False
+    record = run_probe(
+        variant,
+        spec,
+        device=device,
+        precision=precision,
+        expected_backend=expected_backend,
+        **plan_args,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rc._write_json_atomic(path, record)
+    return path, True
 
 
 def _parse_value(text: str):
@@ -196,7 +404,7 @@ def _parse_params(items: list[str]) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train one probe model and write its result as JSON.")
+    parser = argparse.ArgumentParser(description="Train one probe model and write its result record as JSON.")
     parser.add_argument("--variant", required=True, help="a variant name, or 'recurrence'")
     parser.add_argument("--task", required=True, help="one of: mqar, multihop, fuzzy, selective_copy, induction")
     parser.add_argument("--param", action="append", default=[], metavar="KEY=VALUE", help="task parameter, repeatable")
@@ -206,36 +414,55 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steps", type=int, required=True)
     parser.add_argument("--peak-lr", type=float, required=True)
     parser.add_argument("--sequences-per-step", type=int, default=32)
-    parser.add_argument("--eval-batches", type=int, default=4)
+    parser.add_argument("--eval-sequences", type=int, default=DEFAULT_EVAL_SEQUENCES,
+                        help="held-out sequences evaluated, in batches of --sequences-per-step")
     parser.add_argument("--n-layers", type=int, default=None)
-    parser.add_argument("--device", default="cpu")
-    parser.add_argument("--out", type=Path, default=None, help="write the JSON here (default: stdout)")
+    parser.add_argument("--mode", choices=rc.MODES, default="opt")
+    parser.add_argument("--device", default="cpu", help="cpu or cuda")
+    parser.add_argument("--precision", choices=("fp32", "fp16"), default=None,
+                        help="default fp32 on CPU, fp16 on CUDA")
+    parser.add_argument("--expected-backend", dest="expected_backend", choices=sorted(rc.SDPA_BACKENDS),
+                        help="required on CUDA: the fused kernel the trainer enforces; refused on CPU")
+    parser.add_argument("--panel", default=None, metavar="NAME", help="task label of the record (default: the task)")
+    parser.add_argument("--difficulty-param", dest="difficulty_param", default=None, metavar="NAME",
+                        help="the spec parameter that is the record's difficulty (default: the task's difficulty)")
+    parser.add_argument("--out", type=Path, required=True, metavar="DIR", help="directory for the record file")
+    parser.add_argument("--force", action="store_true", help="retrain even if the record file exists")
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def _main(args) -> int:
     spec = make_spec(args.task, **_parse_params(args.param))
-    result = run_probe(
+    path, trained = run_to_dir(
+        args.out,
         args.variant,
         spec,
+        force=args.force,
+        device=args.device,
+        precision=args.precision,
+        expected_backend=args.expected_backend,
         d_model=args.d_model,
         init_seed=args.seed,
         steps=args.steps,
         peak_lr=args.peak_lr,
         data_seed=args.data_seed,
-        eval_batches=args.eval_batches,
+        eval_sequences=args.eval_sequences,
         sequences_per_step=args.sequences_per_step,
         n_layers=args.n_layers,
-        device=args.device,
+        mode=args.mode,
+        panel=args.panel,
+        difficulty_param=args.difficulty_param,
     )
-    text = json.dumps(result, indent=2, sort_keys=True)
-    if args.out is None:
-        print(text)
+    if trained:
+        print(f"wrote {path}")
     else:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(text + "\n", encoding="utf-8")
+        print(f"{path} exists; not retrained (pass --force to retrain)")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return rc.guarded(lambda: _main(args))
 
 
 if __name__ == "__main__":
