@@ -28,6 +28,7 @@ from tests.fixtures.fake_secondary import (
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN_PREDICTION = "Prediction: MHA, GQA-4, GQA-2 and MQA within ±3% of each other."
+PLAN_KV = "analytic and measured bytes/token (assert within 5%)."
 BLANK_DIR = ROOT / "results" / "tables" / "blank"
 MIB = 2**20
 EXPECTED_TRACKS = [
@@ -66,7 +67,7 @@ def hand_bench_doc(variant: str = "mha", mode: str = "opt") -> dict:
 
 def judged(text: str) -> str:
     """The text as a judgement check reads it: the plan's noun "timing pass" (plan §8.5), or its id, is not a verdict."""
-    text = text.replace(PLAN_PREDICTION, "")  # the plan's sentence, quoted (it contains the word "within")
+    text = text.replace(PLAN_PREDICTION, "").replace(PLAN_KV, "")  # the plan's sentences, quoted: they contain "within"
     return re.sub(r"timing[ -]pass", "", text, flags=re.IGNORECASE)
 
 
@@ -125,7 +126,7 @@ def test_the_mha_row_has_every_cell_hand_computed():
         "ms/step, mean": "11.000",
         "ms/step, each repetition": "10.000, 11.000, 12.000",
         "spread over repetitions, % of mean": "18.18",
-        "ratio to MHA opt (plan §8.5 predicts 0.97 to 1.03 for gqa4, gqa2 and mqa)": "1.000",
+        "ratio to MHA opt": "1.000",
         "attention share, %": "25.0",
         "peak allocated, MiB": "100.0",
     }
@@ -138,7 +139,7 @@ def test_a_track_without_a_peak_memory_has_a_blank_peak_cell_and_its_spread_is_z
         "ms/step, mean": "22.000",
         "ms/step, each repetition": "22.000, 22.000, 22.000",
         "spread over repetitions, % of mean": "0.00",
-        "ratio to MHA opt (plan §8.5 predicts 0.97 to 1.03 for gqa4, gqa2 and mqa)": "2.000",
+        "ratio to MHA opt": "2.000",
         "attention share, %": "50.0",
         "peak allocated, MiB": "—",
     }
@@ -151,7 +152,7 @@ def test_a_ref_row_has_its_ratio_to_the_mha_opt_track_and_its_own_peak():
         "ms/step, mean": "33.000",
         "ms/step, each repetition": "33.000, 33.000, 33.000",
         "spread over repetitions, % of mean": "0.00",
-        "ratio to MHA opt (plan §8.5 predicts 0.97 to 1.03 for gqa4, gqa2 and mqa)": "3.000",
+        "ratio to MHA opt": "3.000",
         "attention share, %": "12.5",
         "peak allocated, MiB": "3.0",
     }
@@ -176,7 +177,7 @@ def test_the_ratio_is_blank_when_the_document_has_no_mha_opt_track():
     doc = hand_timing_doc()
     del doc["variants"]["mha"]
     rows = report.timing_rows(doc)
-    assert row_for(rows, "gqa4")["ratio to MHA opt (plan §8.5 predicts 0.97 to 1.03 for gqa4, gqa2 and mqa)"] == "—"
+    assert row_for(rows, "gqa4")["ratio to MHA opt"] == "—"
 
 
 def header_cells(text: str) -> list[str]:
@@ -184,19 +185,23 @@ def header_cells(text: str) -> list[str]:
     return [cell.strip() for cell in header.strip().strip("|").split("|")]
 
 
-def test_the_plan_three_percent_is_on_the_ratio_column_and_never_on_the_spread_column():
-    cells = header_cells(report.render_timing(hand_timing_doc()))
-    spread, ratio = cells[3], cells[4]
-    assert spread == "spread over repetitions, % of mean"
-    assert not any(ch.isdigit() for ch in spread), "no number from the plan may sit on the spread column"
-    assert ratio.startswith("ratio to MHA opt (plan §8.5 predicts 0.97 to 1.03 for gqa4, gqa2 and mqa)")
+def test_no_column_header_of_timing_md_carries_a_number_from_the_plan():
+    """The plan's numbers are quoted in captions, never on a column header (the 3% belongs to no column)."""
+    for text in (report.render_timing(hand_timing_doc()), report.render_timing(None)):
+        cells = header_cells(text)
+        assert cells[3] == "spread over repetitions, % of mean"
+        assert cells[4] == "ratio to MHA opt"
+        assert not any(ch.isdigit() for cell in cells for ch in cell), cells
 
 
-def test_the_prediction_is_quoted_once_as_a_caption_that_points_at_the_ratio_column():
+def test_the_plan_prediction_is_quoted_once_and_read_in_the_ms_and_ratio_columns():
     text = report.render_timing(hand_timing_doc())
     assert text.count(PLAN_PREDICTION) == 1
     caption = next(line for line in text.splitlines() if PLAN_PREDICTION in line)
-    assert "ratio to MHA opt column" in caption
+    assert caption == (
+        'Plan §8.5 reads: "Prediction: MHA, GQA-4, GQA-2 and MQA within ±3% of each other." Their step times are '
+        "shown in the ms/step and ratio to MHA opt columns of the rows for MHA, gqa4, gqa2 and mqa."
+    )
     spread_caption = next(line for line in text.splitlines() if line.startswith("Spread is"))
     assert spread_caption == "Spread is (max - min) / mean over the track's own repetitions, in percent."
 
@@ -206,7 +211,7 @@ def test_the_timing_file_has_its_header_source_line_and_captions():
     assert text.splitlines()[0] == "# Training timing (plan §8.5)"
     assert (
         "| track | ms/step, mean | ms/step, each repetition | spread over repetitions, % of mean | "
-        "ratio to MHA opt (plan §8.5 predicts 0.97 to 1.03 for gqa4, gqa2 and mqa) | attention share, % | "
+        "ratio to MHA opt | attention share, % | "
         "peak allocated, MiB |"
     ) in text
     assert "Source: GPU Synthetic T4; backend efficient; torch 2.15.0; CUDA 13.2; driver 999.0" in text
@@ -240,7 +245,7 @@ def test_the_kv_line_has_every_cell_hand_computed():
         "analytic bytes/token": "1536.0",
         "measured bytes/token": "1920.0",
         "measured over tokens": "1024",
-        "measured / analytic (limit 5%, plan §10.4)": "1.250",
+        "measured / analytic (plan §10.4)": "1.250",
         "max batch at cache 8k": "40",
     }
 
@@ -273,8 +278,8 @@ def test_the_inference_file_has_its_captions_and_the_precision_source_line():
     text = report.render_inference([hand_bench_doc()])
     assert text.splitlines()[0] == "# Inference benchmark (plan §8.6, §10.4)"
     assert "Source: precision fp16; backend efficient; GPU Synthetic T4; torch 2.15.0; CUDA 13.2; driver 999.0." in text
-    assert "limit between them at 5%" in text
-    assert "| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |" in text
+    assert text.count(PLAN_KV) == 1
+    assert "| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |" in text
 
 
 # --- Blank forms --------------------------------------------------------------------------------

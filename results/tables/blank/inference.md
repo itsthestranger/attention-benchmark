@@ -3,7 +3,7 @@
 Prefill is one forward over batch x context tokens with no cache; latency is the mean over the measured repetitions (plan §8.6).
 Decode is ms/token and tokens/s at each batch and cache length, the cache filled to the cache length before timing (plan §8.6).
 Track `opt` runs opt mode, with the SDPA backend named in its source line enforced (plan §2.3 item 1). Track `ref` runs the reference implementation, which makes no SDPA call (plan §4.4).
-KV bytes: the analytic size is per token, from the model's shapes; the measured size is the allocation growth of a cache holding the measured number of tokens, on CUDA. Plan §10.4 sets the limit between them at 5%.
+KV bytes: the analytic size is per token, from the model's shapes; the measured size is the allocation growth of a cache holding the measured number of tokens, on CUDA. Plan §10.4 reads: "analytic and measured bytes/token (assert within 5%)."
 Maximum batch: the largest batch whose decode step at a cache of 8,192 does not run out of memory (plan §8.6).
 Weights are random, and lengths past the trained context of 1,024 measure speed only (plan §8.6).
 
@@ -39,7 +39,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -75,7 +75,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -111,7 +111,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -147,7 +147,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -183,7 +183,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -219,7 +219,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -255,7 +255,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -291,7 +291,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -327,7 +327,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -363,7 +363,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -399,7 +399,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -435,7 +435,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -471,7 +471,7 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
 
@@ -507,6 +507,6 @@ Source: no bench document given; measured cells are blank.
 
 ### KV bytes and maximum batch
 
-| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (limit 5%, plan §10.4) | max batch at cache 8k |
+| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |
 |---|---|---|---|---|
 | — | — | — | — | — |
