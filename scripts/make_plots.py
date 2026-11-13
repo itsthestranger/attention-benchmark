@@ -38,7 +38,7 @@ from src.model import build_model
 from src.utils import manifest as mf
 
 DPI = 120
-BENCH_SCHEMA = "bench/1"
+BENCH_SCHEMA = "bench/2"
 FRONTIER_BATCH = 32
 FRONTIER_CACHE = 4096
 RETRIEVAL_MODES = ("zero_shot", "trained")
@@ -107,7 +107,7 @@ class PlotError(ValueError):
 class PlotInputs:
     results: tuple  # completed runs and branches, from select_results
     analysis: mt.Analysis  # from analyse(results): the only source of statistics
-    bench: tuple  # bench/1 records
+    bench: tuple  # bench/2 records
     probes: tuple  # {variant, task, difficulty, init_seed, accuracy}
     retrieval: tuple  # {variant, task, mode, length, n_distractors, init_seed, accuracy}
     prereg: Mapping
@@ -1145,7 +1145,7 @@ def load_records(path) -> list:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the ten plots of plan §10.5.")
     parser.add_argument("--manifests", default="results/manifests", help="directory of manifests")
-    parser.add_argument("--bench", default="results/bench", help="directory (or file) of bench/1 records")
+    parser.add_argument("--bench", default="results/bench", help="directory (or file) of bench/2 records")
     parser.add_argument("--probes", default="results/probes.json", help="probe records (JSON list)")
     parser.add_argument("--retrieval", default="results/retrieval.json", help="retrieval records (JSON list)")
     parser.add_argument("--out", default="results/plots", help="directory to write the PNG files to")

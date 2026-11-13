@@ -9,6 +9,7 @@ bench on CUDA in fp16. Both skip cleanly without CUDA (tests/conftest.py).
 from __future__ import annotations
 
 import json
+import statistics
 
 import pytest
 import torch
@@ -56,24 +57,45 @@ class FakeClock:
         return self.now
 
 
+PREFILL_KEYS = {
+    "context", "batch", "latency_ms", "latency_ms_by_repetition", "latency_ms_min", "latency_ms_max",
+    "tok_per_s", "tok_per_s_by_repetition", "tok_per_s_min", "tok_per_s_max", "peak_bytes",
+}
+DECODE_KEYS = {
+    "batch", "cache", "ms_per_token", "ms_per_token_by_repetition", "ms_per_token_min", "ms_per_token_max",
+    "tok_per_s", "tok_per_s_by_repetition", "tok_per_s_min", "tok_per_s_max", "peak_bytes",
+}
+
+
+def _timed_ok(row: dict, field: str, repetitions: int) -> None:
+    """The median, the list of repetitions, min and max of one timed field: the statistics of that list."""
+    values = row[f"{field}_by_repetition"]
+    assert len(values) == repetitions and all(isinstance(v, float) and v > 0 for v in values)
+    assert isinstance(row[field], float) and row[field] > 0
+    assert row[f"{field}_min"] == min(values) and row[f"{field}_max"] == max(values)
+    assert row[f"{field}_min"] <= row[field] <= row[f"{field}_max"]
+    assert row[field] == statistics.median(values)
+
+
 def _schema_keys(doc: dict) -> None:
     assert set(doc) == {
-        "schema", "variant", "mode", "precision", "backend", "environment", "gpu_shared",
+        "schema", "variant", "mode", "precision", "backend", "environment", "gpu_shared", "repetitions",
         "kv_bytes_per_token", "prefill", "decode", "max_batch_at_8k",
     }
-    assert doc["schema"] == "bench/1"
+    assert doc["schema"] == "bench/2"
+    assert isinstance(doc["repetitions"], int) and doc["repetitions"] >= 1
     assert isinstance(doc["environment"], dict)
     assert set(doc["kv_bytes_per_token"]) == {"analytic", "measured", "measured_tokens"}
     for row in doc["prefill"]:
-        assert set(row) == {"context", "batch", "latency_ms", "tok_per_s", "peak_bytes"}
+        assert set(row) == PREFILL_KEYS
         assert isinstance(row["context"], int) and isinstance(row["batch"], int)
-        assert isinstance(row["latency_ms"], float) and row["latency_ms"] > 0
-        assert isinstance(row["tok_per_s"], float) and row["tok_per_s"] > 0
+        _timed_ok(row, "latency_ms", doc["repetitions"])
+        _timed_ok(row, "tok_per_s", doc["repetitions"])
     for row in doc["decode"]:
-        assert set(row) == {"batch", "cache", "ms_per_token", "tok_per_s", "peak_bytes"}
+        assert set(row) == DECODE_KEYS
         assert isinstance(row["batch"], int) and isinstance(row["cache"], int)
-        assert isinstance(row["ms_per_token"], float) and row["ms_per_token"] > 0
-        assert isinstance(row["tok_per_s"], float) and row["tok_per_s"] > 0
+        _timed_ok(row, "ms_per_token", doc["repetitions"])
+        _timed_ok(row, "tok_per_s", doc["repetitions"])
 
 
 # --- Schema, end to end on CPU ----------------------------------------------------------
@@ -91,6 +113,7 @@ def test_bench_runs_end_to_end_for_every_variant_in_both_tracks(tmp_path):
             assert doc["variant"] == variant and doc["mode"] == mode
             assert doc["precision"] == "fp32"  # CPU
             assert doc["gpu_shared"] is False
+            assert doc["repetitions"] == 3  # the default (decision 225)
             assert doc["backend"] is None  # no backend is enforced on CPU
             # CPU cannot measure these: they are null, not zero.
             assert doc["kv_bytes_per_token"]["measured"] is None
@@ -303,19 +326,39 @@ def test_max_batch_refuses_to_report_when_the_limit_still_fits():
 # --- Readers and the consumer ---------------------------------------------------------------
 
 
-def _bench_doc(variant: str, mode: str, *, gpu_shared: bool = False, tok: float = 1234.5) -> dict:
+def _point(identity: dict, field: str, reps: list[float]) -> dict:
+    """A bench/2 point whose `field` has the repetitions `reps`, median and min and max as the writer computes them."""
+    values = list(reps)
     return {
-        "schema": "bench/1",
+        **identity,
+        field: float(statistics.median(values)),
+        f"{field}_by_repetition": values,
+        f"{field}_min": min(values),
+        f"{field}_max": max(values),
+    }
+
+
+def _bench_doc(variant: str, mode: str, *, gpu_shared: bool = False, tok: float = 1234.5) -> dict:
+    """A bench/2 document. The headline tok/s has the repetitions (tok * 0.8, tok, tok * 1.2)."""
+    headline = {"batch": 32, "cache": 4096}
+    headline_tok = _point(headline, "tok_per_s", [tok * 0.8, tok, tok * 1.2])
+    headline_ms = _point({}, "ms_per_token", [2.0, 2.0, 2.0])
+    return {
+        "schema": "bench/2",
         "variant": variant,
         "mode": mode,
         "precision": "fp16",
         "environment": {},
         "gpu_shared": gpu_shared,
+        "repetitions": 3,
         "kv_bytes_per_token": {"analytic": 1, "measured": None},
         "prefill": [],
         "decode": [
-            {"batch": 1, "cache": 4096, "ms_per_token": 1.0, "tok_per_s": 1000.0, "peak_bytes": None},
-            {"batch": 32, "cache": 4096, "ms_per_token": 2.0, "tok_per_s": tok, "peak_bytes": None},
+            {"batch": 1, "cache": 4096, "ms_per_token": 1.0, "tok_per_s": 1000.0,
+             "ms_per_token_by_repetition": [1.0] * 3, "ms_per_token_min": 1.0, "ms_per_token_max": 1.0,
+             "tok_per_s_by_repetition": [1000.0] * 3, "tok_per_s_min": 1000.0, "tok_per_s_max": 1000.0,
+             "peak_bytes": None},
+            {**headline_tok, **headline_ms, "peak_bytes": None},
         ],
         "max_batch_at_8k": None,
     }
@@ -351,6 +394,14 @@ def test_decode_reader_refuses_a_wrong_schema(tmp_path):
         bench.read_decode_tok_per_s(tmp_path)
 
 
+def test_decode_reader_refuses_a_bench_1_file(tmp_path):
+    doc = _bench_doc("mha", "opt")
+    doc["schema"] = "bench/1"
+    bench.write_bench_file(tmp_path, doc)
+    with pytest.raises(bench.BenchError, match="expected 'bench/2'"):
+        bench.read_decode_tok_per_s(tmp_path)
+
+
 # --- GPU tier ------------------------------------------------------------------------------
 
 
@@ -380,6 +431,7 @@ def test_bench_runs_on_cuda_in_fp16(tmp_path):
         _schema_keys(doc)
         assert doc["precision"] == "fp16"
         assert doc["gpu_shared"] is False
+        assert doc["repetitions"] == 3
         assert doc["backend"] == "efficient"
         assert doc["kv_bytes_per_token"]["measured"] is not None
         assert doc["kv_bytes_per_token"]["measured_tokens"] == 1024

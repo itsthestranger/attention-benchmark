@@ -6,7 +6,7 @@ generators (never the global RNG):
 - `final_metrics["val"]` (the per-bucket validation block of
   `src/eval/lm.py`) and `final_metrics["val_curve"]` (the evaluations made
   during a run) added to completed results through `validate_manifest`;
-- bench/1 records, probe records and retrieval records with the shapes the
+- bench/2 records, probe records and retrieval records with the shapes the
   brief specifies;
 - two constructed cases with hand-set numbers, for checks that need exact values.
 
@@ -189,11 +189,28 @@ def _curve_rows(points, *, total: int) -> list[dict]:
     return rows
 
 
-# --- bench/1, probe and retrieval records --------------------------------------------------
+# --- bench/2, probe and retrieval records --------------------------------------------------
+
+BENCH_REPETITIONS = 3  # plan §8.6 as amended by decision 225
+BENCH_SPREAD = 0.02  # synthetic: the two outer repetitions lie 2% either side of the median
+
+
+def repeated(name: str, median: float, *, decimals: int | None = None) -> dict:
+    """The bench/2 fields of one timed quantity (synthetic): its median, its three repetitions with
+    the median in the middle (so the median is exactly the statistic of the list), min and max.
+
+    `median` must already have `decimals` decimal places when given; the outer repetitions are rounded
+    the same way.
+    """
+    def fix(x: float) -> float:
+        return x if decimals is None else round(x, decimals)
+
+    low, high = fix(median * (1.0 - BENCH_SPREAD)), fix(median * (1.0 + BENCH_SPREAD))
+    return {name: median, f"{name}_by_repetition": [high, median, low], f"{name}_min": low, f"{name}_max": high}
 
 
 def bench_records() -> list[dict]:
-    """bench/1 records for every headline variant, in ref and opt modes (synthetic numbers).
+    """bench/2 records for every headline variant, in ref and opt modes (synthetic numbers).
 
     Synthetic records. Their environment and backend are those of the synthetic campaign
     (fake_secondary.ENVIRONMENT; backend "efficient" on opt records, None on ref records), so that
@@ -209,22 +226,26 @@ def bench_records() -> list[dict]:
             prefill = []
             for context in (128, 512, 2048, 8192):
                 latency = speed * (0.5 + context / 1500.0) * (1.0 + 0.01 * float(rng.standard_normal()))
-                prefill.append({"context": context, "batch": 1, "latency_ms": round(latency, 3),
-                                "tok_per_s": round(context / latency * 1000.0, 1), "peak_bytes": 10_000_000 + context})
+                latency = round(latency, 3)
+                tok = round(context / latency * 1000.0, 1)
+                prefill.append({"context": context, "batch": 1, **repeated("latency_ms", latency, decimals=3),
+                                **repeated("tok_per_s", tok, decimals=1), "peak_bytes": 10_000_000 + context})
             decode = []
             for batch in (1, 8, 32):
                 for cache in (1024, 4096, 8192):
-                    ms = speed * (1.0 + 0.4 * batch / 32.0 + cache / 8192.0) * (1.0 + 0.01 * float(rng.standard_normal()))
-                    decode.append({"batch": batch, "cache": cache, "ms_per_token": round(ms, 3),
-                                   "tok_per_s": round(batch * 1000.0 / ms, 1), "peak_bytes": 20_000_000 + cache})
+                    ms = round(speed * (1.0 + 0.4 * batch / 32.0 + cache / 8192.0) * (1.0 + 0.01 * float(rng.standard_normal())), 3)
+                    tok = round(batch * 1000.0 / ms, 1)
+                    decode.append({"batch": batch, "cache": cache, **repeated("ms_per_token", ms, decimals=3),
+                                   **repeated("tok_per_s", tok, decimals=1), "peak_bytes": 20_000_000 + cache})
             records.append({
-                "schema": "bench/1",
+                "schema": "bench/2",
                 "variant": variant,
                 "mode": mode,
                 "precision": "fp16",
                 "environment": dict(ENVIRONMENT),
                 "backend": "efficient" if mode == "opt" else None,
                 "gpu_shared": False,
+                "repetitions": BENCH_REPETITIONS,
                 "kv_bytes_per_token": {"analytic": 1536, "measured": 1540.0},
                 "prefill": prefill,
                 "decode": decode,
