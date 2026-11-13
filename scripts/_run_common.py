@@ -8,7 +8,7 @@ the evaluator or the libraries the entry points call.
 
 Layout under OUT (one working directory per experiment)
     checkpoints/{mode}/{config hash}/   step*.pt, trunk-step*.pt (branch points),
-                                        sessions.json, val_curve.json
+                                        sessions.json, val_curve.json, peak_memory.json
     manifests/{mode}/{name}.json        one manifest per run and per branch, and nothing else
     ops/{mode}/{name}.json              the operational settings of each session (kept out of
                                         the manifest directory: scripts/make_tables.py reads
@@ -57,7 +57,10 @@ OPS_KEYS = (
 )
 MODES = ("ref", "opt")
 CURVE_FILE = "val_curve.json"
+PEAK_FILE = "peak_memory.json"  # the peak memory of each session of a run or branch (T-41)
 SESSIONS_FILE = "sessions.json"
+PEAK_KEYS = ("allocated_bytes", "reserved_bytes")
+CURVE_KEYS = ("step", "tokens", "val_loss", "buckets", "late_context", "icl")
 DATA_CONFIG = config.CONFIG_DIR / "data.yaml"  # read at call time; tests may replace it
 OPS_CONFIG = config.CONFIG_DIR / "ops.yaml"
 DEFAULT_ARM = "iso_token"
@@ -481,8 +484,13 @@ class ValCurve:
         self.entries = kept
         return dropped
 
-    def append(self, *, step: int, tokens: int, val_loss: float) -> None:
-        self.entries.append({"step": int(step), "tokens": int(tokens), "val_loss": float(val_loss)})
+    def append(self, *, step: int, tokens: int, val_loss: float, buckets: list, late_context: dict,
+               icl: dict) -> None:
+        """One point: the loss, and the context-bucketed blocks of the same evaluation (plan §10.3)."""
+        self.entries.append({
+            "step": int(step), "tokens": int(tokens), "val_loss": float(val_loss),
+            "buckets": buckets, "late_context": late_context, "icl": icl,
+        })
 
     def save(self) -> None:
         _write_json_atomic(self.path, self.entries)
@@ -491,11 +499,95 @@ class ValCurve:
 def _is_curve_entry(entry: object) -> bool:
     return (
         isinstance(entry, dict)
-        and set(entry) == {"step", "tokens", "val_loss"}
+        and set(entry) == set(CURVE_KEYS)
         and isinstance(entry["step"], int)
         and isinstance(entry["tokens"], int)
         and isinstance(entry["val_loss"], float)
+        and isinstance(entry["buckets"], list)
+        and isinstance(entry["late_context"], dict)
+        and isinstance(entry["icl"], dict)
     )
+
+
+# --- Peak memory (T-41) ----------------------------------------------------------------------------
+
+
+def peak_memory(device) -> dict:
+    """The peak memory this process has reached on `device`: {"allocated_bytes", "reserved_bytes"}.
+
+    On CUDA, the torch statistics since the last reset_peak_memory. On the CPU both are None. Every
+    read of the peak goes through this function, so a test can replace it.
+    """
+    if torch.device(device).type != "cuda":
+        return {"allocated_bytes": None, "reserved_bytes": None}
+    return {
+        "allocated_bytes": int(torch.cuda.max_memory_allocated(device)),
+        "reserved_bytes": int(torch.cuda.max_memory_reserved(device)),
+    }
+
+
+def reset_peak_memory(device) -> None:
+    """Start a session's peak statistics from zero. CUDA only; a no-op on the CPU."""
+    if torch.device(device).type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+
+
+class PeakMemory:
+    """The peak memory of each session of one run or branch, kept beside its curve file.
+
+    A session records its reading when it writes a checkpoint, when it stops at --until and
+    when it finishes, so a session killed after a checkpoint still counts. The file maps each
+    session id to its peak; the manifest reports the maximum over the sessions in it.
+    """
+
+    def __init__(self, path: Path, session_id: str, device: torch.device):
+        self.path = Path(path)
+        self.session_id = session_id
+        self.device = device
+
+    def record(self) -> None:
+        data = self._read()
+        reading = peak_memory(self.device)
+        previous = data.get(self.session_id, {})
+        data[self.session_id] = {
+            key: _larger(previous.get(key), reading[key]) for key in PEAK_KEYS
+        }
+        _write_json_atomic(self.path, data)
+
+    def maximum(self) -> dict:
+        data = self._read()
+        return {key: _larger_of(entry[key] for entry in data.values()) for key in PEAK_KEYS}
+
+    def _read(self) -> dict:
+        data = _read_json(self.path) if self.path.exists() else {}
+        if not isinstance(data, dict) or not all(_is_peak_entry(v) for v in data.values()):
+            raise EntryError(f"{self.path} is not a peak-memory record")
+        return data
+
+
+def _is_peak_entry(entry: object) -> bool:
+    return (
+        isinstance(entry, dict)
+        and set(entry) == set(PEAK_KEYS)
+        and all(v is None or (isinstance(v, int) and not isinstance(v, bool) and v >= 0)
+                for v in entry.values())
+    )
+
+
+def _larger(a, b):
+    """The larger of two readings, where None means no reading."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return max(a, b)
+
+
+def _larger_of(values) -> int | None:
+    result = None
+    for value in values:
+        result = _larger(result, value)
+    return result
 
 
 # --- Evaluation ------------------------------------------------------------------------------------
@@ -538,13 +630,14 @@ class RunHook:
     """The trainer's on_step hook: the in-run validation point, then the checkpoint cadence."""
 
     def __init__(self, *, checkpointer, curve: ValCurve, val_split, settings: EvalSettings,
-                 every: int, windows: int):
+                 every: int, windows: int, peaks: PeakMemory):
         self.checkpointer = checkpointer
         self.curve = curve
         self.val_split = val_split
         self.settings = settings
         self.every = every
         self.windows = windows
+        self.peaks = peaks
 
     def __call__(self, trainer, record) -> None:
         if trainer.step % self.every == 0:
@@ -558,9 +651,15 @@ class RunHook:
                 max_windows=self.windows,
             )
             tokens = trainer.step * trainer.resolved["recipe"]["batch"]["tokens_per_step"]
-            self.curve.append(step=trainer.step, tokens=tokens, val_loss=result["loss"])
+            self.curve.append(
+                step=trainer.step, tokens=tokens, val_loss=result["loss"],
+                buckets=result["buckets"], late_context=result["late_context"], icl=result["icl"],
+            )
             self.curve.save()
+        saved = len(self.checkpointer.saved)
         self.checkpointer(trainer, record)
+        if len(self.checkpointer.saved) != saved:
+            self.peaks.record()  # a session killed after this checkpoint still counts (T-41)
 
 
 # --- Jobs and manifests ----------------------------------------------------------------------------
@@ -597,6 +696,7 @@ def run_job(trainer, job: Job) -> int:
     if curve.truncate_after(trainer.step):
         curve.save()
     record_ops(job.layout.ops, job.name, sessions[-1], job.ops, job.device, job.until)
+    peaks = PeakMemory(job.ckpt_dir / PEAK_FILE, sessions[-1], job.device)
     checkpointer = ck.Checkpointer(
         job.layout.checkpoints,
         every_steps=job.ops["checkpoint_every_steps"],
@@ -612,6 +712,7 @@ def run_job(trainer, job: Job) -> int:
         settings=job.settings,
         every=job.ops["eval_every_steps"],
         windows=job.ops["eval_curve_windows"],
+        peaks=peaks,
     )
     try:
         trainer.train(until=job.until)
@@ -625,7 +726,11 @@ def run_job(trainer, job: Job) -> int:
         finished = trainer.step == total
         final = final_metrics(trainer, job, curve.entries) if finished else None
     except NonFiniteLoss as exc:
+        peaks.record()
         return record_divergence(trainer, job, sessions, exc)
+    peaks.record()  # after the final evaluation, which is part of this session (T-41)
+    if final is not None:
+        final["peak_memory"] = peaks.maximum()
     path = write_manifest(job, trainer, sessions, completed=finished, final=final)
     state = "completed" if finished else f"unfinished at step {trainer.step} of {total}"
     print(f"{path}: {state}; resumes so far: {len(sessions) - 1}")

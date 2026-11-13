@@ -69,6 +69,7 @@ def _train(args) -> int:
     config.require_complete(resolved)
     ops = rc.load_ops(args)
     device = rc.choose_device(args.device)
+    rc.reset_peak_memory(device)  # this session's peak starts here, before the model exists (T-41)
     backend = rc.backend_for(device, args.expected_backend, required=True)
     gpu_shared = rc.gpu_shared_for(device, args.gpu_shared)
 

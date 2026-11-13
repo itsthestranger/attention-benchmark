@@ -854,3 +854,54 @@ def test_git_sha_of_this_repository_is_forty_hex_characters():
 def test_git_sha_outside_a_repository_is_refused(tmp_path):
     with pytest.raises(ManifestError):
         mf.git_sha(tmp_path)
+
+
+# --- T-41: the run records of a completed run, checked when present -------------
+
+
+@pytest.mark.parametrize("peak", [
+    {"allocated_bytes": None, "reserved_bytes": None},
+    {"allocated_bytes": 0, "reserved_bytes": 2**40},
+])
+def test_peak_memory_of_null_or_non_negative_ints_is_valid(peak):
+    manifest = copy.deepcopy(RUN)
+    manifest["final_metrics"]["peak_memory"] = peak
+    assert mf.validate_manifest(manifest) == []
+
+
+def test_peak_memory_must_be_an_object():
+    manifest = copy.deepcopy(RUN)
+    manifest["final_metrics"]["peak_memory"] = [1, 2]
+    assert _has(mf.validate_manifest(manifest), "final_metrics.peak_memory", "exactly")
+
+
+@pytest.mark.parametrize("peak", [
+    {"allocated_bytes": 1},
+    {"allocated_bytes": 1, "reserved_bytes": 2, "device": 0},
+])
+def test_peak_memory_with_missing_or_extra_keys_is_reported(peak):
+    manifest = copy.deepcopy(RUN)
+    manifest["final_metrics"]["peak_memory"] = peak
+    assert _has(mf.validate_manifest(manifest), "final_metrics.peak_memory", "exactly")
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, True, "1"])
+def test_a_peak_that_is_not_null_or_a_non_negative_int_is_reported(value):
+    manifest = copy.deepcopy(RUN)
+    manifest["final_metrics"]["peak_memory"] = {"allocated_bytes": value, "reserved_bytes": None}
+    assert _has(mf.validate_manifest(manifest), "final_metrics.peak_memory.allocated_bytes")
+
+
+def test_a_validation_point_whose_buckets_are_not_a_list_is_reported():
+    manifest = copy.deepcopy(RUN)
+    manifest["final_metrics"]["val_curve"] = [
+        {"step": 4, "tokens": 64, "val_loss": 3.0, "buckets": {"low": 0}, "late_context": None, "icl": None},
+    ]
+    assert _has(mf.validate_manifest(manifest), "val_curve[0].buckets", "list")
+
+
+def test_validation_points_without_buckets_and_a_run_without_peak_memory_are_valid():
+    manifest = copy.deepcopy(RUN)
+    manifest["final_metrics"]["val_curve"] = [{"step": 4, "tokens": 64, "val_loss": 3.0}]
+    assert "peak_memory" not in manifest["final_metrics"]
+    assert mf.validate_manifest(manifest) == []

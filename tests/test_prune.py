@@ -35,6 +35,7 @@ from tests.test_entry_points import (  # noqa: F401  (fixtures and helpers of th
 
 CURVE = rc.CURVE_FILE
 SESSIONS = rc.SESSIONS_FILE
+PEAK = rc.PEAK_FILE  # the per-session peak-memory record (T-41): bookkeeping, never pruned
 LISTED = re.compile(r"^  (?:would delete|deleted) (\S+) \(")
 
 
@@ -155,13 +156,13 @@ def test_completed_trunk_and_branch_keep_only_their_finals_and_curve_and_session
     trunk, branch = _dir(out, trunk_resolved), _dir(out, _branch_resolved(trunk_resolved))
     assert _files(out) == {
         f"{trunk}/step00000024.pt", f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt",
-        f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
-        f"{branch}/step00000022.pt", f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+        f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
+        f"{branch}/step00000022.pt", f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}", f"{branch}/{PEAK}",
     }
     assert prune.main(["--out", str(out), "--apply"]) == 0
     assert _files(out) == {
-        f"{trunk}/step00000032.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
-        f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+        f"{trunk}/step00000032.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
+        f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}", f"{branch}/{PEAK}",
     }
 
 
@@ -170,8 +171,8 @@ def test_final_flag_removes_the_final_checkpoints_and_nothing_else(full, trunk_r
     trunk, branch = _dir(out, trunk_resolved), _dir(out, _branch_resolved(trunk_resolved))
     assert prune.main(["--out", str(out), "--apply", "--final"]) == 0
     assert _files(out) == {
-        f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
-        f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+        f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
+        f"{branch}/{CURVE}", f"{branch}/{SESSIONS}", f"{branch}/{PEAK}",
     }
 
 
@@ -183,7 +184,7 @@ def test_branch_point_stays_when_its_branch_was_never_run(trunk_only, trunk_reso
     trunk = _dir(out, trunk_resolved)
     assert prune.main(["--out", str(out), "--apply"]) == 0
     assert _files(out) == {
-        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
+        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
     }
 
 
@@ -194,8 +195,8 @@ def test_branch_point_stays_when_its_branch_is_unfinished(trunk_only, specs, syn
     assert mf.read_manifest(out / "manifests/opt" / f"{mf.run_name(trunk_resolved, SHORT_LABEL)}.json")["completed"] is False
     assert prune.main(["--out", str(out), "--apply"]) == 0
     assert _files(out) == {
-        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
-        f"{branch}/step00000020.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
+        f"{branch}/step00000020.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}", f"{branch}/{PEAK}",
     }
 
 
@@ -213,8 +214,8 @@ def test_branch_point_stays_when_the_branch_manifest_is_invalid(full, trunk_reso
     # Only the trunk's regular checkpoint at 24 goes: the branch point stays, and so does
     # everything of the branch, whose manifest cannot be trusted.
     assert _files(out) == {
-        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
-        f"{branch}/step00000022.pt", f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
+        f"{branch}/step00000022.pt", f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}", f"{branch}/{PEAK}",
     }
 
 
@@ -230,7 +231,7 @@ def test_an_unfinished_run_loses_nothing(unfinished_trunk, trunk_resolved, tmp_p
     # Stopped at step 20: the cadence checkpoint at 16 and the one a stop leaves at 20 (T-40).
     assert _files(out) == {
         f"{trunk}/step00000016.pt", f"{trunk}/step00000020.pt", f"{trunk}/trunk-step00000019.pt",
-        f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
+        f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
     }
 
 
@@ -308,7 +309,7 @@ def test_opt_and_ref_are_pruned_separately(full, trunk_ref, trunk_resolved, tmp_
     assert prune.main(["--out", str(out), "--mode", "ref", "--apply"]) == 0
     assert _files(out, "ref") == {
         f"{ref_trunk}/step00000032.pt", f"{ref_trunk}/trunk-step00000019.pt",
-        f"{ref_trunk}/{CURVE}", f"{ref_trunk}/{SESSIONS}",
+        f"{ref_trunk}/{CURVE}", f"{ref_trunk}/{SESSIONS}", f"{ref_trunk}/{PEAK}",
     }
 
 
@@ -373,14 +374,14 @@ def test_an_unfinished_branch_loses_nothing_in_its_own_directory(
     trunk, branch = _dir(out, trunk_resolved), _dir(out, _branch_resolved(trunk_resolved))
     assert _files(out) == {
         f"{trunk}/step00000024.pt", f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt",
-        f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
-        f"{branch}/step00000020.pt", f"{branch}/step00000022.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+        f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
+        f"{branch}/step00000020.pt", f"{branch}/step00000022.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}", f"{branch}/{PEAK}",
     }
     flags = ["--final"] if final else []
     assert prune.main(["--out", str(out), "--apply", *flags]) == 0
     expected = {
-        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
-        f"{branch}/step00000020.pt", f"{branch}/step00000022.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
+        f"{branch}/step00000020.pt", f"{branch}/step00000022.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}", f"{branch}/{PEAK}",
     }
     if final:
         expected.discard(f"{trunk}/step00000032.pt")
@@ -407,8 +408,8 @@ def test_a_branch_manifest_with_another_config_hash_does_not_authorise_its_branc
     assert "does not belong to this run" in _kept_reason(p, branch_point)
     assert prune.main(["--out", str(out), "--apply"]) == 0
     assert _files(out) == {
-        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
-        f"{branch}/step00000022.pt", f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
+        f"{branch}/step00000022.pt", f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}", f"{branch}/{PEAK}",
     }
 
 
@@ -438,7 +439,7 @@ def test_a_completed_run_without_its_final_checkpoint_keeps_the_newest_regular_o
     assert prune.main(["--out", str(out), "--apply"]) == 0
     # The older regular checkpoint goes; the newest, step 24, is kept as the fallback.
     assert _files(out) == {
-        f"{trunk}/step00000024.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
+        f"{trunk}/step00000024.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
     }
 
 
@@ -453,6 +454,6 @@ def test_a_trunk_step_file_that_is_not_a_branch_point_of_the_run_is_left_alone(f
     assert "not a branch point of this run" in _kept_reason(p, extra)
     assert prune.main(["--out", str(out), "--apply"]) == 0
     assert _files(out) == {
-        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000010.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
-        f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000010.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
+        f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}", f"{branch}/{PEAK}",
     }

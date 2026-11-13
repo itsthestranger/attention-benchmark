@@ -447,8 +447,36 @@ def validate_manifest(manifest: object) -> list[str]:
         else:
             c.fail("branch: must be null or an object")
 
+    _check_run_records(c)
     _cross_check(c)
     return c.problems
+
+
+PEAK_MEMORY_KEYS = ("allocated_bytes", "reserved_bytes")
+
+
+def _check_run_records(c: _Checks) -> None:
+    """The records of a completed run that are checked when present (T-41).
+
+    A manifest without `peak_memory`, or whose validation points carry no `buckets`, is valid.
+    """
+    metrics = c.good.get("final_metrics")
+    if not isinstance(metrics, dict):
+        return
+    if "peak_memory" in metrics:
+        peak = metrics["peak_memory"]
+        if not isinstance(peak, dict) or set(peak) != set(PEAK_MEMORY_KEYS):
+            c.fail(f"final_metrics.peak_memory: must be an object with exactly the keys "
+                   f"{list(PEAK_MEMORY_KEYS)}")
+        else:
+            for key in PEAK_MEMORY_KEYS:
+                if peak[key] is not None and not _is_nonneg_int(peak[key]):
+                    c.fail(f"final_metrics.peak_memory.{key}: must be null or a non-negative int")
+    curve = metrics.get("val_curve")
+    if isinstance(curve, list):
+        for index, entry in enumerate(curve):
+            if isinstance(entry, dict) and "buckets" in entry and not isinstance(entry["buckets"], list):
+                c.fail(f"final_metrics.val_curve[{index}].buckets: must be a list")
 
 
 # --- Validation internals ----------------------------------------------------
