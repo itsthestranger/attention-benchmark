@@ -417,6 +417,11 @@ class Analysis:
     # {variant: first Arm A manifest of it} (plan §10.1): the parameters, d_ff and cache of a
     # variant's headline row come from its own runs when it has any (headline_rows).
     arm_a_examples: Mapping = dataclasses.field(default_factory=dict)
+    # The names of the manifests that `losses`, `losses_100m` and `losses_200m` hold for the headline
+    # variants: their Arm A 300M runs and 100M and 200M branches at the variant's learning rate. Plot 7
+    # draws exactly these and nothing else (sweep points, reruns, null and data-order runs, ladder
+    # runs and other arms are not drawn).
+    curve_runs: tuple = ()
 
 
 class _Collected(NamedTuple):
@@ -430,6 +435,7 @@ class _Collected(NamedTuple):
     context: dict  # {variant: {init_seed: {"late_context": x or None, "icl": y or None}}}, 300M
     peak_lr: dict  # {variant: peak learning rate of its 300M and 100M runs (Arm A)}
     read: tuple  # every manifest whose loss is put into a field above: the runs the analysis reads
+    curve_runs: tuple  # names of the headline variants' manifests put into losses, losses_100m or losses_200m
 
 
 # The number of non-embedding parameters of each manifest's configuration, by
@@ -493,6 +499,7 @@ def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
     # same model, so the first one read will do.
     examples: dict[str, dict] = {}
     read: list[dict] = []  # every manifest whose loss is stored below (the steps-parity scope)
+    curve_runs: list[str] = []  # the headline variants' manifests stored in losses, losses_100m or losses_200m
     reproducibility_seeds = set(prereg["test_selection"]["reproducibility_pairs"]["init_seeds"])
     for manifest, parsed in selected:
         loss = float(manifest["final_metrics"]["val_loss"])
@@ -502,12 +509,18 @@ def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
             losses.setdefault(variant, {})[parsed.init_seed] = loss
             context.setdefault(variant, {})[parsed.init_seed] = _context_values(manifest)
             read.append(manifest)
+            if variant in HEADLINE_VARIANTS:
+                curve_runs.append(manifest["name"])
         elif parsed.branch == small and parsed.tokens == budget and parsed.peak_lr == lr.get(variant):
             losses_100m.setdefault(variant, {})[parsed.init_seed] = loss
             read.append(manifest)
+            if variant in HEADLINE_VARIANTS:
+                curve_runs.append(manifest["name"])
         elif parsed.branch == MID_BUDGET and parsed.tokens == budget and parsed.peak_lr == lr.get(variant):
             losses_200m.setdefault(variant, {})[parsed.init_seed] = loss
             read.append(manifest)
+            if variant in HEADLINE_VARIANTS:
+                curve_runs.append(manifest["name"])
         elif (
             variant == "mha"
             and parsed.branch is None
@@ -553,7 +566,7 @@ def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
         data_order[arm["data_seed"]] = branch_100m[DATA_ORDER_INIT_SEED]
     return _Collected(
         losses, losses_100m, losses_200m, reruns, examples, null_100m, data_order, context, lr,
-        tuple(read),
+        tuple(read), tuple(curve_runs),
     )
 
 
@@ -1165,6 +1178,7 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
         context_use=context_use,
         rule_fit=rule_fit,
         arm_a_examples=dict(examples),
+        curve_runs=collected.curve_runs,
     )
 
 
@@ -1295,25 +1309,97 @@ def _cell(text: str) -> str:
     return str(text).replace("|", "\\|")
 
 
-# Plan §13.1 to §13.5: the confounds the study must disclose. Fixed text, the same in every
-# headline table, in the plan's order (13.2 to 13.5 first, then 13.1 as it is the one about matching).
-DISCLOSURES = (
+# Plan §13.1 to §13.5: the confounds the study must disclose. The texts are fixed, except the
+# hardware line, which `disclosures` writes from the results. The order is the plan's (13.2 to 13.5
+# first, then 13.1 as it is the one about matching).
+_DISCLOSURE_MLA = (
     "MLA bundles two changes, low-rank KV compression and decoupled RoPE; they cannot be fully "
-    "separated, and compression alone was not measured (plan §13.2).",
+    "separated, and compression alone was not measured (plan §13.2)."
+)
+_DISCLOSURE_KERNEL = (
     "Kernel maturity is not architecture: MHA, GQA and MQA use a mature fused kernel, while SWA's "
     "block-skipping path and MLA's absorbed path are newer or hand-written, so any SWA or MLA timing "
-    "gap is partly implementation (plan §13.3).",
-    "Hardware: every number here is from a T4 (sm75) with the memory-efficient kernel, not "
-    "FlashAttention-2 and no fp8; rankings may differ on Ampere and later (plan §13.4).",
+    "gap is partly implementation (plan §13.3)."
+)
+_DISCLOSURE_SCALE = (
     "Scale: 17M parameters, context 1,024, 300M tokens, one corpus and one tokenizer; nothing here "
-    "extrapolates to production scale (plan §13.5).",
+    "extrapolates to production scale (plan §13.5)."
+)
+_DISCLOSURE_MATCHING = (
     "Parameter matching moves capacity into the MLP: iso-parameter variants spend their KV-projection "
     "savings on a wider MLP, so iso-parameter does not isolate attention; see the Arm B table "
-    "(plan §13.1).",
+    "(plan §13.1)."
 )
+# The caveat of the hardware line. The clause on FlashAttention-2 is dropped when a result records the
+# flash backend, which may be FlashAttention-2 itself: the line must not say what the manifests contradict.
+_NOT_FLASH_CLAUSE = "not FlashAttention-2 and no fp8"
+_HARDWARE_CAVEAT = f"{_NOT_FLASH_CLAUSE}; rankings may differ on other hardware (plan §13.4)."
+_HARDWARE_CAVEAT_NO_FLASH_CLAIM = "no fp8; rankings may differ on other hardware (plan §13.4)."
+# The plan's own hardware (plan §2), named when no run is recorded yet.
+PLAN_HARDWARE = "the Kaggle T4 (sm75) with the memory-efficient kernel"
+# The kernel names of a backend as the manifests record it (manifest.BACKENDS). Unknown names are quoted.
+BACKEND_KERNELS = {
+    "flash": "the flash backend",
+    "efficient": "the memory-efficient kernel",
+    "math": "the math kernel",
+    "cudnn": "the cuDNN kernel",
+}
+# A run with no GPU records no backend (manifest rule 8), and so names no kernel. The bench
+# documents of ref mode record none either.
+REF_NO_BACKEND = "runs with no GPU and ref-mode bench records have no backend, so no kernel is named for them"
 
 
-def render_markdown(rows: Sequence[Mapping[str, str]], notes: Sequence[str] = ()) -> str:
+def _gpu_text(gpu_name, capability) -> str:
+    if gpu_name is None:
+        return "no GPU (CPU)"
+    if isinstance(capability, (list, tuple)) and len(capability) == 2:
+        return f"{gpu_name} (sm{int(capability[0])}{int(capability[1])})"
+    return f"{gpu_name} (compute capability not recorded)"
+
+
+def _hardware_line(results: Sequence[dict]) -> str:
+    """The hardware disclosure of plan §13.4, from the GPUs and backends the results record."""
+    if not results:
+        return (
+            f"Hardware: no run is recorded yet; the plan's hardware is {PLAN_HARDWARE}, "
+            f"{_HARDWARE_CAVEAT}"
+        )
+    gpus = sorted({
+        _gpu_text(
+            (manifest.get("environment") or {}).get("gpu_name"),
+            (manifest.get("environment") or {}).get("compute_capability"),
+        )
+        for manifest in results
+    })
+    backends = sorted({manifest.get("backend") for manifest in results if manifest.get("backend") is not None})
+    kernels = " and ".join(BACKEND_KERNELS.get(name, f'backend "{name}"') for name in backends)
+    if not backends:
+        kernel_text = f"no recorded kernel ({REF_NO_BACKEND})"
+    elif any(manifest.get("backend") is None for manifest in results):
+        kernel_text = f"{kernels} ({REF_NO_BACKEND})"
+    else:
+        kernel_text = kernels
+    caveat = _HARDWARE_CAVEAT_NO_FLASH_CLAIM if "flash" in backends else _HARDWARE_CAVEAT
+    return f"Hardware: every number here is from {' and '.join(gpus)} with {kernel_text}, {caveat}"
+
+
+def disclosures(results: Sequence[dict]) -> tuple[str, ...]:
+    """The five disclosures of the headline table, in the plan's order. The hardware line follows `results`.
+
+    With no results it says that no run is recorded yet and names the plan's hardware. A campaign
+    from another GPU or kernel is described as what its manifests record, never as the T4.
+    """
+    return (
+        _DISCLOSURE_MLA,
+        _DISCLOSURE_KERNEL,
+        _hardware_line(results),
+        _DISCLOSURE_SCALE,
+        _DISCLOSURE_MATCHING,
+    )
+
+
+def render_markdown(rows: Sequence[Mapping[str, str]], notes: Sequence[str] = (), *, results: Sequence[dict]) -> str:
+    """The headline table as Markdown. `results` are the runs the table was built from: they set the hardware line."""
     lines = [
         "| " + " | ".join(COLUMNS) + " |",
         "|" + "|".join("---" for _ in COLUMNS) + "|",
@@ -1323,7 +1409,7 @@ def render_markdown(rows: Sequence[Mapping[str, str]], notes: Sequence[str] = ()
     text = "\n".join(lines) + "\n"
     if notes:
         text += "\nNotes:\n\n" + "".join(f"- {_cell(note)}\n" for note in notes)
-    text += "\nDisclosures:\n\n" + "".join(f"- {line}\n" for line in DISCLOSURES)
+    text += "\nDisclosures:\n\n" + "".join(f"- {line}\n" for line in disclosures(results))
     return text
 
 
@@ -1444,6 +1530,16 @@ def _format_value(value) -> str:
     raise TypeError(f"no rendering for {value!r}")
 
 
+SEED_COUNT_SECTION = "Seed count and detectable effect"
+# Why the two 300M slopes can differ: the rule's fit reads the registered seeds (plan §1.4), the
+# budget fit reads every run present. With five MHA seeds they are the same fit.
+SLOPE_NOTE = (
+    "The ladder slope b at 300M in this section is fitted on the registered seeds only (plan §1.4), "
+    "while the ladder slope by budget below uses every run present, so the two values at 300M differ "
+    "once MHA has eight seeds."
+)
+
+
 def render_gates(analysis: Analysis) -> str:
     """The gate report as Markdown: one table per section, then the analysis notes verbatim."""
     values = gate_values(analysis)
@@ -1452,7 +1548,10 @@ def render_gates(analysis: Analysis) -> str:
     if nc is not None and nc.verdict == pt.VERDICT_DETECTED:
         lines += [f"> {NULL_WARNING}", ""]
     for section, labels in GATE_SECTIONS.items():
-        lines += [f"## {section}", "", "| item | value |", "|---|---|"]
+        lines += [f"## {section}", ""]
+        if section == SEED_COUNT_SECTION:
+            lines += [SLOPE_NOTE, ""]
+        lines += ["| item | value |", "|---|---|"]
         for label in labels:
             lines.append(f"| {_cell(label)} | {_format_value(values[section][label])} |")
         lines.append("")
@@ -1829,7 +1928,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     noted = dataclasses.replace(analysis, notes=tuple(notes))
     texts = {
         "headline.md": render_markdown(
-            headline_rows(analysis, train_ms_per_step=ms_per_step, decode_tok_per_s=decode), notes
+            headline_rows(analysis, train_ms_per_step=ms_per_step, decode_tok_per_s=decode), notes,
+            results=results,
         ),
         "gates.md": render_gates(noted),
         "arm_b.md": render_arm_b(noted),

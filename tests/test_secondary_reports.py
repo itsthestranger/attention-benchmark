@@ -419,7 +419,8 @@ def test_main_fills_the_timing_and_decode_columns_from_the_readers(tmp_path, pai
     write_bench_documents(bench, [bench_document(v) for v in DECODE_TOK_PER_S] + [bench_document("mha", "ref")])
     out = tmp_path / "tables"
     assert mt.main(["--manifests", str(directory), "--out", str(out), "--timing-pass", str(timing), "--bench", str(bench)]) == 0
-    analysis = mt.analyse(mt.select_results(mt.load_manifests(directory))[0])
+    results = mt.select_results(mt.load_manifests(directory))[0]
+    analysis = mt.analyse(results)
     expected = mt.render_markdown(
         mt.headline_rows(
             analysis,
@@ -427,6 +428,7 @@ def test_main_fills_the_timing_and_decode_columns_from_the_readers(tmp_path, pai
             decode_tok_per_s=bd.read_decode_tok_per_s(bench),
         ),
         analysis.notes,
+        results=results,
     )
     assert (out / "headline.md").read_text(encoding="utf-8") == expected
     cells = _cells((out / "headline.md").read_text(encoding="utf-8"), "mha")

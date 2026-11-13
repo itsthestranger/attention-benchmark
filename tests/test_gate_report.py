@@ -455,6 +455,27 @@ def test_a_detected_null_control_is_said_at_the_top_of_the_report():
 
 # --- 7. The command line and the committed blank report -----------------------------------------
 
+SLOPE_SENTENCE = (
+    "The ladder slope b at 300M in this section is fitted on the registered seeds only (plan §1.4), "
+    "while the ladder slope by budget below uses every run present, so the two values at 300M differ "
+    "once MHA has eight seeds."
+)
+
+
+def test_the_slope_sentence_sits_in_the_seed_count_section_of_every_report(blank, analysis):
+    for a in (blank, analysis):
+        text = mt.render_gates(a)
+        assert text.count(SLOPE_SENTENCE) == 1
+        start = text.index("## Seed count and detectable effect")
+        end = text.index("## Ladder slope b by budget")
+        assert start < text.index(SLOPE_SENTENCE) < text.index("| item | value |", start) < end
+
+
+def test_the_two_300m_slopes_are_both_labelled_in_the_blank_report(blank):
+    text = mt.render_gates(blank)
+    assert "| ladder slope b at 300M | — |" in text  # the rule's fit, in the seed-count section
+    assert "| 300M | — |" in text  # the fit by budget
+
 
 def test_committed_blank_report_is_generated_from_no_manifests(blank):
     assert BLANK_GATES.read_text(encoding="utf-8") == mt.render_gates(blank)

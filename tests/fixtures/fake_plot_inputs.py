@@ -193,7 +193,14 @@ def _curve_rows(points, *, total: int) -> list[dict]:
 
 
 def bench_records() -> list[dict]:
-    """bench/1 records for every headline variant, in ref and opt modes (synthetic numbers)."""
+    """bench/1 records for every headline variant, in ref and opt modes (synthetic numbers).
+
+    Synthetic records. Their environment and backend are those of the synthetic campaign
+    (fake_secondary.ENVIRONMENT; backend "efficient" on opt records, None on ref records), so that
+    the timing-source checks (make_tables.check_timing_sources) accept them with it.
+    """
+    from tests.fixtures.fake_secondary import ENVIRONMENT  # deferred: fake_secondary imports this module
+
     records = []
     for index, variant in enumerate(BENCH_VARIANTS):
         for mode in ("ref", "opt"):
@@ -215,7 +222,8 @@ def bench_records() -> list[dict]:
                 "variant": variant,
                 "mode": mode,
                 "precision": "fp16",
-                "environment": dict(SYNTHETIC),
+                "environment": dict(ENVIRONMENT),
+                "backend": "efficient" if mode == "opt" else None,
                 "gpu_shared": False,
                 "kv_bytes_per_token": {"analytic": 1536, "measured": 1540.0},
                 "prefill": prefill,
