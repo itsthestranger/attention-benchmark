@@ -143,6 +143,20 @@ def _checked_bench(records) -> tuple:
     return tuple(out)
 
 
+def _checked_probes(records) -> tuple:
+    out = _checked(records, ("variant", "task", "difficulty", "init_seed", "accuracy"), "probes")
+    seen = set()
+    for record in out:
+        key = (record["variant"], record["task"], record["difficulty"], record["init_seed"])
+        if key in seen:
+            raise PlotError(
+                f"probes: two records for variant {key[0]!r}, task {key[1]!r}, difficulty {key[2]!r}, "
+                f"init seed {key[3]!r}"
+            )
+        seen.add(key)
+    return out
+
+
 def make_inputs(manifests, bench=(), probes=(), retrieval=(), *, prereg: Mapping | None = None,
                 skip_unfinished: bool = False) -> PlotInputs:
     """Select, analyse and check the inputs. TableError from the table propagates.
@@ -157,7 +171,7 @@ def make_inputs(manifests, bench=(), probes=(), retrieval=(), *, prereg: Mapping
         results=tuple(results),
         analysis=analysis,
         bench=_checked_bench(bench),
-        probes=_checked(probes, ("variant", "task", "difficulty", "init_seed", "accuracy"), "probes"),
+        probes=_checked_probes(probes),
         retrieval=_checked(
             retrieval,
             ("variant", "task", "mode", "length", "n_distractors", "init_seed", "accuracy"),
@@ -899,6 +913,25 @@ def plot_latency(inp: PlotInputs) -> Figure:
 # --- Plot 9: synthetic probes -----------------------------------------------------------
 
 
+def _chance_points(rows) -> list[tuple]:
+    """(difficulty, chance) for each difficulty of one task. Records at one point must agree on chance."""
+    by_difficulty: dict = {}
+    for row in rows:
+        by_difficulty.setdefault(row["difficulty"], set()).add(row.get("chance"))
+    points = []
+    for difficulty in sorted(by_difficulty):
+        values = by_difficulty[difficulty]
+        if len(values) > 1:
+            raise PlotError(
+                f"probes: records at difficulty {difficulty} disagree on chance: "
+                f"{sorted(values, key=repr)}"
+            )
+        (value,) = values
+        if value is not None:
+            points.append((difficulty, value))
+    return points
+
+
 def plot_probes(inp: PlotInputs) -> Figure:
     prereg, a = inp.prereg, inp.analysis
     tasks = sorted({r["task"] for r in inp.probes})
@@ -911,7 +944,8 @@ def plot_probes(inp: PlotInputs) -> Figure:
         handles=_handles(prereg, variants, line=True),
         caption=[
             "Every init seed is a dot; the line through each variant's per-difficulty mean. The recurrent anchor is "
-            "black and dashed (plan §9.2). Difficulty is the task's own size, on a log2 axis.",
+            "black and dashed (plan §9.2). Difficulty is the task's own size, on a log2 axis. "
+            "The grey dotted line is the no-recall level 1/n.",
             _notes_part(a.notes),
         ],
     )
@@ -920,7 +954,7 @@ def plot_probes(inp: PlotInputs) -> Figure:
         ax.set_xscale("log", base=2)
         ax.minorticks_off()
         ax.set_xlabel("difficulty (task size)")
-        ax.set_ylabel("accuracy")
+        ax.set_ylabel("token accuracy (held-out)")
         ax.set_ylim(-0.02, 1.02)
         if not tasks:
             ax.set_title("probe", fontsize=9)
@@ -932,6 +966,10 @@ def plot_probes(inp: PlotInputs) -> Figure:
         difficulties = sorted({r["difficulty"] for r in rows})
         ax.set_xticks(difficulties)
         ax.set_xticklabels([str(d) for d in difficulties])
+        chance = _chance_points(rows)
+        if chance:
+            # One grey dotted line per panel, at the true difficulties: the no-recall level 1/n.
+            ax.plot([d for d, _ in chance], [c for _, c in chance], color="0.5", ls=":", lw=LINE_WIDTH, zorder=1)
         present = [v for v in variants if any(r["variant"] == v for r in rows)]
         mid = (len(present) - 1) / 2
         for i, variant in enumerate(present):
