@@ -15,6 +15,8 @@ Source: GPU —; backend —; torch —; CUDA —; driver —; timing pass —; 
 | swa256 | — | — | — | — | — | — |
 | swa256/ref | — | — | — | — | — | — |
 
+SWA attention time: — ms/step; MHA: — ms/step (attention share × ms/step, plan §2.3 item 2).
+
 Track `opt` is the variant on the path it trains with: opt mode for the grouped variants and SWA, and the naive path for MLA, whose absorbed path exists at inference only (plan §8.5).
 Track `ref` is the reference implementation of MLA and SWA: plain PyTorch ops, explicit masks, no fusion (plan §2.3 item 3, §4.4).
 MLA's and SWA's kernels are newer or hand-written, so their gap to MHA is partly implementation, not architecture (plan §13.3).

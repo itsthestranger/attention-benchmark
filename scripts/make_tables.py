@@ -5,7 +5,7 @@
         --timing-pass results/timing_pass.json --bench results/bench
     python -m scripts.make_tables --blank --out results/tables/blank
 
-Writes headline.md, gates.md, arm_b.md (plan §8.3), context.md (plan §10.3) and
+Writes headline.md, gates.md, arm_b.md (plan §8.3), shared_rate.md (decision 224), context.md (plan §10.3) and
 rqw.md (plan §8.5). The script refuses to build the tables from runs that are not
 comparable (plan §7.2, §10.6, §13.6), and refuses timing and bench sources that
 were not measured alone or that differ in environment, and lists every violation
@@ -50,6 +50,10 @@ DATA_ORDER_INIT_SEED = 1
 DATA_ORDER_EXTRA_SEEDS = (2, 3)
 LEFT_ARM = "left Arm A (seed-count rule)"
 ARM_B = "iso_backbone"
+# Decision 224 (plan §7.4 item 5): a variant whose rate differs from MHA's gets three standalone
+# 100M runs on these init seeds at MHA's rate, and its 100M branches at its own rate are compared with them.
+SHARED_RATE_SEEDS = (1, 2, 3)
+SAME_RATE = "same rate as MHA"
 # Plan §8.4: "L6 runs 5 seeds; L10 runs 3". The seed-count rule reads exactly these (plan §1.4).
 L10_SEEDS = (1, 2, 3)
 # Plan §4.1: the model keys that may differ between runs of the study. The attention block
@@ -389,6 +393,18 @@ class ContextUse:
 
 
 @dataclass(frozen=True)
+class SharedRateResult:
+    """One variant on its own rate, tuned against MHA's rate on fresh seeds (decision 224)."""
+
+    variant: str
+    peak_lr: float  # the variant's own peak learning rate
+    shared_peak_lr: float  # MHA's peak learning rate, the shared one
+    tuned_losses: dict  # {init_seed: val_loss}, its 100M branches at its own rate, SHARED_RATE_SEEDS only
+    shared_losses: dict  # {init_seed: val_loss}, its standalone 100M runs at MHA's rate, SHARED_RATE_SEEDS only
+    tuned_minus_shared: object  # primary_test.Comparison or None; a negative gap means the tuned rate was lower
+
+
+@dataclass(frozen=True)
 class Analysis:
     losses: dict  # {variant or ladder name: {init_seed: val_loss}}, 300M results
     losses_100m: dict  # {name: {init_seed: val_loss}}, 100M branches
@@ -426,6 +442,11 @@ class Analysis:
     # when none is declared) and the ladder ("full" or "l6_l8").
     committed_seed_count: int | None = None
     ladder: str = "full"
+    # {variant: peak learning rate} of the variants with runs at the primary budget (their Arm A rates).
+    peak_lr: Mapping = dataclasses.field(default_factory=dict)
+    # {variant: SharedRateResult} for the headline variants (not MHA) whose rate differs from MHA's, in
+    # headline order (decision 224). Empty when no variant differs.
+    shared_rate: Mapping = dataclasses.field(default_factory=dict)
 
 
 def _effective_decision(analysis: Analysis):
@@ -452,6 +473,7 @@ class _Collected(NamedTuple):
     peak_lr: dict  # {variant: peak learning rate of its 300M and 100M runs (Arm A)}
     read: tuple  # every manifest whose loss is put into a field above: the runs the analysis reads
     curve_runs: tuple  # names of the headline variants' manifests put into losses, losses_100m or losses_200m
+    shared_rate: dict  # {variant: {init_seed: val_loss}}, standalone 100M runs at MHA's rate (decision 224)
 
 
 # The number of non-embedding parameters of each manifest's configuration, by
@@ -547,6 +569,26 @@ def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
             reruns[parsed.init_seed] = loss
             read.append(manifest)
 
+    # Decision 224: a variant on its own rate is compared with its standalone 100M runs at MHA's rate,
+    # on SHARED_RATE_SEEDS. Other seeds at MHA's rate (the sweep point on seed 21) are not read.
+    mha_rate = lr.get("mha")
+    shared_rate: dict[str, dict[int, float]] = {}
+    for manifest, parsed in selected:
+        variant = parsed.variant
+        if variant == "mha" or variant not in HEADLINE_VARIANTS or mha_rate is None:
+            continue
+        own_rate = lr.get(variant)
+        if own_rate is None or own_rate == mha_rate:
+            continue
+        if (
+            parsed.branch is None
+            and parsed.tokens == small
+            and parsed.peak_lr == mha_rate
+            and parsed.init_seed in SHARED_RATE_SEEDS
+        ):
+            shared_rate.setdefault(variant, {})[parsed.init_seed] = float(manifest["final_metrics"]["val_loss"])
+            read.append(manifest)
+
     # The null control and the data-order runs are not in `selected`: the null variant is
     # not a headline variant, and the data-order runs carry other data seeds (plan §8.1).
     null_spec = prereg["null_control"]
@@ -582,7 +624,7 @@ def _collect(results: Sequence[dict], prereg: Mapping) -> _Collected:
         data_order[arm["data_seed"]] = branch_100m[DATA_ORDER_INIT_SEED]
     return _Collected(
         losses, losses_100m, losses_200m, reruns, examples, null_100m, data_order, context, lr,
-        tuple(read), tuple(curve_runs),
+        tuple(read), tuple(curve_runs), shared_rate,
     )
 
 
@@ -862,6 +904,64 @@ def _arm_b_results(
         out[variant] = ArmBResult(
             variant=variant, losses=own, arm_a_losses=arm_a, vs_mha=vs_mha, arm_a_minus_arm_b=arm_minus,
             peak_lr=b_lr, arm_a_peak_lr=a_lr,
+        )
+    return out
+
+
+def _shared_rate_results(
+    peak_lr: Mapping, shared: Mapping, losses_100m: Mapping, *, selection, comparing: bool, notes: list[str],
+) -> dict:
+    """{variant: SharedRateResult} for the headline variants (not MHA) whose rate differs from MHA's (decision 224).
+
+    The missing-run notes are written whether or not the comparison is computed; the comparison
+    is computed only when `comparing` and when all the runs it reads exist. It does not wait for
+    the seed-count commitment, as Arm B does not.
+    """
+    mha_rate = peak_lr.get("mha")
+    out: dict[str, SharedRateResult] = {}
+    if mha_rate is None:
+        return out
+    rate_text = mf.format_lr(mha_rate)
+    for variant in HEADLINE_VARIANTS:
+        own_rate = peak_lr.get(variant)
+        if variant == "mha" or own_rate is None or own_rate == mha_rate:
+            continue
+        tuned_all = losses_100m.get(variant, {})
+        tuned = {s: tuned_all[s] for s in SHARED_RATE_SEEDS if s in tuned_all}
+        shared_all = shared.get(variant, {})
+        shared_values = {s: shared_all[s] for s in SHARED_RATE_SEEDS if s in shared_all}
+        missing_shared = _missing(SHARED_RATE_SEEDS, shared_all)
+        missing_tuned = _missing(SHARED_RATE_SEEDS, tuned_all)
+        if missing_shared:
+            notes.append(
+                f"shared-rate runs: {variant} 100M runs at MHA's rate {rate_text} for seeds {missing_shared} "
+                "are missing (decision 224)"
+            )
+        if missing_tuned:
+            notes.append(
+                f"shared-rate runs: {variant} 100M branches at its own rate {mf.format_lr(own_rate)} for seeds "
+                f"{missing_tuned} are missing (decision 224)"
+            )
+        gap = None
+        if comparing and not missing_shared and not missing_tuned:
+            try:
+                gap = pt.secondary(
+                    variant,
+                    tuned,
+                    shared_values,
+                    reference=f"{variant} at MHA's rate {rate_text}",
+                    seeds=list(SHARED_RATE_SEEDS),
+                    test=selection.test,
+                )
+            except pt.PreregError as exc:
+                notes.append(f"shared-rate runs: {variant}: {exc}")
+        out[variant] = SharedRateResult(
+            variant=variant,
+            peak_lr=own_rate,
+            shared_peak_lr=mha_rate,
+            tuned_losses=tuned,
+            shared_losses=shared_values,
+            tuned_minus_shared=gap,
         )
     return out
 
@@ -1208,6 +1308,11 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, commitmen
         prereg=prereg, notes=notes,
     )
 
+    # 7b. Decision 224: each variant on its own rate against MHA's rate, on fresh seeds. Read only.
+    shared_rate = _shared_rate_results(
+        collected.peak_lr, collected.shared_rate, losses_100m, selection=selection, comparing=comparing, notes=notes,
+    )
+
     # 8. Context use (plan §10.3): secondary, at 300M, every headline variant but MHA.
     context_use = _context_use(
         collected.context, selection=selection, decision=effective, prereg=prereg, comparing=comparing, notes=notes
@@ -1239,6 +1344,8 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, commitmen
         curve_runs=collected.curve_runs,
         committed_seed_count=commitments["seed_count"],
         ladder=ladder,
+        peak_lr=dict(collected.peak_lr),
+        shared_rate=shared_rate,
     )
 
 
@@ -1312,8 +1419,13 @@ def headline_rows(
     *,
     train_ms_per_step: Mapping[str, float] | None = None,
     decode_tok_per_s: Mapping[str, float] | None = None,
+    swa_check: tp.SwaCheck | None = None,
 ) -> list[dict]:
-    """One row per headline variant, keyed by COLUMNS, every value a string."""
+    """One row per headline variant, keyed by COLUMNS, every value a string.
+
+    `swa_check` is the timing pass's SWA check. When SWA is not faster than MHA, SWA's train ms/step
+    cell carries SWA_DENSE_MARK (plan §2.3 item 2, decision 226); the note is the table's, added by `main`.
+    """
     reference = "mha"
     reference_present = bool(analysis.losses.get(reference))
     rows = []
@@ -1334,6 +1446,8 @@ def headline_rows(
             "decode tok/s (batch 32, cache 4k)": _timing(decode_tok_per_s, variant),
             "val loss, every seed": BLANK if withheld else _losses_cell(analysis.losses.get(variant, {})),
         }
+        if variant == tp.SWA_VARIANT and tp.swa_not_faster(swa_check) and cells["train ms/step"] != BLANK:
+            cells["train ms/step"] += tp.SWA_DENSE_MARK
         if variant == reference:
             if reference_present:
                 cells["gap vs MHA [95% CI]"] = "reference"
@@ -1756,6 +1870,68 @@ def render_arm_b(analysis: Analysis) -> str:
     return "\n".join(lines) + "\n"
 
 
+SHARED_RATE_TITLE = "# Tuned against shared learning rate (plan §7.4 item 5)"
+SHARED_RATE_CAPTION = (
+    "For each Arm A variant that runs at its own learning rate, three further standalone 100M runs on "
+    "init seeds 1 to 3 are made at MHA's rate (decision 224). The gap column is the variant's 100M branches "
+    "at its own rate minus those runs, by seed, with its interval; a negative value means the tuned rate gave "
+    "the lower loss. The sweep's own difference between the two rates was selected on, so these are fresh "
+    "seeds. No detection claim is made on this comparison (decision 224)."
+)
+SHARED_RATE_COLUMNS = (
+    "variant",
+    "own rate",
+    "MHA's rate",
+    "tuned 100M loss, seeds 1-3",
+    "shared-rate 100M loss, seeds 1-3",
+    "tuned minus shared, nats",
+    "95% interval",
+)
+_SHARED_RATE_FIELDS = (
+    "tuned 100M loss, seeds 1-3",
+    "shared-rate 100M loss, seeds 1-3",
+    "tuned minus shared, nats",
+    "95% interval",
+)
+
+
+def _shared_rate_row(analysis: Analysis, variant: str) -> dict:
+    """One row of shared_rate.md: a variant with its own rate, a variant on MHA's rate, or a blank row."""
+    row = {"variant": variant, **{column: BLANK for column in SHARED_RATE_COLUMNS[1:]}}
+    mha_rate = analysis.peak_lr.get("mha")
+    own_rate = analysis.peak_lr.get(variant)
+    result = analysis.shared_rate.get(variant)
+    if result is not None:
+        row["own rate"] = mf.format_lr(result.peak_lr)
+        row["MHA's rate"] = mf.format_lr(result.shared_peak_lr)
+        if analysis.comparisons_allowed:
+            row["tuned 100M loss, seeds 1-3"] = _seed_cell(SHARED_RATE_SEEDS, result.tuned_losses)
+            row["shared-rate 100M loss, seeds 1-3"] = _seed_cell(SHARED_RATE_SEEDS, result.shared_losses)
+        comparison = result.tuned_minus_shared
+        if comparison is not None:
+            row["tuned minus shared, nats"] = f"{comparison.mean_gap:+.4f}"
+            row["95% interval"] = f"[{comparison.ci_low:+.4f}, {comparison.ci_high:+.4f}]"
+    elif mha_rate is not None and own_rate is not None and own_rate == mha_rate:
+        row["own rate"] = mf.format_lr(own_rate)
+        row["MHA's rate"] = mf.format_lr(mha_rate)
+        for column in _SHARED_RATE_FIELDS:
+            row[column] = SAME_RATE
+    return row
+
+
+def render_shared_rate(analysis: Analysis) -> str:
+    """shared_rate.md: each variant on its own rate against MHA's rate, on seeds 1 to 3 (decision 224)."""
+    lines = [SHARED_RATE_TITLE, "", SHARED_RATE_CAPTION, ""]
+    if not analysis.comparisons_allowed:
+        lines += [f"Not computed: {GATE_WAIT} (see gates.md).", ""]
+    rows = [_shared_rate_row(analysis, variant) for variant in HEADLINE_VARIANTS if variant != "mha"]
+    lines += _md_table(SHARED_RATE_COLUMNS, rows)
+    notes = [note for note in analysis.notes if note.startswith("shared-rate runs:")]
+    if notes:
+        lines += ["", "Notes:", ""] + [f"- {note}" for note in notes]
+    return "\n".join(lines) + "\n"
+
+
 def context_values(analysis: Analysis) -> dict:
     """The raw context-use values per variant: losses and ICL scores by seed, and both comparisons."""
     return {
@@ -1823,8 +1999,13 @@ def render_context(analysis: Analysis) -> str:
 # --- RQ-W: the computed wall-clock estimate (plan §8.5, step 2) ----------------------
 
 
-def render_rqw(estimate: rq.WallclockEstimate | None, reason: str | None) -> str:
-    """rqw.md. With no estimate, the blank form with `reason` (default: no timing pass was given)."""
+def render_rqw(estimate: rq.WallclockEstimate | None, reason: str | None, *, swa_check: tp.SwaCheck | None = None) -> str:
+    """rqw.md. With no estimate, the blank form with `reason` (default: no timing pass was given).
+
+    `swa_check`: when SWA is not faster than MHA, SWA's ms/step cell is marked and the note is
+    added under the table (plan §2.3 item 2, decision 226).
+    """
+    not_faster = tp.swa_not_faster(swa_check)
     lines = ["# RQ-W: wall-clock estimate (plan §8.5)", ""]
     if estimate is None:
         lines += [f"Budget B: {BLANK}", "", RQW_CAPTION, "", f"Not computed: {reason or NO_TIMING}.", ""]
@@ -1843,7 +2024,8 @@ def render_rqw(estimate: rq.WallclockEstimate | None, reason: str | None) -> str
         rows.append(
             {
                 "variant": v.variant,
-                "ms/step": f"{v.ms_per_step:.3f}",
+                "ms/step": f"{v.ms_per_step:.3f}"
+                + (tp.SWA_DENSE_MARK if not_faster and v.variant == tp.SWA_VARIANT else ""),
                 "step-time ratio to MHA": f"{v.step_time_ratio:.3f}",
                 "steps afforded S_v": str(v.steps),
                 "extrapolated": "yes" if v.extrapolated else "no",
@@ -1854,10 +2036,18 @@ def render_rqw(estimate: rq.WallclockEstimate | None, reason: str | None) -> str
             }
         )
     lines += _md_table(RQW_COLUMNS, rows)
+    if not_faster:
+        lines += ["", f"{tp.SWA_DENSE_MARK} {tp.swa_dense_note(swa_check)}"]
     return "\n".join(lines) + "\n"
 
 
-def _rqw_report(analysis: Analysis, results: Sequence[dict], ms_per_step: Mapping[str, float] | None) -> str:
+def _rqw_report(
+    analysis: Analysis,
+    results: Sequence[dict],
+    ms_per_step: Mapping[str, float] | None,
+    *,
+    swa_check: tp.SwaCheck | None = None,
+) -> str:
     if ms_per_step is None:
         return render_rqw(None, NO_TIMING)
     if not analysis.comparisons_allowed:
@@ -1866,7 +2056,7 @@ def _rqw_report(analysis: Analysis, results: Sequence[dict], ms_per_step: Mappin
         estimate = rq.estimate(list(results), dict(ms_per_step))
     except rq.EstimateError as exc:
         return render_rqw(None, f"the estimate cannot be computed: {exc}")
-    return render_rqw(estimate, None)
+    return render_rqw(estimate, None, swa_check=swa_check)
 
 
 # --- Timing and bench sources: refusals (plan §2.2, §10.6, §11) ----------------------
@@ -1979,12 +2169,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         bench_docs = _load_bench_documents(args.bench) if args.bench else []
         check_timing_sources(results, timing_doc, bench_docs)
         ms_per_step = tp.read_ms_per_step(args.timing_pass) if timing_doc is not None else None
+        swa_check = tp.swa_check_of(timing_doc) if timing_doc is not None else None
         decode = bd.read_decode_tok_per_s(args.bench) if args.bench else None
     except (TableError, mf.ManifestError, tp.TimingError, bd.BenchError, config.ConfigError, json.JSONDecodeError, OSError) as exc:
         print(exc, file=sys.stderr)
         return 1
 
     notes = list(analysis.notes)
+    if tp.swa_not_faster(swa_check):
+        notes.append(f"{tp.SWA_DENSE_MARK} {tp.swa_dense_note(swa_check)}")
     diverged = diverged_runs(manifests)
     if diverged:
         notes.append("diverged runs on record, not results (plan §7.4 item 5): " + ", ".join(diverged))
@@ -1993,13 +2186,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     noted = dataclasses.replace(analysis, notes=tuple(notes))
     texts = {
         "headline.md": render_markdown(
-            headline_rows(analysis, train_ms_per_step=ms_per_step, decode_tok_per_s=decode), notes,
+            headline_rows(analysis, train_ms_per_step=ms_per_step, decode_tok_per_s=decode, swa_check=swa_check), notes,
             results=results,
         ),
         "gates.md": render_gates(noted),
         "arm_b.md": render_arm_b(noted),
+        "shared_rate.md": render_shared_rate(noted),
         "context.md": render_context(noted),
-        "rqw.md": _rqw_report(analysis, results, ms_per_step),
+        "rqw.md": _rqw_report(analysis, results, ms_per_step, swa_check=swa_check),
     }
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,7 @@
 # Inference benchmark (plan §8.6, §10.4)
 
-Prefill is one forward over batch x context tokens with no cache; latency is the mean over the measured repetitions (plan §8.6).
+Every number is the median of the repetitions named in each section's source line, measured round-robin over the variants; the range column gives the smallest and the largest repetition (decision 225).
+Prefill is one forward over batch x context tokens with no cache; latency is the mean over the timed calls of each repetition (plan §8.6).
 Decode is ms/token and tokens/s at each batch and cache length, the cache filled to the cache length before timing (plan §8.6).
 Track `opt` runs opt mode, with the SDPA backend named in its source line enforced (plan §2.3 item 1). Track `ref` runs the reference implementation, which makes no SDPA call (plan §4.4).
 KV bytes: the analytic size is per token, from the model's shapes; the measured size is the allocation growth of a cache holding the measured number of tokens, on CUDA. Plan §10.4 reads: "analytic and measured bytes/token (assert within 5%)."
@@ -13,29 +14,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -49,29 +50,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -85,29 +86,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -121,29 +122,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -157,29 +158,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -193,29 +194,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -229,29 +230,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -265,29 +266,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -301,29 +302,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -337,29 +338,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -373,29 +374,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -409,29 +410,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -445,29 +446,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 
@@ -481,29 +482,29 @@ Source: no bench document given; measured cells are blank.
 
 ### Prefill
 
-| context | batch | latency, ms | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 128 | — | — | — | — |
-| 256 | — | — | — | — |
-| 512 | — | — | — | — |
-| 1024 | — | — | — | — |
-| 2048 | — | — | — | — |
-| 4096 | — | — | — | — |
-| 8192 | — | — | — | — |
+| context | batch | latency, ms | latency, ms (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 128 | — | — | — | — | — |
+| 256 | — | — | — | — | — |
+| 512 | — | — | — | — | — |
+| 1024 | — | — | — | — | — |
+| 2048 | — | — | — | — | — |
+| 4096 | — | — | — | — | — |
+| 8192 | — | — | — | — | — |
 
 ### Decode
 
-| batch | cache | ms/token | tokens/s | peak allocated, MiB |
-|---|---|---|---|---|
-| 1 | 1024 | — | — | — |
-| 1 | 4096 | — | — | — |
-| 1 | 8192 | — | — | — |
-| 8 | 1024 | — | — | — |
-| 8 | 4096 | — | — | — |
-| 8 | 8192 | — | — | — |
-| 32 | 1024 | — | — | — |
-| 32 | 4096 | — | — | — |
-| 32 | 8192 | — | — | — |
+| batch | cache | ms/token | ms/token (min–max) | tokens/s | peak allocated, MiB |
+|---|---|---|---|---|---|
+| 1 | 1024 | — | — | — | — |
+| 1 | 4096 | — | — | — | — |
+| 1 | 8192 | — | — | — | — |
+| 8 | 1024 | — | — | — | — |
+| 8 | 4096 | — | — | — | — |
+| 8 | 8192 | — | — | — | — |
+| 32 | 1024 | — | — | — | — |
+| 32 | 4096 | — | — | — | — |
+| 32 | 8192 | — | — | — | — |
 
 ### KV bytes and maximum batch
 

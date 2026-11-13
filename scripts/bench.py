@@ -1,8 +1,15 @@
 """Inference benchmark: prefill, decode, KV bytes and maximum batch (plan §8.6, §10.4).
 
 One JSON file per (variant, mode) is written to --out-dir, named bench_<variant>_<mode>.json,
-in the "bench/1" schema (see `write_bench_file`). `read_decode_tok_per_s` reads the headline
+in the "bench/2" schema (see `write_bench_file`). `read_decode_tok_per_s` reads the headline
 column that scripts/make_tables.py takes.
+
+Every point is measured in `--repetitions` repetitions (default 3, decision 225). The repetitions
+run round-robin over the (variant, mode) pairs: repetition 1 of every pair, then repetition 2 of
+every pair, and so on. Each repetition rebuilds the model (untimed) and measures every prefill
+and decode point with the warm-ups and timed calls of the single-measurement discipline. The
+document reports the median of the repetitions with the smallest and largest value. The KV-bytes
+check and the maximum-batch search are not timings: they run once per pair, in repetition 1.
 
     python -m scripts.bench --device cuda --gpu-shared false --expected-backend efficient \
         --out-dir results/bench
@@ -26,9 +33,12 @@ runs in fp32, and the JSON `precision` field says which.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
+import statistics
 import sys
 from pathlib import Path
+from typing import Sequence
 
 import torch
 
@@ -49,7 +59,7 @@ from src.eval.inference import (
 )
 from src.utils.manifest import collect_environment
 
-SCHEMA = "bench/1"
+SCHEMA = "bench/2"
 # Plan §4.2: analytic and measured KV bytes must agree within 5%. Written here, not imported
 # from tests/ (the script must run without the test tree). tests/tolerances.py holds the same
 # value as KV_BYTES_MEASURED_REL, and a cpu test asserts the two are equal.
@@ -60,6 +70,7 @@ DEFAULT_CONTEXTS = (128, 256, 512, 1024, 2048, 4096, 8192)  # plan §10.4: 128 t
 DEFAULT_DECODE_BATCHES = (1, 8, 32)  # plan §10.4
 DEFAULT_DECODE_CACHES = (1024, 4096, 8192)  # plan §10.4: 1k, 4k, 8k
 DEFAULT_PREFILL_BATCH = 1  # not in the plan; one sequence per prefill keeps 8k within memory
+DEFAULT_REPETITIONS = 3  # decision 225: every point in three round-robin repetitions
 MAX_BATCH_CACHE = 8192  # plan §8.6: maximum batch before OOM at cache 8k
 HEADLINE_BATCH = 32  # plan §10.1 column: decode tok/s at batch 32 ...
 HEADLINE_CACHE = 4096  # ... and cache 4,096, opt mode
@@ -106,6 +117,174 @@ def _overrides(synthetic: bool) -> dict:
     return dict(SYNTHETIC_DIMS) if synthetic else {}
 
 
+def _release(model) -> None:
+    """Drop the model and return its memory before the next repetition is built."""
+    del model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _aggregate_row(rows: Sequence[dict], identity: Sequence[str], timed: Sequence[str]) -> dict:
+    """One output point from the same point measured in every repetition.
+
+    `timed` fields get the median (the reported value), the list in repetition order, and the
+    smallest and largest repetition. `peak_bytes` is the maximum over the repetitions, None if
+    any repetition has none (off CUDA every repetition has none).
+    """
+    out: dict = {key: rows[0][key] for key in identity}
+    for field in timed:
+        values = [float(row[field]) for row in rows]
+        out[field] = float(statistics.median(values))
+        out[f"{field}_by_repetition"] = values
+        out[f"{field}_min"] = min(values)
+        out[f"{field}_max"] = max(values)
+    peaks = [row["peak_bytes"] for row in rows]
+    out["peak_bytes"] = None if any(p is None for p in peaks) else max(peaks)
+    return out
+
+
+def aggregate_prefill(rows: Sequence[dict]) -> dict:
+    """The prefill point of a document, from its row in each repetition (the same context and batch)."""
+    return _aggregate_row(rows, ("context", "batch"), ("latency_ms", "tok_per_s"))
+
+
+def aggregate_decode(rows: Sequence[dict]) -> dict:
+    """The decode point of a document, from its row in each repetition (the same batch and cache)."""
+    return _aggregate_row(rows, ("batch", "cache"), ("ms_per_token", "tok_per_s"))
+
+
+class _Track:
+    """One (variant, mode) across its repetitions: what the round-robin accumulates.
+
+    The model is built fresh for each repetition by the caller and not kept here. The KV-bytes
+    check and the maximum-batch search run in the first repetition only.
+    """
+
+    def __init__(
+        self,
+        variant: str,
+        mode: str,
+        *,
+        device: torch.device,
+        contexts=DEFAULT_CONTEXTS,
+        prefill_batch: int = DEFAULT_PREFILL_BATCH,
+        decode_batches=DEFAULT_DECODE_BATCHES,
+        decode_caches=DEFAULT_DECODE_CACHES,
+        max_batch_cache: int = MAX_BATCH_CACHE,
+        with_max_batch: bool = True,
+        overrides: dict | None = None,
+        gpu_shared: bool = False,
+        expected_backend: str | None = None,
+        warmup: int = WARMUP,
+        reps: int = REPS,
+        clock=None,
+    ) -> None:
+        if mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+        self.variant = variant
+        self.mode = mode
+        self.device = device
+        self.cuda = device.type == "cuda"
+        self.backend = expected_backend if mode == "opt" else None
+        self.gpu_shared = bool(gpu_shared)
+        self.contexts = tuple(contexts)
+        self.prefill_batch = prefill_batch
+        self.decode_batches = tuple(decode_batches)
+        self.decode_caches = tuple(decode_caches)
+        self.max_batch_cache = max_batch_cache
+        self.with_max_batch = with_max_batch
+        self.overrides = overrides
+        self.warmup = warmup
+        self.reps = reps
+        self.clock_kwargs = {} if clock is None else {"clock": clock}
+        self.longest = max(
+            list(self.contexts) + list(self.decode_caches)
+            + ([max_batch_cache] if with_max_batch and self.cuda else [])
+        )
+        self.kv: dict | None = None
+        self.max_batch: int | None = None
+        self.prefill_reps: list[list[dict]] = []
+        self.decode_reps: list[list[dict]] = []
+
+    def build(self):
+        """A fresh model for one repetition (untimed). Half precision on CUDA."""
+        model = build_model_for_benchmark(self.variant, context_length=self.longest, overrides=self.overrides).to(self.device)
+        if self.cuda:
+            model = model.half()
+        return model
+
+    def repetition(self, model) -> None:
+        """Measure every prefill and decode point once on `model`. The first call also runs the
+        KV-bytes check and the maximum-batch search."""
+        first = not self.prefill_reps
+        if first:
+            self._check_kv(model)
+        prefill = [
+            measure_prefill(
+                model, mode=self.mode, context=c, batch=self.prefill_batch, device=self.device,
+                backend=self.backend, warmup=self.warmup, reps=self.reps, **self.clock_kwargs,
+            )
+            for c in self.contexts
+        ]
+        decode = [
+            measure_decode(
+                model, mode=self.mode, batch=b, cache=c, device=self.device,
+                backend=self.backend, warmup=self.warmup, reps=self.reps, **self.clock_kwargs,
+            )
+            for b in self.decode_batches
+            for c in self.decode_caches
+        ]
+        self.prefill_reps.append(prefill)
+        self.decode_reps.append(decode)
+        if first and self.with_max_batch and self.cuda:
+            self.max_batch = max_batch_before_oom(
+                lambda b: try_decode_at(
+                    model, batch=b, cache=self.max_batch_cache, device=self.device, backend=self.backend
+                )
+            )
+            torch.cuda.empty_cache()
+
+    def _check_kv(self, model) -> None:
+        analytic = analytic_kv_bytes_per_token(model)
+        measured = None
+        measured_tokens = None
+        allocation = measure_kv_allocation(model, device=self.device, n_tokens=KV_CHECK_TOKENS, backend=self.backend)
+        if allocation is not None:
+            total, n = allocation
+            expected = analytic_kv_cache_bytes(model, n)
+            rel = abs(total - expected) / expected
+            if rel > KV_BYTES_TOLERANCE_REL:
+                raise BenchError(
+                    f"{self.variant}/{self.mode}: measured KV bytes {total} for {n} tokens differ from the analytic "
+                    f"{expected} by {rel:.2%} (limit {KV_BYTES_TOLERANCE_REL:.0%}, plan §4.2)"
+                )
+            measured = total / n
+            measured_tokens = n
+        self.kv = {"analytic": analytic, "measured": measured, "measured_tokens": measured_tokens}
+
+    def document(self) -> dict:
+        """The schema-"bench/2" document, from every repetition measured so far."""
+        if not self.prefill_reps:
+            raise BenchError(f"{self.variant}/{self.mode}: no repetition was measured")
+        prefill = [aggregate_prefill(rows) for rows in zip(*self.prefill_reps)]
+        decode = [aggregate_decode(rows) for rows in zip(*self.decode_reps)]
+        return {
+            "schema": SCHEMA,
+            "variant": self.variant,
+            "mode": self.mode,
+            "precision": "fp16" if self.cuda else "fp32",
+            "backend": self.backend,
+            "environment": collect_environment(),
+            "gpu_shared": self.gpu_shared,
+            "repetitions": len(self.prefill_reps),
+            "kv_bytes_per_token": self.kv,
+            "prefill": prefill,
+            "decode": decode,
+            "max_batch_at_8k": self.max_batch,
+        }
+
+
 def bench_variant_mode(
     variant: str,
     mode: str,
@@ -122,90 +301,48 @@ def bench_variant_mode(
     expected_backend: str | None = None,
     warmup: int = WARMUP,
     reps: int = REPS,
+    repetitions: int = 1,
     clock=None,
 ) -> dict:
-    """The schema-"bench/1" document for one variant and mode.
+    """The schema-"bench/2" document for one variant and mode, from `repetitions` repetitions.
 
     `expected_backend` is enforced on the opt track only. Its name is recorded in the
-    document's "backend" key; ref documents record null.
+    document's "backend" key; ref documents record null. The command line runs the
+    repetitions round-robin over all pairs instead (see `main`); this function runs them
+    one pair at a time.
     """
-    if mode not in MODES:
-        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
-    backend = expected_backend if mode == "opt" else None
-    kwargs = {} if clock is None else {"clock": clock}
-    cuda = device.type == "cuda"
-    longest = max(list(contexts) + list(decode_caches) + ([max_batch_cache] if with_max_batch and cuda else []))
-    model = build_model_for_benchmark(variant, context_length=longest, overrides=overrides).to(device)
-    if cuda:
-        model = model.half()
-
-    analytic = analytic_kv_bytes_per_token(model)
-    measured = None
-    measured_tokens = None
-    allocation = measure_kv_allocation(model, device=device, n_tokens=KV_CHECK_TOKENS, backend=backend)
-    if allocation is not None:
-        total, n = allocation
-        expected = analytic_kv_cache_bytes(model, n)
-        rel = abs(total - expected) / expected
-        if rel > KV_BYTES_TOLERANCE_REL:
-            raise BenchError(
-                f"{variant}/{mode}: measured KV bytes {total} for {n} tokens differ from the analytic "
-                f"{expected} by {rel:.2%} (limit {KV_BYTES_TOLERANCE_REL:.0%}, plan §4.2)"
-            )
-        measured = total / n
-        measured_tokens = n
-
-    prefill = [
-        measure_prefill(
-            model, mode=mode, context=c, batch=prefill_batch, device=device,
-            backend=backend, warmup=warmup, reps=reps, **kwargs,
-        )
-        for c in contexts
-    ]
-    decode = [
-        measure_decode(
-            model, mode=mode, batch=b, cache=c, device=device,
-            backend=backend, warmup=warmup, reps=reps, **kwargs,
-        )
-        for b in decode_batches
-        for c in decode_caches
-    ]
-
-    max_batch = None
-    if with_max_batch and cuda:
-        max_batch = max_batch_before_oom(
-            lambda b: try_decode_at(
-                model, batch=b, cache=max_batch_cache, device=device, backend=backend
-            )
-        )
-        torch.cuda.empty_cache()
-
-    return {
-        "schema": SCHEMA,
-        "variant": variant,
-        "mode": mode,
-        "precision": "fp16" if cuda else "fp32",
-        "backend": backend,
-        "environment": collect_environment(),
-        "gpu_shared": bool(gpu_shared),
-        "kv_bytes_per_token": {
-            "analytic": analytic,
-            "measured": measured,
-            "measured_tokens": measured_tokens,
-        },
-        "prefill": prefill,
-        "decode": decode,
-        "max_batch_at_8k": max_batch,
-    }
+    if isinstance(repetitions, bool) or not isinstance(repetitions, int) or repetitions < 1:
+        raise ValueError(f"repetitions must be an int >= 1, got {repetitions!r}")
+    track = _Track(
+        variant, mode, device=device, contexts=contexts, prefill_batch=prefill_batch,
+        decode_batches=decode_batches, decode_caches=decode_caches, max_batch_cache=max_batch_cache,
+        with_max_batch=with_max_batch, overrides=overrides, gpu_shared=gpu_shared,
+        expected_backend=expected_backend, warmup=warmup, reps=reps, clock=clock,
+    )
+    for _ in range(repetitions):
+        model = track.build()
+        track.repetition(model)
+        _release(model)
+    return track.document()
 
 
 def write_bench_file(out_dir: Path, document: dict) -> Path:
-    """Write one "bench/1" document as bench_<variant>_<mode>.json.
+    """Write one "bench/2" document as bench_<variant>_<mode>.json.
 
     Keys: schema, variant, mode, precision, backend (enforced SDPA name on opt documents
-    on CUDA, else null), environment, gpu_shared, kv_bytes_per_token {analytic, measured,
-    measured_tokens}, prefill [{context, batch, latency_ms, tok_per_s, peak_bytes}],
-    decode [{batch, cache, ms_per_token, tok_per_s, peak_bytes}], max_batch_at_8k.
+    on CUDA, else null), environment, gpu_shared, repetitions (N), kv_bytes_per_token
+    {analytic, measured, measured_tokens}, prefill, decode, max_batch_at_8k.
+
+    prefill: [{context, batch, latency_ms, tok_per_s, latency_ms_by_repetition,
+    tok_per_s_by_repetition, latency_ms_min, latency_ms_max, tok_per_s_min, tok_per_s_max,
+    peak_bytes}]. latency_ms and tok_per_s are the medians over the N repetitions; the
+    *_by_repetition lists hold the N values in repetition order; *_min and *_max are the
+    smallest and largest of the N values; peak_bytes is the maximum over the repetitions.
+
+    decode: [{batch, cache, ms_per_token, tok_per_s, ms_per_token_by_repetition,
+    tok_per_s_by_repetition, ms_per_token_min, ms_per_token_max, tok_per_s_min, tok_per_s_max,
+    peak_bytes}], with the same meanings for ms_per_token and tok_per_s.
+
     Off CUDA, measured, measured_tokens, peak_bytes and max_batch_at_8k are null.
     """
     path = out_dir / f"bench_{document['variant']}_{document['mode']}.json"
@@ -216,8 +353,9 @@ def write_bench_file(out_dir: Path, document: dict) -> Path:
 def read_decode_tok_per_s(directory: str | Path) -> dict[str, float]:
     """{variant: decode tok/s at batch 32, cache 4,096, opt mode}, the headline column of make_tables.
 
-    Variants whose file lacks that point are omitted, and make_tables shows a blank cell.
-    A file recorded with gpu_shared true is refused.
+    The value is the median over the file's repetitions. Variants whose file lacks that point are
+    omitted, and make_tables shows a blank cell. A bench/1 file, or one recorded with gpu_shared
+    true, is refused.
     """
     result: dict[str, float] = {}
     for path in sorted(Path(directory).glob("bench_*.json")):
@@ -253,6 +391,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-max-batch", action="store_true", help="do not run the maximum-batch search")
     p.add_argument("--warmup", type=int, default=WARMUP)
     p.add_argument("--reps", type=int, default=REPS)
+    p.add_argument(
+        "--repetitions", type=int, default=DEFAULT_REPETITIONS,
+        help="repetitions of every point, round-robin over the variants (default 3, decision 225; at least 1)",
+    )
     p.add_argument("--synthetic", action="store_true", help="tiny synthetic model, for testing the script only")
     p.add_argument("--out-dir", required=True, help="directory for the JSON files; created if missing")
     return p
@@ -272,29 +414,42 @@ def main(argv=None) -> int:
     except BenchError as exc:
         parser.error(str(exc))
 
+    if args.repetitions < 1:
+        parser.error(f"--repetitions must be at least 1, got {args.repetitions}")
+
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     modes = ("opt", "ref") if args.with_ref else ("opt",)
-    for variant in args.variants:
-        for mode in modes:
-            document = bench_variant_mode(
-                variant,
-                mode,
-                device=device,
-                contexts=args.contexts,
-                prefill_batch=args.prefill_batch,
-                decode_batches=args.decode_batches,
-                decode_caches=args.decode_caches,
-                max_batch_cache=args.max_batch_cache,
-                with_max_batch=not args.skip_max_batch,
-                overrides=_overrides(args.synthetic),
-                gpu_shared=gpu_shared,
-                expected_backend=expected_backend,
-                warmup=args.warmup,
-                reps=args.reps,
-            )
-            path = write_bench_file(out_dir, document)
-            print(f"wrote {path}")
+    tracks = [
+        _Track(
+            variant,
+            mode,
+            device=device,
+            contexts=args.contexts,
+            prefill_batch=args.prefill_batch,
+            decode_batches=args.decode_batches,
+            decode_caches=args.decode_caches,
+            max_batch_cache=args.max_batch_cache,
+            with_max_batch=not args.skip_max_batch,
+            overrides=_overrides(args.synthetic),
+            gpu_shared=gpu_shared,
+            expected_backend=expected_backend,
+            warmup=args.warmup,
+            reps=args.reps,
+        )
+        for variant in args.variants
+        for mode in modes
+    ]
+    # Round-robin: repetition 1 of every (variant, mode), then repetition 2 of every one, and so on.
+    for repetition in range(args.repetitions):
+        for track in tracks:
+            print(f"repetition {repetition + 1} of {args.repetitions}: {track.variant}/{track.mode}", flush=True)
+            model = track.build()
+            track.repetition(model)
+            _release(model)
+    for track in tracks:
+        path = write_bench_file(out_dir, track.document())
+        print(f"wrote {path}")
     return 0
 
 

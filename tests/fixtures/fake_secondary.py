@@ -24,7 +24,7 @@ import numpy as np
 from src.utils import manifest as mf
 from tests.fixtures.fake_campaign import EXPLORATORY_VARIANTS, fake_campaign
 from tests.fixtures.fake_manifests import fake_manifest
-from tests.fixtures.fake_plot_inputs import with_eval_fields
+from tests.fixtures.fake_plot_inputs import BENCH_REPETITIONS, repeated, with_eval_fields
 
 ARM_B_VARIANTS = ("gqa4", "gqa2", "mqa")
 ARM_B_SEEDS = (1, 2, 3)
@@ -156,23 +156,27 @@ def timing_document(*, shared: bool = False, environment: dict | None = None, ba
 
 def bench_document(variant: str, mode: str = "opt", *, shared: bool = False, environment: dict | None = None,
                    backend: str | None = BACKEND, tok_per_s: float | None = None) -> dict:
-    """A bench/1 document. Only the opt document carries the headline decode point (batch 32, cache 4,096)."""
+    """A synthetic bench/2 document with three repetitions. Only the opt document carries the headline
+    decode point (batch 32, cache 4,096); its tok/s is the median, the repetitions lie 2% either side."""
     value = DECODE_TOK_PER_S[variant] if tok_per_s is None else tok_per_s
     env = dict(ENVIRONMENT if environment is None else environment)
     opt = mode == "opt"
     return {
-        "schema": "bench/1",
+        "schema": "bench/2",
         "variant": variant,
         "mode": mode,
         "precision": "fp16",
         "backend": backend if opt else None,
         "environment": env,
         "gpu_shared": shared,
+        "repetitions": BENCH_REPETITIONS,
         "kv_bytes_per_token": {"analytic": 1536, "measured": None, "measured_tokens": None},
         "prefill": [],
         "decode": [
-            {"batch": 1, "cache": 1024, "ms_per_token": 1.0, "tok_per_s": 1000.0, "peak_bytes": None},
-            {"batch": 32, "cache": 4096, "ms_per_token": 32.0 / value, "tok_per_s": value, "peak_bytes": None},
+            {"batch": 1, "cache": 1024, **repeated("ms_per_token", 1.0), **repeated("tok_per_s", 1000.0),
+             "peak_bytes": None},
+            {"batch": 32, "cache": 4096, **repeated("ms_per_token", 32.0 / value), **repeated("tok_per_s", value),
+             "peak_bytes": None},
         ],
         "max_batch_at_8k": None,
     }
