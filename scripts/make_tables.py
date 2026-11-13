@@ -422,6 +422,22 @@ class Analysis:
     # draws exactly these and nothing else (sweep points, reruns, null and data-order runs, ladder
     # runs and other arms are not drawn).
     curve_runs: tuple = ()
+    # The declarations of configs/commitments.yaml (decision 220): the committed seed count (None
+    # when none is declared) and the ladder ("full" or "l6_l8").
+    committed_seed_count: int | None = None
+    ladder: str = "full"
+
+
+def _effective_decision(analysis: Analysis):
+    """The seed-count decision that the comparisons use: the rule's output once it is committed.
+
+    `Analysis.decision` is the rule's output whatever is committed. A decision that is not committed,
+    or that disagrees with the commitment, is not used by any comparison (decision 220).
+    """
+    decision = analysis.decision
+    if decision is None or analysis.committed_seed_count != decision.n_seeds:
+        return None
+    return decision
 
 
 class _Collected(NamedTuple):
@@ -924,17 +940,23 @@ def _context_use(
     return out
 
 
-def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: bool = False) -> Analysis:
+def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, commitments: Mapping | None = None) -> Analysis:
     """Every number of the table, computed in the pre-registered order. Refuses incomparable runs.
 
-    `l10_cut` declares that the ladder is cut to L6 and L8 (plan §12.2 item 4): the seed-count rule
-    then reads MHA and mha_L6 only. Without it the rule waits for the complete ladder (plan §1.4).
+    `commitments` is {"ladder", "seed_count"} (configs/commitments.yaml, decision 220); None reads the
+    repository's file. A ladder of "l6_l8" declares the cut to L6 and L8 (plan §12.2 item 4): the
+    seed-count rule then reads MHA and mha_L6 only. Without it the rule waits for the complete ladder
+    (plan §1.4). The rule's seed count must be committed, and equal, before any comparison is computed.
     """
     problems = _comparability_problems(results)
     if problems:
         raise TableError(_listing("the runs are not comparable", problems))
     if prereg is None:
         prereg = config.load_prereg()
+    if commitments is None:
+        commitments = config.load_commitments()
+    ladder = commitments["ladder"]
+    l10_cut = ladder == "l6_l8"
     collected = _collect(results, prereg)
     arm_b_collected = _collect_arm_b(results, config.load_arm(ARM_B))
     # Plan §13.6: steps-taken parity invalidates a COMPARISON, so it is checked on the runs that
@@ -1025,6 +1047,29 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
             )
         except lf.LadderError as exc:
             notes.append(f"seed count rule: {exc}")
+    if decision is not None and decision.slope_not_positive:
+        notes.append(
+            f"seed count rule: the ladder slope is {decision.slope:.3g}, not positive, so the rule gives "
+            f"{decision.n_seeds} seeds and no multiplier is reported (decision 223)"
+        )
+    # Decision 220: the rule's output is kept in `decision`; the comparisons use it only once the
+    # committed seed count is the number the rule gives. The notes below are the one reason.
+    effective = decision
+    if decision is not None:
+        committed_n = commitments["seed_count"]
+        if committed_n is None:
+            effective = None
+            notes.append(
+                f"seed count not committed: configs/commitments.yaml declares no seed count, and the rule "
+                f"gives {decision.n_seeds} seeds; Phil commits that number there by pull request before "
+                "any comparison is read (decision 220)"
+            )
+        elif committed_n != decision.n_seeds:
+            effective = None
+            notes.append(
+                f"seed count disagrees: configs/commitments.yaml commits {committed_n} seeds, and the rule "
+                f"gives {decision.n_seeds}; no comparison is computed (decision 220)"
+            )
 
     # The gate (plan §8.1, §8.4, §9.3, §9.4): no cross-variant number before the controls.
     gate_open = True
@@ -1041,6 +1086,13 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
     if positive_control is None:
         gate_open = False
         notes.append("comparisons skipped: positive control not computed")
+    elif positive_control.verdict == pt.VERDICT_WRONG_DIRECTION:
+        # Decision 216: a significant gap the other way is a failed control, not an undetected one.
+        notes.append(
+            "positive control: the smaller model is significantly better than MHA, a gap in the wrong "
+            "direction, so the control has failed and every null in this report is uninformative "
+            "(plan §8.4, decision 216)"
+        )
     elif positive_control.verdict != pt.VERDICT_DETECTED:
         notes.append(
             "positive control not detected: the pipeline cannot see an effect of the size of a 25% "
@@ -1061,11 +1113,13 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
     primary_names = [prereg["primary"]["reference"], *prereg["primary"]["comparisons"]]
     if not gate_open:
         pass  # the gate notes above say why
-    elif decision is None:
-        notes.append("primary comparisons skipped: no seed count decision")
+    elif effective is None:
+        if decision is None:
+            notes.append("primary comparisons skipped: no seed count decision")
+        # else the commitment note above says why
     else:
         missing = {
-            name: _missing(decision.seeds, losses.get(name, {}))
+            name: _missing(effective.seeds, losses.get(name, {}))
             for name in primary_names
         }
         missing = {name: seeds for name, seeds in missing.items() if seeds}
@@ -1076,11 +1130,11 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
             try:
                 primaries = pt.primary_tests(
                     {
-                        name: {s: losses[name][s] for s in decision.seeds}
+                        name: {s: losses[name][s] for s in effective.seeds}
                         for name in primary_names
                     },
                     test=selection.test,
-                    n_seeds=decision.n_seeds,
+                    n_seeds=effective.n_seeds,
                     prereg=prereg,
                 )
                 comparisons.update({c.name: c for c in primaries})
@@ -1091,15 +1145,17 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
     ex_seeds = list(prereg["exploratory"]["init_seeds"])
     if not gate_open:
         pass  # the gate notes above say why
-    elif decision is None:
-        notes.append("exploratory comparisons skipped: no seed count decision")
+    elif effective is None:
+        if decision is None:
+            notes.append("exploratory comparisons skipped: no seed count decision")
+        # else the commitment note above says why
     else:
         for name in prereg["exploratory"]["variants"]:
-            if decision.extended and name in decision.leaves_arm_a:
+            if effective.extended and name in effective.leaves_arm_a:
                 notes.append(f"{name} left Arm A under the seed-count rule: not computed")
                 continue
             miss_own = _missing(ex_seeds, losses.get(name, {}))
-            miss_mha = _missing(decision.seeds, mha_300)
+            miss_mha = _missing(effective.seeds, mha_300)
             if miss_own or miss_mha:
                 parts = []
                 if miss_own:
@@ -1112,7 +1168,7 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
                 comparisons[name] = pt.exploratory(
                     name,
                     {s: losses[name][s] for s in ex_seeds},
-                    {s: mha_300[s] for s in decision.seeds},
+                    {s: mha_300[s] for s in effective.seeds},
                     test=selection.test,
                     prereg=prereg,
                 )
@@ -1120,8 +1176,8 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
                 notes.append(f"exploratory {name}: {exc}")
 
     # Runs with seeds outside the registered sets are shown in the table but never tested.
-    if gate_open and decision is not None:
-        registered = {name: set(decision.seeds) for name in primary_names}
+    if gate_open and effective is not None:
+        registered = {name: set(effective.seeds) for name in primary_names}
         registered.update({name: set(ex_seeds) for name in prereg["exploratory"]["variants"]})
         for name in sorted(registered):
             extra = sorted(set(losses.get(name, {})) - registered[name])
@@ -1133,7 +1189,9 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
 
     # 6. Effective-parameter multipliers (plan §8.4).
     multipliers: dict[str, lf.Multiplier] = {}
-    if comparisons and fit is None:
+    if effective is not None and effective.slope_not_positive:
+        pass  # decision 223: no multiplier is reported; the rule's note above says so, once
+    elif comparisons and fit is None:
         notes.append("multipliers skipped: no ladder fit")
     elif fit is not None:
         for name, comparison in comparisons.items():
@@ -1152,7 +1210,7 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
 
     # 8. Context use (plan §10.3): secondary, at 300M, every headline variant but MHA.
     context_use = _context_use(
-        collected.context, selection=selection, decision=decision, prereg=prereg, comparing=comparing, notes=notes
+        collected.context, selection=selection, decision=effective, prereg=prereg, comparing=comparing, notes=notes
     )
 
     return Analysis(
@@ -1179,6 +1237,8 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: 
         rule_fit=rule_fit,
         arm_a_examples=dict(examples),
         curve_runs=collected.curve_runs,
+        committed_seed_count=commitments["seed_count"],
+        ladder=ladder,
     )
 
 
@@ -1288,7 +1348,7 @@ def headline_rows(
             cells["effective-param multiplier"] = BLANK
             cells["verdict"] = BLANK
         else:
-            decision = analysis.decision
+            decision = _effective_decision(analysis)
             comparison = analysis.comparisons.get(variant)
             if decision is not None and decision.extended and variant in decision.leaves_arm_a:
                 cells["verdict"] = LEFT_ARM
@@ -1416,6 +1476,8 @@ def render_markdown(rows: Sequence[Mapping[str, str]], notes: Sequence[str] = ()
 # --- The gate report (plan §9.3, §9.4) ----------------------------------------------
 
 # Section headings and row labels, in order. The report, RUNBOOK.md and the plots use them.
+DECLARATIONS = "Declarations (configs/commitments.yaml)"
+
 GATE_SECTIONS: dict[str, tuple[str, ...]] = {
     "Noise floor at 100M (Gate 2)": (
         "sigma_init, MHA seeds 1-5",
@@ -1451,6 +1513,7 @@ GATE_SECTIONS: dict[str, tuple[str, ...]] = {
         "variants leaving Arm A",
         "detectable gap of the chosen design, nats",
     ),
+    DECLARATIONS: ("ladder", "committed seed count"),
     "Ladder slope b by budget": ("100M", "200M", "300M"),
 }
 
@@ -1506,6 +1569,7 @@ def gate_values(analysis: Analysis) -> dict[str, dict[str, object]]:
             "variants leaving Arm A": leaves,
             "detectable gap of the chosen design, nats": _attr(d, "bound_gap"),
         },
+        DECLARATIONS: {"ladder": analysis.ladder, "committed seed count": analysis.committed_seed_count},
         "Ladder slope b by budget": {
             budget: _attr(analysis.fits.get(budget), "b") for budget in LADDER_BUDGETS
         },
@@ -1706,7 +1770,7 @@ def context_values(analysis: Analysis) -> dict:
 
 
 def _left_arm(analysis: Analysis, variant: str) -> bool:
-    decision = analysis.decision
+    decision = _effective_decision(analysis)
     return decision is not None and decision.extended and variant in decision.leaves_arm_a
 
 
@@ -1893,8 +1957,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--blank", action="store_true", help="ignore --manifests; write the tables for no runs"
     )
     parser.add_argument(
-        "--l10-cut", action="store_true",
-        help="declare the ladder cut to L6 and L8 (plan §12.2 item 4): the seed-count rule reads MHA and L6 only",
+        "--commitments", default=None, metavar="FILE",
+        help="the declarations of configs/commitments.yaml (default: the repository's file)",
     )
     parser.add_argument(
         "--timing-pass", default=None, metavar="FILE",
@@ -1909,13 +1973,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         manifests = [] if args.blank else load_manifests(args.manifests)
         results, skipped = select_results(manifests, skip_unfinished=args.skip_unfinished)
-        analysis = analyse(results, l10_cut=args.l10_cut)
+        commitments = config.load_commitments(args.commitments)
+        analysis = analyse(results, commitments=commitments)
         timing_doc = tp.read_timing_pass(args.timing_pass) if args.timing_pass else None
         bench_docs = _load_bench_documents(args.bench) if args.bench else []
         check_timing_sources(results, timing_doc, bench_docs)
         ms_per_step = tp.read_ms_per_step(args.timing_pass) if timing_doc is not None else None
         decode = bd.read_decode_tok_per_s(args.bench) if args.bench else None
-    except (TableError, mf.ManifestError, tp.TimingError, bd.BenchError, json.JSONDecodeError) as exc:
+    except (TableError, mf.ManifestError, tp.TimingError, bd.BenchError, config.ConfigError, json.JSONDecodeError, OSError) as exc:
         print(exc, file=sys.stderr)
         return 1
 

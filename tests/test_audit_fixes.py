@@ -28,6 +28,7 @@ from tests.fixtures.fake_campaign import LADDER_PARAMS, fake_campaign
 from tests.fixtures.fake_manifests import fake_manifest
 from tests.test_gate_report import losses_of
 from tests.test_lr_sweep import with_skips
+from tests.fixtures.commitments import analyse_committed
 
 PREREG = config.load_prereg()
 BASE_SEEDS = tuple(PREREG["seed_count"]["base_seeds"])
@@ -55,14 +56,14 @@ def campaign() -> list[dict]:
 
 @pytest.fixture(scope="module")
 def analysis(campaign) -> mt.Analysis:
-    return mt.analyse(campaign)
+    return analyse_committed(campaign)
 
 
 # --- F1: step parity belongs to the runs a comparison reads ------------------------------------
 
 
 def test_a_skippy_sweep_run_does_not_stop_the_analysis(campaign, analysis):
-    with_sweep = mt.analyse(campaign + mha_sweep(skipped_at_top=8))
+    with_sweep = analyse_committed(campaign + mha_sweep(skipped_at_top=8))
     assert with_sweep.comparisons == analysis.comparisons
     assert with_sweep.decision == analysis.decision
     assert with_sweep.null_control == analysis.null_control
@@ -113,22 +114,22 @@ def test_a_skippy_run_that_the_analysis_reads_is_still_refused(campaign, what, p
     def skippy(m):
         return with_skips(m, 8 if m["steps"]["total"] == total["100M"] else 24)
     with pytest.raises(mt.TableError, match="steps taken"):
-        mt.analyse(_replace(campaign, predicate, skippy))
+        analyse_committed(_replace(campaign, predicate, skippy))
 
 
 def test_versions_and_backend_are_still_compared_over_every_run(campaign):
     odd = fake_manifest("mha", budget="100M", branches=[], init_seed=SWEEP_SEED, peak_lr=4.8e-3, val_loss=3.4)
     odd["environment"] = {**odd["environment"], "torch": "9.9.9"}
     with pytest.raises(mt.TableError, match="torch"):
-        mt.analyse(campaign + [odd])
+        analyse_committed(campaign + [odd])
 
 
 # --- F2: the seed-count rule reads the registered base seeds only -------------------------------
 
 
 def test_the_seed_count_does_not_change_when_the_seeds_it_asked_for_arrive():
-    five = mt.analyse(fake_campaign(n_primary_seeds=5, **THRESHOLD_CASE))
-    eight = mt.analyse(fake_campaign(n_primary_seeds=8, **THRESHOLD_CASE))
+    five = analyse_committed(fake_campaign(n_primary_seeds=5, **THRESHOLD_CASE))
+    eight = analyse_committed(fake_campaign(n_primary_seeds=8, **THRESHOLD_CASE))
     assert five.decision.n_seeds == 8, "this synthetic campaign is meant to ask for 8 seeds"
     assert eight.decision == five.decision
     assert set(eight.comparisons) == set(PREREG["primary"]["comparisons"]) | {"gqa2"}
@@ -137,7 +138,7 @@ def test_the_seed_count_does_not_change_when_the_seeds_it_asked_for_arrive():
 
 def test_the_rule_is_fed_the_ladder_fit_of_the_registered_seeds():
     c = fake_campaign(n_primary_seeds=8, **THRESHOLD_CASE)
-    a = mt.analyse(c)
+    a = analyse_committed(c)
     points = {
         "mha": (LADDER_PARAMS["mha"], {s: v for s, v in losses_of(c, variant="mha", tokens="300M", branch=None).items() if s in BASE_SEEDS}),
         "mha_L6": (LADDER_PARAMS["mha_L6"], losses_of(c, variant="mha_L6", tokens="300M", branch=None)),
@@ -157,7 +158,7 @@ def test_with_five_seeds_the_two_fits_are_the_same(analysis):
 
 
 def test_the_blank_analysis_has_no_rule_fit():
-    assert mt.analyse([]).rule_fit is None
+    assert analyse_committed([]).rule_fit is None
 
 
 # --- F5: nothing about a variant is shown while the gate is closed -------------------------------
@@ -170,7 +171,7 @@ def _rows(analysis):
 @pytest.mark.parametrize("closed_by", ["no null control", "a detected null control"])
 def test_with_the_gate_closed_the_headline_shows_only_mha(closed_by):
     kwargs = {"without": ("null",)} if closed_by == "no null control" else {"null_gap": 0.5}
-    a = mt.analyse(fake_campaign(gaps={"mqa": 0.05}, **kwargs))
+    a = analyse_committed(fake_campaign(gaps={"mqa": 0.05}, **kwargs))
     assert a.comparisons_allowed is False
     rows = _rows(a)
     assert rows["mha"]["val loss, every seed"] != mt.BLANK

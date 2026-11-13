@@ -214,11 +214,13 @@ def test_one_smoke_loop_reaches_an_in_run_evaluation():
     assert smoke and all("--eval-every-steps 50" in c for c in smoke)
 
 
-def test_the_tables_and_the_plots_get_the_same_declarations():
-    """A flag that changes the analysis must be on both commands or on neither (T-44)."""
-    for flag in ("--l10-cut",):
-        on_tables = any(flag in c for c in COMMANDS if shlex.split(c)[2] == "scripts.make_tables")
-        on_plots = any(flag in c for c in COMMANDS if shlex.split(c)[2] == "scripts.make_plots")
-        assert on_tables == on_plots
-    assert "--l10-cut" in RUNBOOK  # named in the text of the seed-count step
+def test_the_declarations_are_in_the_commitments_file_and_not_on_a_command_line():
+    """Decision 220: the ladder cut and the committed seed count are keys of configs/commitments.yaml,
+    filled by pull request at the gate. A flag could be set after the results exist, and the tables
+    and the plots could get different ones."""
+    assert "--l10-cut" not in RUNBOOK
+    assert "configs/commitments.yaml" in RUNBOOK
+    for command in COMMANDS:
+        if shlex.split(command)[2] in ("scripts.make_tables", "scripts.make_plots"):
+            assert "--commitments" not in command, command  # both read the committed file
 

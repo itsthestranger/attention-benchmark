@@ -20,3 +20,6 @@
 
 # This file, so the protection cannot be removed without the same approval.
 /.github/CODEOWNERS     @itsthestranger
+
+# The campaign's declarations: the ladder and the committed seed count (decision 220).
+/configs/commitments.yaml  @itsthestranger

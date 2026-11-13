@@ -33,6 +33,9 @@ from src import config
 from tests.fixtures.fake_campaign import DATA_ORDER_SEEDS, LADDER_PARAMS, NULL_SEEDS, fake_campaign
 from tests.fixtures.fake_manifests import fake_manifest
 from tests.tolerances import FLOAT64_IDENTITY
+from tests.fixtures.commitments import (
+    analyse_committed, committed, make_inputs_committed, plots_main, write_commitments,
+)
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # The brief's requirement, not a numerical tolerance: dots at alpha 0.6 or more stay visible when they overlap.
@@ -155,12 +158,12 @@ def welch_campaign() -> list[dict]:
 
 @pytest.fixture(scope="module")
 def inputs(campaign):
-    return m.make_inputs(campaign, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records())
+    return make_inputs_committed(campaign, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records())
 
 
 @pytest.fixture(scope="module")
 def welch_inputs(welch_campaign):
-    return m.make_inputs(welch_campaign, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records())
+    return make_inputs_committed(welch_campaign, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records())
 
 
 @pytest.fixture(scope="module")
@@ -170,7 +173,7 @@ def figures(inputs) -> dict[str, Figure]:
 
 @pytest.fixture(scope="module")
 def blank_figures() -> dict[str, Figure]:
-    blank = m.make_inputs([])
+    blank = make_inputs_committed([])
     return {name: builder(blank) for name, builder in m.PLOTS}
 
 
@@ -319,7 +322,7 @@ def test_plot_6_draws_every_seed_gap_in_every_bucket(figures, inputs, campaign):
 
 def test_plot_7_draws_one_final_dot_per_arm_a_headline_run_and_branch(campaign):
     # T-45 (G3): the expected count is read off the run names, not from the plot code.
-    assert dot_count(m.plot_training_curves(m.make_inputs(campaign))) == len(_plot_7_names(campaign)) > 0
+    assert dot_count(m.plot_training_curves(make_inputs_committed(campaign))) == len(_plot_7_names(campaign)) > 0
 
 
 def test_plot_8_draws_lines_and_no_dots(figures):
@@ -370,7 +373,7 @@ def _normalised(text: str) -> str:
 def ladder_inputs():
     """Every ladder budget: MHA and the ladder points also branch at 200M, so all three fits exist."""
     campaign_ = fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, ladder_branches=True))
-    return m.make_inputs(campaign_, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records())
+    return make_inputs_committed(campaign_, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records())
 
 
 def test_plot_4_null_and_data_order_rows_are_the_analysis_values(figures, inputs):
@@ -394,7 +397,7 @@ def test_plot_4_at_gate_two_draws_the_null_and_data_order_rows_from_the_analysis
     campaign_ = fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, ladder_branches=True))
     # Gate 2 (test_gate_report.gate_two_stage): no 300M result of anything, only 100M and 200M branches.
     stage = [x for x in campaign_ if not (PARSE(x["name"]).tokens == "300M" and PARSE(x["name"]).branch is None)]
-    inp = m.make_inputs(stage)
+    inp = make_inputs_committed(stage)
     a = inp.analysis
     assert a.null_control is not None and a.fit is None and a.positive_control is None
     figure = m.plot_noise_floor(inp)
@@ -415,7 +418,7 @@ def test_plot_4_shows_the_null_control_verdict_mean_gap_interval_and_test(figure
 
 
 def test_plot_4_warns_when_the_null_control_verdict_is_the_detected_one():
-    bad = m.make_inputs(fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, null_gap=0.5)))
+    bad = make_inputs_committed(fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, null_gap=0.5)))
     assert bad.analysis.null_control.verdict == pt.VERDICT_DETECTED
     figure = m.plot_noise_floor(bad)
     titles = [_normalised(ax.get_title()) for ax in figure.axes if ax.get_title()]
@@ -432,7 +435,7 @@ def test_plot_4_has_no_null_warning_when_the_null_control_is_not_detected(figure
 
 
 def test_plot_4_says_the_null_control_is_not_computed_and_draws_no_null_dots():
-    no_null = m.make_inputs(fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, without=("null",))))
+    no_null = make_inputs_committed(fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}, without=("null",))))
     a = no_null.analysis
     assert a.null_control is None and a.null_100m == {}
     figure = m.plot_noise_floor(no_null)
@@ -516,7 +519,7 @@ def test_plot_5_says_the_positive_control_is_not_computed_when_a_seed_is_missing
                 and PARSE(x["name"]).branch is None and PARSE(x["name"]).init_seed == 5)
     ]
     assert len(dropped) == len(campaign_) - 1
-    inp = m.make_inputs(fpi.with_eval_fields(dropped))
+    inp = make_inputs_committed(fpi.with_eval_fields(dropped))
     assert inp.analysis.positive_control is None
     reason = m._reason(inp.analysis.notes, "positive control")
     assert reason is not None
@@ -621,7 +624,7 @@ def test_plot_1_second_axis_maps_a_gap_to_its_multiplier(figures, inputs):
 
 
 def test_plot_1_without_a_fit_has_no_second_axis_and_says_why(campaign):
-    no_ladder = m.make_inputs([x for x in campaign if "mha_L" not in x["name"]])
+    no_ladder = make_inputs_committed([x for x in campaign if "mha_L" not in x["name"]])
     assert no_ladder.analysis.fit is None
     figure = m.plot_primary_gaps(no_ladder)
     assert all(not ax.child_axes for ax in figure.axes)
@@ -629,7 +632,7 @@ def test_plot_1_without_a_fit_has_no_second_axis_and_says_why(campaign):
 
 
 def test_plot_1_without_a_decision_has_no_band_and_says_why(campaign):
-    no_reruns = m.make_inputs([
+    no_reruns = make_inputs_committed([
         x for x in campaign
         if not (PARSE(x["name"]).variant == "mha" and PARSE(x["name"]).tokens == "100M"
                 and PARSE(x["name"]).branch is None and PARSE(x["name"]).data_seed == 1)
@@ -678,7 +681,7 @@ def _constructed_300m_and_100m(order: str) -> list[dict]:
 
 @pytest.mark.parametrize("order", ["forward", "reversed"])
 def test_plot_6_uses_the_300m_runs_only_whatever_the_order(order):
-    figure = m.plot_context_gap(m.make_inputs(_constructed_300m_and_100m(order)))
+    figure = m.plot_context_gap(make_inputs_committed(_constructed_300m_and_100m(order)))
     expected = []
     for seed in (1, 2):
         mha = fpi.CONSTRUCTED_BUCKETS[("mha", seed)]
@@ -814,7 +817,7 @@ def test_plots_refuse_incomparable_manifests(tmp_path, campaign):
     with pytest.raises(mt.TableError, match="torch version"):
         m.build_all(bad, [], [], [], tmp_path)
     with pytest.raises(mt.TableError, match="torch version"):
-        m.make_inputs(bad)
+        make_inputs_committed(bad)
 
 
 def test_an_arm_n_only_stage_builds_every_plot_and_plot_4_shows_only_arm_n(tmp_path):
@@ -823,7 +826,7 @@ def test_an_arm_n_only_stage_builds_every_plot_and_plot_4_shows_only_arm_n(tmp_p
     stage = fpi.with_eval_fields(stage)
     paths = m.build_all(stage, [], [], [], tmp_path)
     assert [p.name for p in paths] == list(EXPECTED_FILES)
-    inp = m.make_inputs(stage)
+    inp = make_inputs_committed(stage)
     figure = m.plot_noise_floor(inp)
     mha_branches = [float(x["final_metrics"]["val_loss"]) for x in stage
                     if PARSE(x["name"]).variant == "mha" and PARSE(x["name"]).branch == "100M"]
@@ -838,13 +841,13 @@ def test_an_arm_n_only_stage_builds_every_plot_and_plot_4_shows_only_arm_n(tmp_p
 
 
 def test_without_per_bucket_fields_plot_6_says_no_data_and_plot_7_says_no_curves():
-    inp = m.make_inputs(fake_campaign(gaps={"mqa": 0.05}))
+    inp = make_inputs_committed(fake_campaign(gaps={"mqa": 0.05}))
     assert any("lack final_metrics.val" in text for text in all_texts(m.plot_context_gap(inp)))
     assert any("lack final_metrics.val_curve" in text for text in all_texts(m.plot_training_curves(inp)))
 
 
 def test_plot_6_gaps_are_per_seed_against_mha_of_the_same_seed():
-    figure = m.plot_context_gap(m.make_inputs(fpi.bucket_manifests()))
+    figure = m.plot_context_gap(make_inputs_committed(fpi.bucket_manifests()))
     expected = []
     for seed in (1, 2):
         mha = fpi.CONSTRUCTED_BUCKETS[("mha", seed)]
@@ -855,7 +858,7 @@ def test_plot_6_gaps_are_per_seed_against_mha_of_the_same_seed():
 
 
 def test_plot_7_never_draws_a_trunk_point_as_a_result():
-    inp = m.make_inputs(fpi.curve_manifests())
+    inp = make_inputs_committed(fpi.curve_manifests())
     ax = m.plot_training_curves(inp).axes[0]
     # T-45 (G3): these constructed runs have no null control, so the gate is shut and MQA's run is
     # withheld; only MHA's two runs are drawn.
@@ -878,13 +881,13 @@ def test_plot_7_never_draws_a_trunk_point_as_a_result():
 def test_a_partial_campaign_without_the_ladder_builds_and_says_the_fit_is_missing(tmp_path):
     partial = fpi.with_eval_fields(fake_campaign(without=("ladder", "ladder_l10")))
     assert len(m.build_all(partial, [], [], [], tmp_path)) == 10
-    inp = m.make_inputs(partial)
+    inp = make_inputs_committed(partial)
     assert inp.analysis.fit is None
     assert any("ladder" in note for note in inp.analysis.notes)
 
 
 def test_missing_benchmark_is_no_data_not_an_error(campaign):
-    figure = m.plot_inference_frontier(m.make_inputs(campaign))
+    figure = m.plot_inference_frontier(make_inputs_committed(campaign))
     assert dot_count(figure) == 0
     assert any("no data yet" in text for text in all_texts(figure))
 
@@ -893,12 +896,12 @@ def test_missing_benchmark_is_no_data_not_an_error(campaign):
 
 
 def test_the_blank_command_line_writes_ten_files(tmp_path):
-    assert m.main(["--blank", "--out", str(tmp_path)]) == 0
+    assert plots_main(["--blank", "--out", str(tmp_path)]) == 0
     assert sorted(os.listdir(tmp_path)) == sorted(EXPECTED_FILES)
 
 
 def test_the_command_line_with_missing_inputs_builds_blank_plots(tmp_path):
-    code = m.main([
+    code = plots_main([
         "--manifests", str(tmp_path / "none"), "--bench", str(tmp_path / "none"),
         "--probes", str(tmp_path / "none.json"), "--retrieval", str(tmp_path / "none.json"),
         "--out", str(tmp_path / "out"),
@@ -914,7 +917,7 @@ def test_the_command_line_refuses_incomparable_manifests(tmp_path, campaign, cap
     bad[0]["environment"].update(torch="2.16.0")
     for manifest in bad:
         mf.write_manifest(manifest, manifests)
-    assert m.main(["--manifests", str(manifests), "--out", str(tmp_path / "out")]) == 1
+    assert plots_main(["--manifests", str(manifests), "--out", str(tmp_path / "out")]) == 1
     assert "torch version" in capsys.readouterr().err
     assert not (tmp_path / "out").exists()
 
@@ -945,8 +948,8 @@ def test_with_the_flag_all_ten_plots_build_and_the_unfinished_run_draws_no_dot(c
     paths = m.build_all([*campaign, unfinished], bench, probes, retrieval, tmp_path / "out", skip_unfinished=True)
     assert [p.name for p in paths] == list(EXPECTED_FILES)
     assert all(p.exists() for p in paths)
-    base = m.make_inputs(campaign, bench, probes, retrieval)
-    skipping = m.make_inputs([*campaign, unfinished], bench, probes, retrieval, skip_unfinished=True)
+    base = make_inputs_committed(campaign, bench, probes, retrieval)
+    skipping = make_inputs_committed([*campaign, unfinished], bench, probes, retrieval, skip_unfinished=True)
     assert skipping.skipped == (unfinished["name"],)
     for name, builder in m.PLOTS:
         assert dot_count(builder(skipping)) == dot_count(builder(base)), name
@@ -955,9 +958,9 @@ def test_with_the_flag_all_ten_plots_build_and_the_unfinished_run_draws_no_dot(c
 def test_plot_4_names_the_unfinished_runs_left_out_and_only_when_some_were(campaign):
     unfinished = _unfinished_run()
     builder = dict(m.PLOTS)["04_noise_floor.png"]
-    fig = builder(m.make_inputs([*campaign, unfinished], skip_unfinished=True))
+    fig = builder(make_inputs_committed([*campaign, unfinished], skip_unfinished=True))
     assert any(f"unfinished runs left out: {unfinished['name']}" in text for text in all_texts(fig))
-    plain = builder(m.make_inputs(campaign))
+    plain = builder(make_inputs_committed(campaign))
     assert not any("unfinished runs left out" in text for text in all_texts(plain))
 
 
@@ -968,10 +971,10 @@ def test_the_command_line_refuses_unfinished_runs_without_the_flag_and_builds_wi
     none = tmp_path / "none"
     common = ["--manifests", str(manifests), "--bench", str(none), "--probes", str(none / "p.json"),
               "--retrieval", str(none / "r.json")]
-    assert m.main([*common, "--out", str(tmp_path / "refused")]) == 1
+    assert plots_main([*common, "--out", str(tmp_path / "refused")]) == 1
     assert "unfinished" in capsys.readouterr().err
     assert not (tmp_path / "refused").exists()
-    assert m.main([*common, "--out", str(tmp_path / "built"), "--skip-unfinished"]) == 0
+    assert plots_main([*common, "--out", str(tmp_path / "built"), "--skip-unfinished"]) == 0
     assert sorted(os.listdir(tmp_path / "built")) == sorted(EXPECTED_FILES)
 
 
@@ -988,8 +991,8 @@ def test_a_trunk_checkpoint_is_refused_with_and_without_the_flag(campaign, tmp_p
     none = tmp_path / "none"
     common = ["--manifests", str(trunk_dir), "--bench", str(none), "--probes", str(none / "p.json"),
               "--retrieval", str(none / "r.json"), "--out", str(tmp_path / "cli_out")]
-    assert m.main(common) == 1
-    assert m.main([*common, "--skip-unfinished"]) == 1
+    assert plots_main(common) == 1
+    assert plots_main([*common, "--skip-unfinished"]) == 1
     assert "trunk checkpoint" in capsys.readouterr().err
     assert not (tmp_path / "cli_out").exists()
 
@@ -1023,7 +1026,7 @@ def _caption_says_withheld(figure) -> bool:
 
 @pytest.fixture(params=sorted(SHUT_CASES))
 def shut(request):
-    inputs_ = m.make_inputs(
+    inputs_ = make_inputs_committed(
         fpi.with_eval_fields(fake_campaign(**SHUT_CASES[request.param])),
         fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records(),
     )
@@ -1066,7 +1069,7 @@ def test_plot_1_draws_the_variant_dots_when_the_gate_is_open(inputs):
 
 
 def test_the_withheld_caption_is_absent_when_no_variant_run_exists():
-    blank = m.make_inputs([])
+    blank = make_inputs_committed([])
     for builder in (m.plot_primary_gaps, m.plot_inference_frontier, m.plot_memory_frontier):
         assert not _caption_says_withheld(builder(blank)), builder.__name__
 
@@ -1100,7 +1103,7 @@ def test_every_probe_panel_draws_one_chance_line_at_the_true_difficulties(figure
 
 def test_probe_panels_draw_no_chance_line_when_no_record_carries_chance(campaign):
     records = [{key: value for key, value in r.items() if key != "chance"} for r in fpi.probe_records()]
-    figure = m.plot_probes(m.make_inputs(campaign, fpi.bench_records(), records, fpi.retrieval_records()))
+    figure = m.plot_probes(make_inputs_committed(campaign, fpi.bench_records(), records, fpi.retrieval_records()))
     panels = probe_panels(figure)
     assert len(panels) == len(fpi.PROBE_TASKS)
     for ax in panels:
@@ -1111,7 +1114,7 @@ def test_probe_panels_draw_no_chance_line_when_no_record_carries_chance(campaign
 def test_records_at_one_point_that_disagree_on_chance_are_refused(campaign, other):
     records = fpi.probe_records()
     records[0] = {**records[0], "chance": other}  # the first mqar record, at difficulty 4
-    inputs_ = m.make_inputs(campaign, fpi.bench_records(), records, fpi.retrieval_records())
+    inputs_ = make_inputs_committed(campaign, fpi.bench_records(), records, fpi.retrieval_records())
     with pytest.raises(m.PlotError, match="disagree on chance"):
         m.plot_probes(inputs_)
 
@@ -1120,7 +1123,7 @@ def test_duplicate_probe_records_are_refused_by_make_inputs(campaign):
     records = fpi.probe_records()
     records.append(dict(records[0]))  # same variant, task, difficulty and init seed
     with pytest.raises(m.PlotError, match="two records"):
-        m.make_inputs(campaign, fpi.bench_records(), records, fpi.retrieval_records())
+        make_inputs_committed(campaign, fpi.bench_records(), records, fpi.retrieval_records())
 
 
 def test_plot_9_is_labelled_as_token_accuracy_on_every_panel(figures, blank_figures):
@@ -1176,7 +1179,7 @@ def _mha_names(manifests) -> list[str]:
 
 
 def test_plot_7_draws_exactly_the_arm_a_headline_runs_and_branches(campaign):
-    inp = m.make_inputs(campaign)
+    inp = make_inputs_committed(campaign)
     ax = m.plot_training_curves(inp).axes[0]
     names = _plot_7_names(campaign)
     by_name = {x["name"]: x for x in campaign}
@@ -1186,7 +1189,7 @@ def test_plot_7_draws_exactly_the_arm_a_headline_runs_and_branches(campaign):
 
 def test_sweep_arm_b_rerun_null_and_ladder_runs_add_no_dot_and_no_line():
     base = fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}))  # the gate is open: controls pass
-    assert m.make_inputs(base).analysis.comparisons_allowed
+    assert make_inputs_committed(base).analysis.comparisons_allowed
     arm_b = fsec.arm_b_manifests(base, variants=("gqa4", "mqa"), seeds=(1,))  # Arm B needs 100M branches
     extras = [
         fake_manifest("mha", budget="100M", branches=[], init_seed=9, val_loss=3.3),  # a rerun, unregistered seed
@@ -1205,8 +1208,8 @@ def test_sweep_arm_b_rerun_null_and_ladder_runs_add_no_dot_and_no_line():
     assert all(x["name"] not in names for x in extras)  # every addition is a new run
 
     extended = fpi.with_eval_fields(extras)
-    base_inputs = m.make_inputs(base)
-    extended_inputs = m.make_inputs([*base, *extended])
+    base_inputs = make_inputs_committed(base)
+    extended_inputs = make_inputs_committed([*base, *extended])
     assert _plot_7_names(extended_inputs.results) == _plot_7_names(base_inputs.results)
     base_ax = m.plot_training_curves(base_inputs).axes[0]
     extended_ax = m.plot_training_curves(extended_inputs).axes[0]
@@ -1217,7 +1220,7 @@ def test_sweep_arm_b_rerun_null_and_ladder_runs_add_no_dot_and_no_line():
 
 @pytest.mark.parametrize("case", sorted(SHUT_CASES))
 def test_with_the_gate_shut_plot_7_draws_mha_only_and_says_the_variants_are_withheld(case):
-    shut_inputs = m.make_inputs(fpi.with_eval_fields(fake_campaign(**SHUT_CASES[case])))
+    shut_inputs = make_inputs_committed(fpi.with_eval_fields(fake_campaign(**SHUT_CASES[case])))
     assert shut_inputs.analysis.comparisons_allowed is False
     figure = m.plot_training_curves(shut_inputs)
     ax = figure.axes[0]
@@ -1233,7 +1236,7 @@ def test_with_the_gate_shut_plot_7_draws_mha_only_and_says_the_variants_are_with
 
 
 def test_with_the_gate_open_plot_7_draws_the_variants_and_no_withheld_caption(campaign):
-    inp = m.make_inputs(campaign)
+    inp = make_inputs_committed(campaign)
     assert inp.analysis.comparisons_allowed
     figure = m.plot_training_curves(inp)
     counts = dots_by_variant(figure.axes[0])
@@ -1246,7 +1249,7 @@ def test_plot_7_caption_states_the_drawing_rule_in_one_sentence(campaign, blank_
         "Drawn: the Arm A runs and branches of the headline variants at each variant's learning rate; "
         "learning-rate sweep points and other arms are not drawn."
     )
-    assert any(rule in text for text in all_texts(m.plot_training_curves(m.make_inputs(campaign))))
+    assert any(rule in text for text in all_texts(m.plot_training_curves(make_inputs_committed(campaign))))
     assert any(rule in text for text in all_texts(blank_figures["07_training_curves.png"]))
 
 
@@ -1276,7 +1279,7 @@ def _bench_with(variant: str, mode: str = "opt", **changes) -> list[dict]:
 )
 def test_make_inputs_refuses_bench_records_the_table_refuses(campaign, bench, reason):
     with pytest.raises(mt.TableError, match=reason):
-        m.make_inputs(campaign, bench)
+        make_inputs_committed(campaign, bench)
 
 
 def test_the_command_line_refuses_a_shared_gpu_bench_record_and_exits_one(tmp_path, campaign, capsys):
@@ -1284,7 +1287,7 @@ def test_the_command_line_refuses_a_shared_gpu_bench_record_and_exits_one(tmp_pa
     for manifest in campaign:
         mf.write_manifest(manifest, manifests)
     fsec.write_bench_documents(bench_dir, _bench_with("mqa", shared=True))
-    code = m.main([
+    code = plots_main([
         "--manifests", str(manifests), "--bench", str(bench_dir), "--out", str(tmp_path / "plots"),
         "--probes", str(tmp_path / "none.json"), "--retrieval", str(tmp_path / "none.json"),
     ])
@@ -1303,7 +1306,7 @@ def test_agreeing_bench_records_still_build_all_ten_plots(tmp_path, campaign):
 def test_the_synthetic_bench_records_agree_with_the_synthetic_campaign(campaign):
     # T-45 (G8): the fixture's records carry the campaign's environment and backend, so the table's
     # timing-source checks accept them. A disagreement raises TableError here.
-    built = m.make_inputs(campaign, fpi.bench_records())
+    built = make_inputs_committed(campaign, fpi.bench_records())
     assert len(built.bench) == len(fpi.bench_records()) > 0
 
 
@@ -1318,14 +1321,17 @@ def test_without_l10_the_plots_have_no_seed_count_until_the_cut_is_declared(camp
     """Plan §12.2 item 4, review S4 H2: absent L10 runs are not a decision to cut them."""
     runs = _without_l10(campaign)
     assert len(runs) < len(campaign)
-    waiting = m.make_inputs(runs, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records())
-    declared = m.make_inputs(runs, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records(), l10_cut=True)
+    waiting = make_inputs_committed(runs, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records())
+    cut = committed(runs, ladder="l6_l8")
+    declared = make_inputs_committed(
+        runs, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records(), commitments=cut
+    )
     assert waiting.analysis.decision is None and waiting.analysis.comparisons == {}
     assert declared.analysis.decision is not None
-    assert declared.analysis == mt.analyse(list(runs), l10_cut=True)
+    assert declared.analysis == mt.analyse(list(runs), commitments=cut)
 
 
-def test_the_command_line_passes_the_l10_cut_to_the_analysis(campaign, tmp_path, monkeypatch, capsys):
+def test_the_command_line_passes_the_commitments_file_to_the_analysis(campaign, tmp_path, monkeypatch, capsys):
     directory = tmp_path / "manifests"
     for manifest in _without_l10(campaign):
         mf.write_manifest(manifest, directory)
@@ -1333,14 +1339,20 @@ def test_the_command_line_passes_the_l10_cut_to_the_analysis(campaign, tmp_path,
     real = mt.analyse
 
     def spy(results, prereg=None, **kwargs):
-        seen.append(kwargs.get("l10_cut", False))
+        seen.append(kwargs.get("commitments"))
         return real(results, prereg, **kwargs)
 
     monkeypatch.setattr(mt, "analyse", spy)
     none = tmp_path / "none"
     common = ["--manifests", str(directory), "--bench", str(none), "--probes", str(none / "p.json"),
               "--retrieval", str(none / "r.json")]
+    cut = {"ladder": "l6_l8", "seed_count": 5}
+    file = write_commitments(tmp_path / "commitments.yaml", cut)
     assert m.main([*common, "--out", str(tmp_path / "a")]) == 0
-    assert m.main([*common, "--out", str(tmp_path / "b"), "--l10-cut"]) == 0
+    assert m.main([*common, "--out", str(tmp_path / "b"), "--commitments", str(file)]) == 0
     capsys.readouterr()
-    assert seen == [False, True]
+    # Without the flag the plots read configs/commitments.yaml, like the tables.
+    assert seen == [config.load_commitments(), cut]
+    with pytest.raises(SystemExit):
+        m.main([*common, "--out", str(tmp_path / "c"), "--l10-cut"])  # the flag is gone (decision 220)
+    capsys.readouterr()
