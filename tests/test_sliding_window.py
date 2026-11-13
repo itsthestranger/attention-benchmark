@@ -438,3 +438,39 @@ def test_swa_attention_time_at_ctx_1024_is_below_mha(path):
         mha_times.append(attention_seconds(mha, x, freqs))
         swa_times.append(attention_seconds(swa, x, freqs))
     assert statistics.median(swa_times) < statistics.median(mha_times), (path, swa_times, mha_times)
+
+
+# --- F3 (T-37): the opt path is chosen by the variant's config, and recorded -----------------
+
+
+def _swa_from_config(overrides=None):
+    from scripts.timing_pass import SYNTHETIC_DIMS
+    from src.model import build_model
+
+    resolved = config.resolve(
+        "swa256", init_seed=1, peak_lr=1e-3, overrides={**SYNTHETIC_DIMS, **(overrides or {})}
+    )
+    return build_model(resolved).layers[0].attn
+
+
+def test_the_config_default_builds_the_chunked_path():
+    assert _swa_from_config().opt_path == "chunked"
+
+
+def test_the_config_key_builds_the_flex_path_when_flex_is_provided():
+    assert _swa_from_config({"model.attention.opt_path": "flex"}).opt_path == "flex"
+
+
+def test_the_flex_path_is_refused_with_the_modules_message_when_flex_is_not_provided(monkeypatch):
+    import src.attention.sliding_window as swmod
+
+    monkeypatch.setattr(swmod, "_flex_importable", lambda: False)
+    with pytest.raises(ValueError, match="flex_attention"):
+        _swa_from_config({"model.attention.opt_path": "flex"})
+    with pytest.raises(ValueError, match="flex_attention"):
+        module().set_opt_path("flex")
+
+
+def test_an_unknown_opt_path_is_refused_at_construction():
+    with pytest.raises(ValueError, match="opt_path"):
+        _swa_from_config({"model.attention.opt_path": "dense"})

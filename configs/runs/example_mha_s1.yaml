@@ -1,0 +1,14 @@
+# Example run spec for the Kaggle shim (plan §7, §8.2). Not a result, and not a sweep choice.
+variant: mha
+arm: iso_token
+ladder: null
+init_seed: 1
+data_seed: 1
+# PLACEHOLDER: the real peak LR comes from the learning-rate sweep (plan §7.4).
+peak_lr: 0.001
+budget: 300M
+steps: null
+branches: [100M]
+# The sweep run that chose peak_lr; null for a sweep run itself.
+lr_source: null
+overrides: {}
