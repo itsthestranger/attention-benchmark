@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -614,6 +615,13 @@ def run_job(trainer, job: Job) -> int:
     )
     try:
         trainer.train(until=job.until)
+        if trainer.step < total:
+            # A stop before the end leaves a regular checkpoint at the stop step, so that the next
+            # invocation resumes from here and not from an older cadence checkpoint, which would run
+            # these steps again (review S4, G1; plan §7.2, §12.3).
+            ck.save_checkpoint(
+                trainer, job.ckpt_dir, keep=job.ops["keep_checkpoints"], resume_count=len(sessions) - 1
+            )
         finished = trainer.step == total
         final = final_metrics(trainer, job, curve.entries) if finished else None
     except NonFiniteLoss as exc:
@@ -629,10 +637,14 @@ def final_metrics(trainer, job: Job, curve_entries: list[dict]) -> dict:
     kwargs = dict(device=trainer.device, mode=trainer.mode, precision=trainer.precision)
     val = evaluate_split(trainer.model, job.dataset.splits["val"], job.settings, **kwargs)
     test = evaluate_split(trainer.model, job.dataset.splits["test"], job.settings, **kwargs)
+    # The loss of the last step whose recorded loss is finite. A non-finite loss on the last step is
+    # skipped like any other non-finite step (the weights are intact), and must not make the manifest
+    # invalid: JSON cannot hold NaN (review S4, M2).
+    finite_losses = [r.loss for r in trainer.records if math.isfinite(r.loss)]
     return {
         "val_loss": val["loss"],
         "test_loss": test["loss"],
-        "train_loss": trainer.records[-1].loss,
+        "train_loss": finite_losses[-1] if finite_losses else None,
         "val": val,
         "test": test,
         "val_curve": [dict(e) for e in curve_entries],

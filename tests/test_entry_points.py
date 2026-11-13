@@ -379,13 +379,32 @@ def test_the_manifest_at_an_interruption_is_valid_and_not_a_result(specs, synthe
     assert mf.is_result(m) is False
 
 
-def test_a_run_interrupted_before_any_checkpoint_starts_again_from_zero(specs, synthetic, trunk_resolved, tmp_path):
+def test_a_run_stopped_before_the_first_cadence_checkpoint_resumes_from_its_stop(
+    specs, synthetic, trunk_resolved, reference, tmp_path
+):
+    """A stop at --until leaves a checkpoint at that step (review S4, G1): nothing is run again."""
     out = tmp_path / "early"
     assert run_train(specs.trunk, out, synthetic.root, extra=("--until", "3")) == 0
-    assert ck.list_checkpoints(ck.checkpoint_dir(out / "checkpoints" / "opt", trunk_resolved)) == []
+    directory = ck.checkpoint_dir(out / "checkpoints" / "opt", trunk_resolved)
+    assert [p.name for p in ck.list_checkpoints(directory)] == ["step00000003.pt"]
     assert run_train(specs.trunk, out, synthetic.root) == 0
-    m = manifest_of(out, "opt", mf.run_name(trunk_resolved))
+    name = mf.run_name(trunk_resolved)
+    m = manifest_of(out, "opt", name)
+    assert m["completed"] is True and m["steps"]["attempted"] == TRUNK_STEPS and m["resume_count"] == 1
+    assert_same_result(out, reference("opt"), "opt", trunk_resolved, RESUME_TOL["opt"], name)
+
+
+def test_a_run_with_no_checkpoint_at_all_starts_again_from_zero(specs, synthetic, trunk_resolved, reference, tmp_path):
+    """A kill before any checkpoint: the checkpoint directory is empty and the run starts over."""
+    out = tmp_path / "killed_early"
+    assert run_train(specs.trunk, out, synthetic.root, extra=("--until", "3")) == 0
+    for path in ck.list_checkpoints(ck.checkpoint_dir(out / "checkpoints" / "opt", trunk_resolved)):
+        path.unlink()
+    assert run_train(specs.trunk, out, synthetic.root) == 0
+    name = mf.run_name(trunk_resolved)
+    m = manifest_of(out, "opt", name)
     assert m["completed"] is True and m["steps"]["attempted"] == TRUNK_STEPS
+    assert_same_result(out, reference("opt"), "opt", trunk_resolved, RESUME_TOL["opt"], name)
 
 
 def test_ops_do_not_change_the_config_hash(specs, synthetic, trunk_resolved, reference, tmp_path):
@@ -666,11 +685,12 @@ def test_evaluate_refuses_an_unfinished_checkpoint_unless_asked_and_then_marks_i
     assert evaluate_script.main(base + ["--allow-unfinished"]) == 0
     document = json.loads(json_path.read_text(encoding="utf-8"))
     assert document["is_final"] is False
-    assert document["step"] == CKPT_EVERY and document["total_steps"] == TRUNK_STEPS
-    assert document["checkpoint"] == f"step{CKPT_EVERY:08d}.pt" and document["split"] == "val"
+    # A stop at --until leaves a checkpoint at that step (review S4, G1), so the newest is step 14.
+    assert document["step"] == 14 and document["total_steps"] == TRUNK_STEPS
+    assert document["checkpoint"] == "step00000014.pt" and document["split"] == "val"
     assert document["mode"] == "opt" and document["precision"] == "fp32"
     assert document["result"]["loss"] is not None
-    assert f"NOT A RESULT: step {CKPT_EVERY} of {TRUNK_STEPS}" in capsys.readouterr().out
+    assert f"NOT A RESULT: step 14 of {TRUNK_STEPS}" in capsys.readouterr().out
 
 
 def test_a_branch_point_checkpoint_stays_refused_even_with_allow_unfinished(reference, synthetic, trunk_resolved, tmp_path):
