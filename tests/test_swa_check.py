@@ -348,3 +348,22 @@ def test_a_timing_document_without_the_mha_entry_marks_nothing_and_does_not_fail
 def test_the_committed_blank_rqw_and_timing_carry_no_mark():
     assert MARK not in (BLANK_DIR / report.TIMING_NAME).read_text(encoding="utf-8")
     assert (BLANK_DIR / "rqw.md").read_text(encoding="utf-8") == mt.render_rqw(None, None)
+
+
+# --- Added by the orchestrator in review: two breaks the tests above did not catch ------------------
+
+
+def test_the_note_gives_swas_attention_time_first_and_mhas_second():
+    """NOT_HOLDS_SWA is 0.30 x 97.0 = 29.1 ms/step of attention; MHA is 0.25 x 100.0 = 25.0."""
+    note = tp.swa_dense_note(tp.swa_check_of(swa_doc(swa=NOT_HOLDS_SWA)))
+    assert "its attention takes 29.100 ms/step, MHA's 25.000 ms/step" in note
+
+
+def test_rqw_and_headline_mark_the_swa_row_and_no_other(tmp_path, campaign):
+    manifests, _, _ = campaign
+    out = _run_tables(tmp_path, manifests, _write(tmp_path / "timing", swa_doc(swa=NOT_HOLDS_SWA)))
+    for name in ("rqw.md", "headline.md"):
+        text = (out / name).read_text(encoding="utf-8")
+        marked_rows = [line for line in text.splitlines() if line.startswith("| ") and MARK in line]
+        assert len(marked_rows) == 1 and marked_rows[0].startswith("| swa256 |"), (name, marked_rows)
+        assert marked_rows[0].count(MARK) == 1
