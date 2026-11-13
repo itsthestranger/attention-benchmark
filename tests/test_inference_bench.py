@@ -18,6 +18,7 @@ from scripts import make_tables as mt
 from src.eval import inference as inf
 from tests.fixtures.fake_campaign import fake_campaign
 from tests.tolerances import KV_BYTES_MEASURED_REL
+from tests.fixtures.commitments import analyse_committed
 
 ALL = bench.ALL_VARIANTS
 CPU = torch.device("cpu")
@@ -328,7 +329,7 @@ def test_decode_reader_feeds_the_headline_column(tmp_path):
     mapping = bench.read_decode_tok_per_s(tmp_path)
     assert mapping == {"mha": 1000.0, "mqa": 2500.0}
 
-    analysis = mt.analyse(fake_campaign())
+    analysis = analyse_committed(fake_campaign())
     rows = {r["variant"]: r for r in mt.headline_rows(analysis, decode_tok_per_s=mapping)}
     column = "decode tok/s (batch 32, cache 4k)"
     assert rows["mha"][column] == "1000.0"

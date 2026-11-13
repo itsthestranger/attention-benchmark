@@ -22,6 +22,7 @@ from src.model import build_model
 from src.training.trainer import Trainer
 from src.utils.reproducibility import synthetic_split
 from tests.fixtures.fake_campaign import fake_campaign
+from tests.fixtures.commitments import analyse_committed
 
 CPU = torch.device("cpu")
 ALL = tp.DEFAULT_VARIANTS
@@ -173,7 +174,7 @@ def test_reader_returns_the_mapping_the_consumers_take(tmp_path):
     assert estimate.variants[0].steps == expected_steps
 
     # Consumer 2: the headline table takes the same mapping as train_ms_per_step.
-    analysis = mt.analyse(fake_campaign())
+    analysis = analyse_committed(fake_campaign())
     rows = {r["variant"]: r for r in mt.headline_rows(analysis, train_ms_per_step=mapping)}
     assert rows["mha"]["train ms/step"] == f"{ms['mha']:.1f}"
     assert rows["mla96"]["train ms/step"] == f"{ms['mla96']:.1f}"
