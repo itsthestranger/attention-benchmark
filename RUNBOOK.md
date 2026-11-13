@@ -10,10 +10,12 @@ Read plan §11 and §13 before the first run. Three rules that no command enforc
 
 ## Open items that block parts of this runbook
 
+**Do not start the GPU weeks from this version.** The review of 2026-11-13 (`docs/review_s4.md`) found defects that affect week 1's runs, which are final results: a trunk stopped with `--until` does not resume from its branch point as §3 says, a resume after an image change is not refused, and the final commands refuse once a diverged run is on record. They are tasks T-39 to T-44 in `TASKS.md`; this notice goes when they are merged.
+
 | Item | Blocks | Who |
 | --- | --- | --- |
 | The sweep seed (`SWEEP_SEED`). Recommended: one seed that no arm uses, for example 21. A sweep on seed 1, 2 or 3 collides with a reproducibility rerun by name and config hash. | Every LR sweep (§2.4, §2.7) | Phil |
-| The probe layout and the T-21 acceptance criterion. The probe scripts are not merged. | §2.3, Gate 1 | Phil |
+| The probe grid: which probes at which sizes, for which models, with how many seeds, and one width, step count and learning rate per point (`STATUS.md`, open questions). The scripts exist: `scripts/train_probe.py`, `scripts/probe_report.py`. | §2.3, Gate 1 | Phil |
 | The Kaggle image's torch, Python and CUDA versions. | Pinning (§1.5) | Phil |
 | Two proposed thresholds in `configs/prereg.yaml` (`paired_if_s_rep_ratio_below: 0.6`, `max_undetectable_param_fraction: 0.05`). | Pre-registration (§1.7) | Phil |
 | Readings of the plan listed in `STATUS.md` (sweep rule order, the comparison gate, Arm B's learning rate, and others). | Nothing; confirm or change before the freeze | Phil |
@@ -137,7 +139,7 @@ Then write the three values into `configs/recipe.yaml` (a pull request you appro
 
 ### 2.3 Phase 1 probes, Gate 1
 
-Not available yet: the probe scripts wait for two decisions (see the open items). When they are merged this section gets their commands.
+No commands yet: the probe grid is not fixed (see the open items). `scripts/train_probe.py` trains one probe model and writes one record, `scripts/probe_report.py` writes `probes.md` from the records, and plot 9 draws them. This section gets the exact loops when the grid is fixed.
 
 **Gate 1** (plan §9.2): the recurrence anchor fails as the number of pairs grows, which shows the probes can discriminate. SWA's behaviour is reported, not gating. Either way the LM arms run.
 

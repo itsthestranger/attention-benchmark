@@ -54,7 +54,7 @@ Task graph for the autonomous build loop. The specification is `docs/plan_v5.md`
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
 | T-20 ✅ | `eval/lm.py` and context-bucketed loss with the in-context-learning score | W | T-13, T-15 | §6, §10.3 | Bucket-weighted loss equals aggregate loss; hand-built windows with mid-window document starts give the expected context values |
-| T-21 | Probe generators and probe training script | W | T-12, T-15 | §9.2 | Property tests pass for all five probes; a tiny MHA solves 4-pair MQAR on CPU |
+| T-21 ✅ | Probe generators and probe training script | W | T-12, T-15 | §9.2 | Property tests pass for all five probes; a tiny MHA memorises one fixed batch of 4-pair MQAR on CPU; the held-out solve is a `gpu` test over 3 seeds (Phil, 2026-11-13) |
 | T-22 ✅ | Retrieval evaluation: passkey and needle generators | W | T-15 | §9.7 | Generator tests pass; the RoPE extension stays open (decision 5) |
 | T-23 ✅ | `bench.py`, `eval/inference.py`, `timing_pass.py` | W | T-04, T-06, T-07 | §8.5, §8.6, §10.4 | Each runs end to end on CPU with a tiny model; round-robin order and warm-up discard are tested; the analytic-vs-measured KV assertion is written for `gpu` |
 
@@ -87,7 +87,20 @@ Phil decided on 2026-11-13 that probe results are reported as token accuracy aga
 
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
-| T-38 | Probe report for Gate 1 (`probes.md`) from `probe/1` records, and the no-recall line in plot 9 | W | T-21 (record schema), T-28 | §9.2, §10.5 | `probes.md` builds blank and from synthetic records; duplicate and mismatched records are refused; no verdict is computed; plot 9 draws the 1/n line |
+| T-38 ✅ | Probe report for Gate 1 (`probes.md`) from `probe/1` records, and the no-recall line in plot 9 | W | T-21 (record schema), T-28 | §9.2, §10.5 | `probes.md` builds blank and from synthetic records; duplicate and mismatched records are refused; no verdict is computed; plot 9 draws the 1/n line |
+
+## M6 — Fixes for the session-4 review
+
+A second independent review (`docs/review_s4.md`, 2026-11-13) found two defects that block the handover (H1, H2) and eight to fix before the first reported GPU hour (G1 to G8). Added by the orchestrator on 2026-11-13. Findings that are decisions for Phil are in `STATUS.md`, not here.
+
+| ID | Task | Owner | Depends on | Plan | Done when |
+| --- | --- | --- | --- | --- | --- |
+| T-39 | Analysis refusals and gates: runs that differ in recipe, init rule, precision or backbone, or that carry overrides, are refused, and the static table columns come from the manifests (H1); the seed-count rule is computed only from a complete ladder (H2); plot 7 draws only the runs the analysis reads and respects the comparison gate (G3); a recorded divergence is listed, not refused (G6); the plots apply the timing-source refusals of the tables (G8); the hardware disclosure is generated from the manifests (M1); tests for the breaks B10, B36 and B46 | O+W | review S4 | §1.4, §7, §8.1, §8.7, §10.5, §13.6 | The orchestrator's tests pass; each fix has a test that fails without it |
+| T-40 | Checkpoint and resume: a stop at `--until` leaves a checkpoint the trunk resumes from, and an existing branch-point checkpoint is never overwritten (G1); the environment and GPU are stored in every checkpoint and per session in the manifest, and a resume under another torch, CUDA, driver or GPU is refused (G2); a non-finite loss on the last step does not block the manifest (M2); tests for the breaks B22, B45 and B47 | O+W | review S4 | §7.2, §10.6, §12.3, §13.9 | The orchestrator's tests pass; the trunk continues bit-identically from its branch point on CPU |
+| T-41 | Per-run records of plan §10.2 in the manifest: peak allocated and reserved memory, and the context-bucketed loss at every in-run evaluation (G4) | W | T-40 | §10.2 | Schema test covers the new fields; GPU utilisation and time-to-loss-X wait for a definition from Phil |
+| T-42 | `timing.md` and `inference.md` generated from the timing-pass and bench files, with committed blank forms: both tracks, attention's measured share, peak memory, the spread, prefill, maximum batch at 8k, measured against analytic KV bytes (G5) | W | T-39 | §2.3, §8.5, §8.6, §10.4 | Each builds blank and from synthetic files; the same timing-source refusals apply; no verdict |
+| T-43 | `scripts/prune.py`: remove the checkpoints of runs whose manifests are complete and valid; never a branch-point checkpoint whose branch is unfinished (G7) | W | T-40 | §12.3 | A dry run lists what would go; a finished campaign prunes to its manifests; an unfinished run is untouched |
+| T-44 | Runbook corrections from the review (the resume statement, diverged runs, pruning, the timing-pass budget, the shim, an evaluation in a smoke run, the reproducibility record) and the probe commands of §2.3 | O | T-39 to T-43, the probe grid (Phil) | §15 | `tests/test_runbook.py` parses every new command |
 
 ## M5 — Operations and handover
 
@@ -95,4 +108,4 @@ Phil decided on 2026-11-13 that probe results are reported as token accuracy aga
 | --- | --- | --- | --- | --- | --- |
 | T-29 ✅ | Kaggle shim notebook and the `train.py` / `evaluate.py` entry points | W | T-17, T-20 | §12.3 | A cold start runs on CPU against a synthetic dataset and resumes without human input |
 | T-30 ✅ | `RUNBOOK.md` | O | T-00 to T-35 | §15 | Exact commands for the verification step and each GPU week, in order, with the gate after each block and what Phil checks |
-| T-31 | Handover: audit by a fresh agent against §5 and §13, final `STATUS.md`, `README.md` with an unfilled pre-registration template | O | T-30 ✅ | §17.4 | The handover checklist in `CLAUDE.md` is complete |
+| T-31 | Handover: audit by a fresh agent against §5 and §13, final `STATUS.md`, `README.md` with an unfilled pre-registration template | O | T-30 ✅, T-39 to T-44 | §17.4 | The handover checklist in `CLAUDE.md` is complete |
