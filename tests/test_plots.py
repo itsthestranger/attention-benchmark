@@ -1305,3 +1305,42 @@ def test_the_synthetic_bench_records_agree_with_the_synthetic_campaign(campaign)
     # timing-source checks accept them. A disagreement raises TableError here.
     built = m.make_inputs(campaign, fpi.bench_records())
     assert len(built.bench) == len(fpi.bench_records()) > 0
+
+
+# --- T-44: the plots take the tables' declaration that L10 is cut ---------------------------------
+
+
+def _without_l10(campaign_):
+    return [x for x in campaign_ if mf.parse_run_name(x["name"]).variant != "mha_L10"]
+
+
+def test_without_l10_the_plots_have_no_seed_count_until_the_cut_is_declared(campaign):
+    """Plan §12.2 item 4, review S4 H2: absent L10 runs are not a decision to cut them."""
+    runs = _without_l10(campaign)
+    assert len(runs) < len(campaign)
+    waiting = m.make_inputs(runs, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records())
+    declared = m.make_inputs(runs, fpi.bench_records(), fpi.probe_records(), fpi.retrieval_records(), l10_cut=True)
+    assert waiting.analysis.decision is None and waiting.analysis.comparisons == {}
+    assert declared.analysis.decision is not None
+    assert declared.analysis == mt.analyse(list(runs), l10_cut=True)
+
+
+def test_the_command_line_passes_the_l10_cut_to_the_analysis(campaign, tmp_path, monkeypatch, capsys):
+    directory = tmp_path / "manifests"
+    for manifest in _without_l10(campaign):
+        mf.write_manifest(manifest, directory)
+    seen = []
+    real = mt.analyse
+
+    def spy(results, prereg=None, **kwargs):
+        seen.append(kwargs.get("l10_cut", False))
+        return real(results, prereg, **kwargs)
+
+    monkeypatch.setattr(mt, "analyse", spy)
+    none = tmp_path / "none"
+    common = ["--manifests", str(directory), "--bench", str(none), "--probes", str(none / "p.json"),
+              "--retrieval", str(none / "r.json")]
+    assert m.main([*common, "--out", str(tmp_path / "a")]) == 0
+    assert m.main([*common, "--out", str(tmp_path / "b"), "--l10-cut"]) == 0
+    capsys.readouterr()
+    assert seen == [False, True]
