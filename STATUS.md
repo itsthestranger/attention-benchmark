@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-13, end of session 4. Every finding of the second independent review that is the loop's to fix is fixed and merged (T-39 to T-45), and T-21 (probes) is merged. What remains is Phil's: the probe grid, which `RUNBOOK.md` §2.3 waits for, and the decisions listed under "Open questions". The `cpu` tier is green on `main`: 3,575 tests, about five and a half minutes. The fixes for the review have not themselves been seen by a fresh agent.
+Last updated: 2026-11-13, end of session 4. Every finding of the second independent review that is the loop's to fix is fixed and merged (T-39 to T-45), and T-21 (probes) is merged. What remains is Phil's: the probe grid, which `RUNBOOK.md` §2.3 waits for, and the decisions listed under "Open questions". The `cpu` tier is green on `main`: 3,622 tests, about five and a half minutes. The fixes for the review have not themselves been seen by a fresh agent.
 
 ## Done
 
