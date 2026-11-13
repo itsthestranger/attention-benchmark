@@ -28,6 +28,7 @@ from scripts import make_plots as m
 from scripts import make_tables as mt
 from src.utils import manifest as mf
 from tests.fixtures import fake_plot_inputs as fpi
+from tests.fixtures import fake_secondary as fsec
 from src import config
 from tests.fixtures.fake_campaign import DATA_ORDER_SEEDS, LADDER_PARAMS, NULL_SEEDS, fake_campaign
 from tests.fixtures.fake_manifests import fake_manifest
@@ -316,8 +317,9 @@ def test_plot_6_draws_every_seed_gap_in_every_bucket(figures, inputs, campaign):
     assert dot_count(figures["06_context_gap.png"]) == pairs * len(fpi.BUCKETS) == 96
 
 
-def test_plot_7_draws_every_result_as_a_final_dot(figures, inputs):
-    assert dot_count(figures["07_training_curves.png"]) == len(inputs.results) == 67
+def test_plot_7_draws_one_final_dot_per_arm_a_headline_run_and_branch(campaign):
+    # T-45 (G3): the expected count is read off the run names, not from the plot code.
+    assert dot_count(m.plot_training_curves(m.make_inputs(campaign))) == len(_plot_7_names(campaign)) > 0
 
 
 def test_plot_8_draws_lines_and_no_dots(figures):
@@ -855,14 +857,19 @@ def test_plot_6_gaps_are_per_seed_against_mha_of_the_same_seed():
 def test_plot_7_never_draws_a_trunk_point_as_a_result():
     inp = m.make_inputs(fpi.curve_manifests())
     ax = m.plot_training_curves(inp).axes[0]
-    results = sorted((float(_tokens_of(x["name"])), float(x["final_metrics"]["val_loss"])) for x in inp.results)
+    # T-45 (G3): these constructed runs have no null control, so the gate is shut and MQA's run is
+    # withheld; only MHA's two runs are drawn.
+    results = sorted(
+        (float(_tokens_of(x["name"])), float(x["final_metrics"]["val_loss"]))
+        for x in inp.results if PARSE(x["name"]).variant == "mha"
+    )
     dots = sorted((float(x), float(y)) for x, y in plotted_points(ax))
     assert dots == results
     # The faded trunk curves are the lines drawn with alpha below one; the dots are never lines.
     curve_points = [(float(x), float(y)) for line in ax.lines
                     if line.get_alpha() is not None and line.get_alpha() < 1.0
                     for x, y in zip(line.get_xdata(), line.get_ydata())]
-    assert len(curve_points) == 3 + 2 + 2  # the curves of the 300M MHA, the 100M MHA branch and 300M MQA
+    assert len(curve_points) == 3 + 2  # the curves of the 300M MHA and the 100M MHA branch; MQA's is withheld
     for point in curve_points:
         if point not in results:
             assert point not in dots
@@ -1127,3 +1134,174 @@ def test_plot_9_is_labelled_as_token_accuracy_on_every_panel(figures, blank_figu
 def test_plot_9_caption_explains_the_grey_dotted_line(figures, blank_figures):
     assert any(CHANCE_CAPTION in text for text in all_texts(figures["09_probes.png"]))
     assert any(CHANCE_CAPTION in text for text in all_texts(blank_figures["09_probes.png"]))
+
+
+# --- T-45 (G3): plot 7 draws the Arm A runs of the headline variants and nothing else -------------
+# Every manifest here is synthetic. The expected dots come from the run names (see _plot_7_names),
+# never from the plot code.
+
+def _plot_7_names(manifests) -> list[str]:
+    """The names plot 7 must draw, read from the run names alone: the headline variants' 300M results
+    and their 100M and 200M branches, in Arm A, at each variant's own learning rate (plan §8.1)."""
+    arm = config.load_arm(mt.ARM)
+    parsed = [(x["name"], PARSE(x["name"])) for x in manifests]
+    arm_a = [
+        (name, p) for name, p in parsed
+        if p.arm == arm["tag"] and p.data_seed == arm["data_seed"] and p.variant in mt.HEADLINE_VARIANTS
+        and p.tokens == "300M" and p.branch in (None, "100M", "200M")
+    ]
+    rates: dict[str, set] = {}
+    for _, p in arm_a:
+        if p.branch is None:
+            rates.setdefault(p.variant, set()).add(p.peak_lr)
+    assert all(len(r) == 1 for r in rates.values()), rates
+    return [name for name, p in arm_a if p.peak_lr in rates[p.variant]]
+
+
+def _plotted_curve_lines(ax) -> list[tuple[float, float, float]]:
+    """(colour as RGB, x, y) of every faded curve line of the axes (alpha below one)."""
+    return sorted(
+        (tuple(round(c, 6) for c in to_rgb(line.get_color())), float(x), float(y))
+        for line in ax.lines if line.get_alpha() is not None and line.get_alpha() < 1.0
+        for x, y in zip(line.get_xdata(), line.get_ydata())
+    )
+
+
+def _plot_7_points(manifests_by_name, names) -> list[tuple[float, float]]:
+    return sorted((float(_tokens_of(n)), float(manifests_by_name[n]["final_metrics"]["val_loss"])) for n in names)
+
+
+def _mha_names(manifests) -> list[str]:
+    return [n for n in _plot_7_names(manifests) if PARSE(n).variant == "mha"]
+
+
+def test_plot_7_draws_exactly_the_arm_a_headline_runs_and_branches(campaign):
+    inp = m.make_inputs(campaign)
+    ax = m.plot_training_curves(inp).axes[0]
+    names = _plot_7_names(campaign)
+    by_name = {x["name"]: x for x in campaign}
+    assert names and len(names) == len(set(names))
+    assert sorted((float(x), float(y)) for x, y in plotted_points(ax)) == _plot_7_points(by_name, names)
+
+
+def test_sweep_arm_b_rerun_null_and_ladder_runs_add_no_dot_and_no_line():
+    base = fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}))  # the gate is open: controls pass
+    assert m.make_inputs(base).analysis.comparisons_allowed
+    arm_b = fsec.arm_b_manifests(base, variants=("gqa4", "mqa"), seeds=(1,))  # Arm B needs 100M branches
+    extras = [
+        fake_manifest("mha", budget="100M", branches=[], init_seed=9, val_loss=3.3),  # a rerun, unregistered seed
+        fake_manifest("mha", budget="100M", branches=[], init_seed=1, data_seed=4, val_loss=3.3),  # data order
+        fake_manifest("null", budget="100M", branches=[], init_seed=16, val_loss=3.5),  # a null run, unregistered seed
+        fake_manifest("mha", ladder="mha_L6", init_seed=9, val_loss=3.1),  # a ladder run
+        fake_manifest("mqa", init_seed=1, budget="100M", branches=[], peak_lr=3e-4),  # a learning-rate sweep point
+        *arm_b,
+    ]
+    parsed = [PARSE(x["name"]) for x in extras]
+    assert any(p.arm == config.load_arm(mt.ARM_B)["tag"] for p in parsed)  # Arm B
+    assert any(p.variant == "null" for p in parsed) and any(p.variant.startswith("mha_L") for p in parsed)
+    assert any(p.peak_lr == 3e-4 for p in parsed)  # the sweep point
+    assert sum(p.variant == "mha" and p.tokens == "100M" and p.branch is None for p in parsed) == 2  # reruns
+    names = {x["name"] for x in base}
+    assert all(x["name"] not in names for x in extras)  # every addition is a new run
+
+    extended = fpi.with_eval_fields(extras)
+    base_inputs = m.make_inputs(base)
+    extended_inputs = m.make_inputs([*base, *extended])
+    assert _plot_7_names(extended_inputs.results) == _plot_7_names(base_inputs.results)
+    base_ax = m.plot_training_curves(base_inputs).axes[0]
+    extended_ax = m.plot_training_curves(extended_inputs).axes[0]
+    assert len(plotted_points(base_ax)) == len(_plot_7_names(base)) > 0
+    assert sorted(plotted_points(extended_ax)) == sorted(plotted_points(base_ax))
+    assert _plotted_curve_lines(extended_ax) == _plotted_curve_lines(base_ax)
+
+
+@pytest.mark.parametrize("case", sorted(SHUT_CASES))
+def test_with_the_gate_shut_plot_7_draws_mha_only_and_says_the_variants_are_withheld(case):
+    shut_inputs = m.make_inputs(fpi.with_eval_fields(fake_campaign(**SHUT_CASES[case])))
+    assert shut_inputs.analysis.comparisons_allowed is False
+    figure = m.plot_training_curves(shut_inputs)
+    ax = figure.axes[0]
+    expected_mha = _mha_names(shut_inputs.results)
+    assert expected_mha
+    counts = dots_by_variant(ax)
+    assert counts["mha"] == len(expected_mha) == dot_count(figure)
+    assert {name: c for name, c in counts.items() if name != "mha"} == {n: 0 for n in counts if n != "mha"}
+    mha_colour = to_rgb(m._colour("mha"))
+    curve_colours = {to_rgb(line.get_color()) for line in ax.lines if line.get_alpha() is not None and line.get_alpha() < 1.0}
+    assert curve_colours == {mha_colour}
+    assert _caption_says_withheld(figure)
+
+
+def test_with_the_gate_open_plot_7_draws_the_variants_and_no_withheld_caption(campaign):
+    inp = m.make_inputs(campaign)
+    assert inp.analysis.comparisons_allowed
+    figure = m.plot_training_curves(inp)
+    counts = dots_by_variant(figure.axes[0])
+    assert counts["mqa"] > 0 and counts["mha"] > 0
+    assert not _caption_says_withheld(figure)
+
+
+def test_plot_7_caption_states_the_drawing_rule_in_one_sentence(campaign, blank_figures):
+    rule = (
+        "Drawn: the Arm A runs and branches of the headline variants at each variant's learning rate; "
+        "learning-rate sweep points and other arms are not drawn."
+    )
+    assert any(rule in text for text in all_texts(m.plot_training_curves(m.make_inputs(campaign))))
+    assert any(rule in text for text in all_texts(blank_figures["07_training_curves.png"]))
+
+
+# --- T-45 (G8): the plots refuse bench records that the table refuses ----------------------------
+
+
+def _agreeing_bench() -> list[dict]:
+    """bench/1 documents of every headline variant in both modes, recorded as the synthetic campaign's environment."""
+    return [fsec.bench_document(v, mode) for v in fpi.BENCH_VARIANTS for mode in ("opt", "ref")]
+
+
+def _bench_with(variant: str, mode: str = "opt", **changes) -> list[dict]:
+    """The agreeing documents, with the one of (variant, mode) recorded with `changes`."""
+    first = fsec.bench_document(variant, mode, **changes)
+    return [first] + [d for d in _agreeing_bench() if (d["variant"], d["mode"]) != (variant, mode)]
+
+
+@pytest.mark.parametrize(
+    "bench, reason",
+    [
+        (_bench_with("mha", shared=True), "gpu_shared True"),
+        (_bench_with("mha", environment={**fsec.ENVIRONMENT, "driver": "998.0"}), "driver version"),
+        (_bench_with("mha", environment={**fsec.ENVIRONMENT, "gpu_name": "Tesla P100-PCIE-16GB"}), "GPU name"),
+        (_bench_with("gqa4", backend="math"), "backend"),
+    ],
+    ids=["shared GPU", "other driver", "other GPU", "other backend"],
+)
+def test_make_inputs_refuses_bench_records_the_table_refuses(campaign, bench, reason):
+    with pytest.raises(mt.TableError, match=reason):
+        m.make_inputs(campaign, bench)
+
+
+def test_the_command_line_refuses_a_shared_gpu_bench_record_and_exits_one(tmp_path, campaign, capsys):
+    manifests, bench_dir = tmp_path / "manifests", tmp_path / "bench"
+    for manifest in campaign:
+        mf.write_manifest(manifest, manifests)
+    fsec.write_bench_documents(bench_dir, _bench_with("mqa", shared=True))
+    code = m.main([
+        "--manifests", str(manifests), "--bench", str(bench_dir), "--out", str(tmp_path / "plots"),
+        "--probes", str(tmp_path / "none.json"), "--retrieval", str(tmp_path / "none.json"),
+    ])
+    assert code == 1
+    assert "gpu_shared True" in capsys.readouterr().err
+    assert not (tmp_path / "plots").exists()
+
+
+def test_agreeing_bench_records_still_build_all_ten_plots(tmp_path, campaign):
+    paths = m.build_all(campaign, _agreeing_bench(), fpi.probe_records(), fpi.retrieval_records(), tmp_path)
+    assert [p.name for p in paths] == list(EXPECTED_FILES)
+    for path in paths:
+        assert path.read_bytes()[:8] == PNG_SIGNATURE
+
+
+def test_the_synthetic_bench_records_agree_with_the_synthetic_campaign(campaign):
+    # T-45 (G8): the fixture's records carry the campaign's environment and backend, so the table's
+    # timing-source checks accept them. A disagreement raises TableError here.
+    built = m.make_inputs(campaign, fpi.bench_records())
+    assert len(built.bench) == len(fpi.bench_records()) > 0

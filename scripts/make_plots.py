@@ -163,14 +163,18 @@ def make_inputs(manifests, bench=(), probes=(), retrieval=(), *, prereg: Mapping
 
     With skip_unfinished, unfinished runs are left out by name (as in make_tables); the names
     are kept on the inputs so that the plots that draw manifests can say which were left out.
+    The bench records go through the same refusals as the table's bench documents
+    (make_tables.check_timing_sources): a shared GPU, or another torch, CUDA, driver, GPU or backend.
     """
     prereg = config.load_prereg() if prereg is None else prereg
     results, skipped = mt.select_results(list(manifests), skip_unfinished=skip_unfinished)
     analysis = mt.analyse(results, prereg)
+    bench = _checked_bench(bench)
+    mt.check_timing_sources(results, None, list(bench))
     return PlotInputs(
         results=tuple(results),
         analysis=analysis,
-        bench=_checked_bench(bench),
+        bench=bench,
         probes=_checked_probes(probes),
         retrieval=_checked(
             retrieval,
@@ -798,16 +802,40 @@ def plot_context_gap(inp: PlotInputs) -> Figure:
 # --- Plot 7: training curves ------------------------------------------------------------
 
 
+def _curve_runs(inp: PlotInputs) -> tuple[list[tuple[dict, mf.RunName]], bool]:
+    """The manifests plot 7 draws, and whether any variant's run is withheld (plan §8.1).
+
+    The analysis names them (its `curve_runs`): the Arm A runs and branches of the headline variants
+    at each variant's learning rate. While the gate is shut, a variant's runs are not drawn; MHA's are.
+    """
+    a = inp.analysis
+    names = set(a.curve_runs)
+    chosen: list[tuple[dict, mf.RunName]] = []
+    withheld = False
+    for manifest in inp.results:
+        if manifest["name"] not in names:
+            continue
+        parsed = mf.parse_run_name(manifest["name"])
+        if _withheld(a, parsed.variant):
+            withheld = True
+            continue
+        chosen.append((manifest, parsed))
+    return chosen, withheld
+
+
 def plot_training_curves(inp: PlotInputs) -> Figure:
     prereg, a = inp.prereg, inp.analysis
+    runs, withheld = _curve_runs(inp)
     fig, panels = _figure(
         (9.5, 6.0),
         title="Training curves: validation loss against tokens (plan §10.5, plot 7)",
         handles=_handles(prereg, mt.HEADLINE_VARIANTS, line=True),
         caption=[
             "Faded lines: the val_curve of each run, its evaluations during training. Solid dots: the final "
-            "validation loss of every result, runs and branches, at its token count. Trunk checkpoints are never results "
-            "and are never drawn as dots.",
+            "validation loss of each drawn run and branch, at its token count. Drawn: the Arm A runs and "
+            "branches of the headline variants at each variant's learning rate; learning-rate sweep points "
+            "and other arms are not drawn. Trunk checkpoints are never results and are never drawn as dots.",
+            WITHHELD_CAPTION if withheld else None,
             SWA_CAVEAT,
             _notes_part(a.notes),
             _left_out_part(inp.skipped),
@@ -820,8 +848,7 @@ def plot_training_curves(inp: PlotInputs) -> Figure:
     by_variant: dict[str, tuple[list, list]] = {}
     curves = 0
     skipped = []
-    for manifest in inp.results:
-        parsed = mf.parse_run_name(manifest["name"])
+    for manifest, parsed in runs:
         metrics = manifest["final_metrics"]
         curve = metrics.get("val_curve")
         if curve:
