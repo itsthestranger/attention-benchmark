@@ -104,8 +104,9 @@ def test_the_runbook_has_commands_for_every_script_it_should():
         "scripts.prepare_data", "scripts.train", "scripts.branch", "scripts.select_lr",
         "scripts.make_tables", "scripts.make_plots", "scripts.timing_pass", "scripts.bench",
         "scripts.solve_config", "scripts.graph_diff",
+        "scripts.prune", "scripts.timing_report", "scripts.measure_reproducibility",
     }
-    assert len(COMMANDS) >= 25
+    assert len(COMMANDS) >= 30
 
 
 @pytest.mark.parametrize("command", COMMANDS, ids=[f"{i:02d}-{shlex.split(c)[2]}" for i, c in enumerate(COMMANDS)])
@@ -192,3 +193,28 @@ def test_the_gate_report_rows_the_runbook_names_exist():
     labels = {label for rows in mt.GATE_SECTIONS.values() for label in rows}
     for label in ("seeds per primary", "variants leaving Arm A"):
         assert label in labels and label in RUNBOOK
+
+
+def test_pruning_is_shown_as_a_dry_run_before_it_is_applied():
+    """T-43: the runbook never shows --apply without the dry run of the same command before it."""
+    prune = [c for c in COMMANDS if shlex.split(c)[2] == "scripts.prune"]
+    assert len(prune) >= 2
+    assert "--apply" not in prune[0] and "--apply" in prune[1]
+    assert prune[1].replace(" --apply", "") == prune[0]
+    assert all("--final" not in c for c in prune)
+
+
+def test_one_smoke_loop_reaches_an_in_run_evaluation():
+    """Review S4, M12: the real cadence is 250 steps, which a 100-step smoke run never reaches."""
+    smoke = [c for c in COMMANDS if "/smoke " in c and "--until 100" in c]
+    assert smoke and all("--eval-every-steps 50" in c for c in smoke)
+
+
+def test_the_tables_and_the_plots_get_the_same_declarations():
+    """A flag that changes the analysis must be on both commands or on neither (T-44)."""
+    for flag in ("--l10-cut",):
+        on_tables = any(flag in c for c in COMMANDS if shlex.split(c)[2] == "scripts.make_tables")
+        on_plots = any(flag in c for c in COMMANDS if shlex.split(c)[2] == "scripts.make_plots")
+        assert on_tables == on_plots
+    assert "--l10-cut" in RUNBOOK  # named in the text of the seed-count step
+
