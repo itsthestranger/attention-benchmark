@@ -1011,6 +1011,34 @@ def test_record_reports_the_trainers_skipped_and_taken_steps(monkeypatch):
     assert record["steps_taken"] == 2 and record["skipped_steps"] == 1
 
 
+def test_record_reports_the_trainers_precision(monkeypatch):
+    """The trainer's precision, not a constant: the stub claims fp16, and the held-out
+    counts are stubbed so that no CUDA autocast is opened on this CPU machine."""
+    real_trainer = tp.Trainer
+
+    class Stub(real_trainer):
+        def train(self, until=None):
+            super().train(until)  # trains in fp32 on this CPU, as the real trainer does
+            self.precision = "fp16"  # what the record must report
+
+    def fixed_counts(trainer, spec, **kwargs):
+        return {"n_scored": 8, "n_correct_tokens": 5, "n_sequences": 2, "n_correct_sequences": 1}
+
+    monkeypatch.setattr(tp, "Trainer", Stub)
+    monkeypatch.setattr(tp, "_held_out_counts", fixed_counts)
+    record = run_probe("mha", make_spec("mqar", n_pairs=4), **_tiny_kwargs(steps=2))
+    assert record["precision"] == "fp16"
+    assert record["accuracy"] == 5 / 8 and record["sequence_accuracy"] == 1 / 2
+
+
+def test_record_n_layers_is_the_backbone_depth_when_not_given():
+    """Without --n-layers the probe keeps the backbone's depth (8), and the record says so."""
+    kwargs = _tiny_kwargs(steps=1, sequences_per_step=2, eval_sequences=2)
+    del kwargs["n_layers"]
+    record = run_probe("mha", make_spec("mqar", n_pairs=4), **kwargs)
+    assert record["n_layers"] == 8 and isinstance(record["n_layers"], int)
+
+
 @pytest.mark.parametrize("mode", ["ref", "opt"])
 def test_held_out_counts_use_the_run_mode(monkeypatch, mode):
     modes_seen = []
