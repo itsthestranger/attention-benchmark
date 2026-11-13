@@ -30,6 +30,7 @@ export DATA=/kaggle/input/attention-benchmark-tokens   # the prepared dataset, r
 export OUT=/kaggle/working/out                         # checkpoints, manifests, tables, plots
 export BACKEND=efficient                               # the fused kernel on sm75 (plan §2.3)
 export SHARED=no                                       # yes while a second job uses the same GPU
+export SWEEP_SEED=21                                   # the init seed of every sweep run; no arm uses it (decision 219)
 ```
 
 - A T4 ×2 session runs two independent jobs, one per GPU, each started with `CUDA_VISIBLE_DEVICES=0` or `=1` in front of the command. No DDP (plan §2.2). While two jobs run on one GPU, or when Kaggle co-locates them, set `SHARED=yes`: the manifest records it. Jobs that produce a timing number run alone on the box and refuse a shared GPU.
