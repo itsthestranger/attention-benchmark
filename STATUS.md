@@ -1,6 +1,31 @@
 # STATUS
 
-Last updated: 2026-11-13, end of session 4. Every finding of the second independent review that is the loop's to fix is fixed and merged (T-39 to T-45), and T-21 (probes) is merged. What remains is Phil's: the probe grid, which `RUNBOOK.md` §2.3 waits for, and the decisions listed under "Open questions". The `cpu` tier is green on `main`: 3,622 tests, about five and a half minutes. The fixes for the review have not themselves been seen by a fresh agent.
+Last updated: 2026-11-13, session 5. Phil answered every open question except Kaggle's versions (decisions 215 to 231). The answers are being applied as tasks T-46 to T-53 (`TASKS.md`, M7); nothing below that line of work is built yet unless "Done" lists it. The `cpu` tier is green on `main` at `538a730`: 3,622 tests. The sections below the session-5 table still describe the state at the end of session 4 and are rewritten when T-53 closes.
+
+## Session 5 (2026-11-13): Phil's decisions and what follows from them
+
+| Decision | Answer | Task |
+| --- | --- | --- |
+| 215 | Probe grid: MQAR at 4, 16, 64 pairs, 8 models, 10 seeds (240 runs) decides Gate 1; probes 2 to 5 are an optional second block; a pilot fixes width, steps and rate | T-51 |
+| 216 | The positive control fails when L6 is better than L8 | T-47 |
+| 217 | GPU utilisation is an `nvidia-smi` side log; time-to-loss-X is not built | T-51 |
+| 218 | The timing pass stays at about 8,800 steps, 3 GPU-h | none |
+| 219 | Sweeps run on seed 21, a key of `configs/prereg.yaml` | T-52 |
+| 220 | `configs/commitments.yaml` holds the seed count and the ladder cut | T-47 |
+| 221 | Thresholds 0.6 and 0.05 confirmed | T-52 |
+| 222, 228 | Decisions 41, 42, 53, 86, 177, 178, 184, 185 and every listed reading confirmed as implemented | T-52 (the bucket comment) |
+| 223 | A ladder slope that is not positive gives 8 seeds, no multipliers | T-47 |
+| 224 | Three shared-rate seeds at 100M for an Arm A variant on its own rate; tuned minus shared reported | T-50, T-51 |
+| 225 | Benchmark: three repetitions, median and spread | T-49 |
+| 226 | A failed SWA timing check marks SWA and keeps the pass | T-48 |
+| 227 | Smoke runs at 3e-4 and 4.8e-3 | T-51 |
+| 229 | The rule in prose in `README.md`, amendments in the plan, few keys in `prereg.yaml` | T-52 |
+| 230 | Arm C cut; Phase 6 deferred to its own build | T-51 |
+| 231 | Coverage test of the multiplier interval | T-52 |
+
+Still open: Kaggle's torch, Python and CUDA versions (`RUNBOOK.md` §1.5). Review findings M4, M8, M9 and F11 stay listed, not fixed.
+
+How session 5 is run: the task flow of `CLAUDE.md` (a task branch and a pull request each). T-52 changes frozen files and waits for Phil's approval on GitHub.
 
 ## Done
 
@@ -49,7 +74,7 @@ Last updated: 2026-11-13, end of session 4. Every finding of the second independ
 - T-45 plot 7, the plots' timing refusals, the generated hardware line (#48).
 - T-42 `timing.md` and `inference.md` (#49).
 - T-41 the bucketed loss at every validation point and peak memory (#50).
-- T-44 runbook corrections, `make_plots --l10-cut`, CODEOWNERS (this pull request).
+- T-44 runbook corrections, `make_plots --l10-cut`, CODEOWNERS (#51).
 
 ## In progress
 
