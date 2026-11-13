@@ -19,6 +19,7 @@ import pytest
 
 from scripts import _run_common as rc
 from scripts import prune
+from src import config
 from src.training import branch as br
 from src.training import checkpoint as ck
 from src.utils import manifest as mf
@@ -345,3 +346,112 @@ def test_an_unknown_mode_is_refused_with_status_2(trunk_only, tmp_path, capsys):
     out = _copy(trunk_only, tmp_path)
     assert prune.main(["--out", str(out), "--mode", "sgd"]) == 2
     assert "refused" in capsys.readouterr().err
+
+
+# --- Review gaps: unfinished branches, branch ownership, the final fallback, extra trunk-step files ---
+
+
+@pytest.fixture(scope="module")
+def trunk_with_stopped_branch(trunk_only, specs, synthetic, tmp_path_factory):
+    """A completed trunk whose 24M branch was stopped at step 22: regular checkpoints at 20 and 22 remain."""
+    out = tmp_path_factory.mktemp("prune_stopped_branch")
+    shutil.copytree(trunk_only, out, dirs_exist_ok=True)
+    assert run_branch(specs.trunk, out, synthetic.root, extra=["--until", "22", "--checkpoint-every-steps", "2"]) == 0
+    return out
+
+
+def _kept_reason(p: prune.Plan, path: Path) -> str:
+    return next(k.reason for k in p.kept if k.path == path)
+
+
+@pytest.mark.parametrize("final", [False, True])
+def test_an_unfinished_branch_loses_nothing_in_its_own_directory(
+    trunk_with_stopped_branch, trunk_resolved, tmp_path, final
+):
+    out = _copy(trunk_with_stopped_branch, tmp_path)
+    trunk, branch = _dir(out, trunk_resolved), _dir(out, _branch_resolved(trunk_resolved))
+    assert _files(out) == {
+        f"{trunk}/step00000024.pt", f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt",
+        f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
+        f"{branch}/step00000020.pt", f"{branch}/step00000022.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+    }
+    flags = ["--final"] if final else []
+    assert prune.main(["--out", str(out), "--apply", *flags]) == 0
+    expected = {
+        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
+        f"{branch}/step00000020.pt", f"{branch}/step00000022.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+    }
+    if final:
+        expected.discard(f"{trunk}/step00000032.pt")
+    # The trunk's non-final step 24 goes; nothing of the unfinished branch does, final or not.
+    assert _files(out) == expected
+
+
+def test_a_branch_manifest_with_another_config_hash_does_not_authorise_its_branch_point(full, trunk_resolved, tmp_path):
+    out = _copy(full, tmp_path)
+    name = mf.run_name(trunk_resolved, SHORT_LABEL)
+
+    def other_config(doc):
+        # A value outside the run's name, so the name still matches; the hash is recomputed so the file stays valid.
+        doc["resolved"]["model"]["d_ff"] += 1
+        doc["config_hash"] = config.config_hash(doc["resolved"])
+
+    _rewrite_manifest(out, name, other_config)
+    branch_manifest = mf.read_manifest(out / "manifests/opt" / f"{name}.json")  # still valid
+    assert branch_manifest["config_hash"] != config.config_hash(trunk_resolved)
+
+    trunk, branch = _dir(out, trunk_resolved), _dir(out, _branch_resolved(trunk_resolved))
+    p = prune.plan(out, "opt")
+    branch_point = out / "checkpoints/opt" / trunk.split("/")[-1] / "trunk-step00000019.pt"
+    assert "does not belong to this run" in _kept_reason(p, branch_point)
+    assert prune.main(["--out", str(out), "--apply"]) == 0
+    assert _files(out) == {
+        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
+        f"{branch}/step00000022.pt", f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+    }
+
+
+def test_a_branch_manifest_naming_another_parent_does_not_authorise_its_branch_point(full, trunk_resolved):
+    """A unit check of the parent-name condition on a hand-built manifest.
+
+    read_manifest cannot produce this case: branch.parent_run must equal the name of resolved, and
+    config_hash must equal the hash of resolved (manifest.py, validate_manifest), so a valid branch
+    manifest with this parent's hash always names this parent. The condition is checked directly.
+    """
+    name = mf.run_name(trunk_resolved, SHORT_LABEL)
+    doc = json.loads((full / "manifests/opt" / f"{name}.json").read_text(encoding="utf-8"))
+    doc["branch"]["parent_run"] = "some-other-parent"
+    manifests = {f"{name}.json": doc}
+    reason = prune._branch_blocker(manifests, {}, trunk_resolved, SHORT_LABEL)
+    assert reason is not None and "does not belong to this run" in reason
+    assert prune._branch_blocker({f"{name}.json": json.loads((full / 'manifests/opt' / f'{name}.json').read_text())},
+                                 {}, trunk_resolved, SHORT_LABEL) is None
+
+
+def test_a_completed_run_without_its_final_checkpoint_keeps_the_newest_regular_one(trunk_only, trunk_resolved, tmp_path):
+    out = _copy(trunk_only, tmp_path)
+    trunk = _dir(out, trunk_resolved)
+    directory = out / "checkpoints/opt" / trunk.split("/")[-1]
+    (directory / "step00000032.pt").unlink()  # the final checkpoint is gone
+    (directory / "step00000016.pt").write_bytes(b"older regular checkpoint (stub: only names matter here)")
+    assert prune.main(["--out", str(out), "--apply"]) == 0
+    # The older regular checkpoint goes; the newest, step 24, is kept as the fallback.
+    assert _files(out) == {
+        f"{trunk}/step00000024.pt", f"{trunk}/trunk-step00000019.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
+    }
+
+
+def test_a_trunk_step_file_that_is_not_a_branch_point_of_the_run_is_left_alone(full, trunk_resolved, tmp_path):
+    out = _copy(full, tmp_path)
+    trunk, branch = _dir(out, trunk_resolved), _dir(out, _branch_resolved(trunk_resolved))
+    directory = out / "checkpoints/opt" / trunk.split("/")[-1]
+    extra = directory / "trunk-step00000010.pt"  # step 10 is none of this run's branch steps
+    shutil.copy(directory / "trunk-step00000019.pt", extra)
+
+    p = prune.plan(out, "opt")
+    assert "not a branch point of this run" in _kept_reason(p, extra)
+    assert prune.main(["--out", str(out), "--apply"]) == 0
+    assert _files(out) == {
+        f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000010.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
+        f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}",
+    }
