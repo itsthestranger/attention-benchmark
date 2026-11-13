@@ -51,19 +51,27 @@ MS_TOKEN_DECIMALS = 3
 KV_DECIMALS = 1
 KV_RATIO_DECIMALS = 3
 
-SPREAD_LIMIT = 3  # plan §8.5, percent: printed in a header and a caption, never judged here
+PREDICTION_PCT = 3  # plan §8.5: MHA, GQA-4, GQA-2 and MQA within ±3% of each other; printed, never judged here
+PREDICTED_VARIANTS = ("gqa4", "gqa2", "mqa")  # the variants of that prediction besides MHA
+PREDICTION_QUOTE = "Prediction: MHA, GQA-4, GQA-2 and MQA within ±3% of each other."  # plan §8.5, verbatim
 KV_LIMIT = 5  # plan §10.4, percent: printed in a header and a caption, never judged here
 MIB = 2**20
 MAX_BATCH_CONTEXT = "8k"  # plan §8.6: the maximum batch is taken at a cache of 8,192
 
 TIMING_TITLE = "# Training timing (plan §8.5)"
 INFERENCE_TITLE = "# Inference benchmark (plan §8.6, §10.4)"
+SPREAD_COLUMN = "spread over repetitions, % of mean"
+_PREDICTED = f"{', '.join(PREDICTED_VARIANTS[:-1])} and {PREDICTED_VARIANTS[-1]}"
+RATIO_COLUMN = (
+    f"ratio to MHA opt (plan §8.5 predicts {1 - PREDICTION_PCT / 100:.2f} to "
+    f"{1 + PREDICTION_PCT / 100:.2f} for {_PREDICTED})"
+)
 TIMING_COLUMNS = (
     "track",
     "ms/step, mean",
     "ms/step, each repetition",
-    f"spread, % of mean (plan §8.5: {SPREAD_LIMIT}%)",
-    "ratio to MHA opt",
+    SPREAD_COLUMN,
+    RATIO_COLUMN,
     "attention share, %",
     "peak allocated, MiB",
 )
@@ -74,8 +82,9 @@ TIMING_CAPTIONS = (
     "no fusion (plan §2.3 item 3, §4.4).",
     "MLA's and SWA's kernels are newer or hand-written, so their gap to MHA is partly implementation, "
     "not architecture (plan §13.3).",
-    "Spread is (max - min) / mean over the repetitions, in percent. Plan §8.5 predicts that MHA, GQA-4, "
-    "GQA-2 and MQA differ from each other by ±3% or less; the 3% is printed for that comparison.",
+    "Spread is (max - min) / mean over the track's own repetitions, in percent.",
+    f'Plan §8.5 reads: "{PREDICTION_QUOTE}" That prediction is read in the ratio to MHA opt column, '
+    f"where {_PREDICTED} are shown against MHA, not in the spread column.",
     "Ratio is each track's ms/step over MHA's opt track. Attention share is the measured attention time "
     "(forward and backward) over the whole step's time, in percent (plan §8.5).",
     "Peak memory is torch.cuda.max_memory_allocated; the timing document records no reserved figure.",
@@ -326,8 +335,8 @@ def timing_rows(doc: Mapping) -> list[dict]:
             "track": key,
             "ms/step, mean": _fmt(ms, MS_DECIMALS),
             "ms/step, each repetition": ", ".join(_fmt(v, MS_DECIMALS) for v in reps),
-            TIMING_COLUMNS[3]: _fmt(spread, SPREAD_DECIMALS),
-            "ratio to MHA opt": BLANK if mha_ms is None else _fmt(ms / mha_ms, RATIO_DECIMALS),
+            SPREAD_COLUMN: _fmt(spread, SPREAD_DECIMALS),
+            RATIO_COLUMN: BLANK if mha_ms is None else _fmt(ms / mha_ms, RATIO_DECIMALS),
             "attention share, %": _fmt(float(entry["attention_share"]) * 100.0, SHARE_DECIMALS),
             "peak allocated, MiB": _mib(entry["peak_bytes"]),
         })
