@@ -11,5 +11,12 @@
 # file, so the whole file is covered.
 /README.md              @itsthestranger
 
+# The files that decide what CI runs and what it skips (review S4, M11). Not frozen by the plan;
+# listed so that a change to the test tiers is seen.
+/.github/workflows/ci.yml  @itsthestranger
+/tests/conftest.py         @itsthestranger
+/tests/hardware.py         @itsthestranger
+/pyproject.toml            @itsthestranger
+
 # This file, so the protection cannot be removed without the same approval.
 /.github/CODEOWNERS     @itsthestranger

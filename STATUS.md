@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-13, during session 4. T-21 (probes) and T-38 (probe report) are merged. A second independent review found two defects that block the handover and eight to fix before the first reported GPU hour. The two blockers (H1, H2) and G1, G2 and G6 are fixed and merged (T-39, T-40); T-41, T-43 and T-45 are with workers; T-42 and T-44 are not started. The `cpu` tier is green on `main`: 3,496 tests, about five minutes.
+Last updated: 2026-11-13, end of session 4. Every finding of the second independent review that is the loop's to fix is fixed and merged (T-39 to T-45), and T-21 (probes) is merged. What remains is Phil's: the probe grid, which `RUNBOOK.md` §2.3 waits for, and the decisions listed under "Open questions". The `cpu` tier is green on `main`: 3,622 tests, about five and a half minutes. The fixes for the review have not themselves been seen by a fresh agent.
 
 ## Done
 
@@ -45,27 +45,29 @@ Last updated: 2026-11-13, during session 4. T-21 (probes) and T-38 (probe report
 - T-21 probe generators and probe training script (#42).
 - T-39 analysis refusals: recipe and backbone, the complete ladder, recorded divergences (#44).
 - T-40 checkpoint and resume: the stop checkpoint, branch points, the environment (#45).
+- T-43 `scripts/prune.py` (#47).
+- T-45 plot 7, the plots' timing refusals, the generated hardware line (#48).
+- T-42 `timing.md` and `inference.md` (#49).
+- T-41 the bucketed loss at every validation point and peak memory (#50).
+- T-44 runbook corrections, `make_plots --l10-cut`, CODEOWNERS (this pull request).
 
 ## In progress
 
-- T-45 (plots and report text), branch `task/T-45-plots-and-text`: with a worker.
-- T-43 (pruning), branch `task/T-43-prune`: with a worker.
-- T-41 (per-run records), branch `task/T-41-run-records`: with a worker.
-- T-42 (timing and inference tables) and T-44 (runbook): not started.
-- `RUNBOOK.md` §2.3 (probe commands): waits for the probe grid from Phil.
+- Nothing is running. Every worker has stopped and every branch is pushed.
+- `RUNBOOK.md` §2.3 (probe commands): waits for the probe grid from Phil. It is the one part of the handover that is not written.
 
 ## Handover checklist (plan §17.4)
 
 | # | Item | State |
 | --- | --- | --- |
-| 1 | Every task merged, `cpu` tier green in CI | **Not met**: T-41 to T-45 are open. T-21, T-39 and T-40 are merged. |
-| 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met for everything merged; listed below. |
-| 3 | Headline table and all ten plots generate from fake manifests and blank | Met, with the defects of the review: plot 7 draws runs the analysis does not read (G3), and the timing and inference tables do not exist (G5). |
-| 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | **Not met**: §2.3 has no commands (probe grid open), one statement about resuming is false (G1), the final commands refuse after a recorded divergence (G6), and there is no pruning step (G7). |
-| 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 208. The review found deviations that were not listed; they are below now. |
-| 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Two reviews done (sessions 3 and 4). The second one's findings are listed below with their status. |
+| 1 | Every task merged, `cpu` tier green in CI | Met except T-31, the handover itself, which closes when item 4 does. |
+| 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met; listed below (105 collected). |
+| 3 | Headline table and all ten plots generate from fake manifests and blank | Met. `probes.md`, `timing.md` and `inference.md` build blank and from synthetic records too. |
+| 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | **Not met in one place**: §2.3 (probes, Gate 1) has no commands, because the plan does not fix the probe grid. Everything else is written, and every command parses with its script's own parser. |
+| 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 214. |
+| 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Two reviews done (sessions 3 and 4); the second one's findings are below with their status. The fixes for it (T-39 to T-45) were reviewed by the orchestrator with deliberate breaks, not by a fresh agent. The session-3 fixes had the same status, and the second review found defects in them, so a short fresh pass over T-39 to T-45 is recommended before the first GPU hour. |
 
-The harness is **not** ready for the GPU weeks. Week 1's MHA runs are final results that are never rerun, so the remaining findings G3 to G5, G7 and G8 come first.
+The harness is ready for Phil's verification step (`RUNBOOK.md` §1) and for week 1 except the probes. It is not "done" by the checklist until §2.3 is written.
 
 ## Session-4 review (2026-11-13)
 
@@ -77,25 +79,25 @@ Phil asked for a second review of everything built so far. A fresh agent on the 
 | H2 | The seed-count rule is computed and printed from an incomplete ladder; in synthetic campaigns near the threshold the decision differed from the complete ladder's. | **Fixed in T-39** (#44): no decision until MHA, L6 and L10 have their registered seeds; `--l10-cut` declares the two-point ladder. **For Phil**: where that declaration should live. |
 | G1 | A stop at `--until` leaves no checkpoint to resume from, so an MHA trunk re-runs up to ten minutes of steps and overwrites the branch-point checkpoint its 100M branch used. `RUNBOOK.md` says it resumes from step 1,221. | **Fixed in T-40** (#45): a stop leaves a checkpoint, a trunk resumes from its newest state including the branch point, and a branch point is never overwritten. The runbook's statement is now true. |
 | G2 | A manifest records only the last session's environment and GPU, and a resume after an image change is not refused. | **Fixed in T-40** (#45): the environment is in every checkpoint, and a resume or branch under another torch, CUDA, driver or GPU is refused. `gpu_shared` is still the last session's value. |
-| G3 | Plot 7 draws every manifest in the directory in the variant's colour, sweep points at rejected learning rates included, and shows variant losses while the gate is closed. The session-3 note that the runbook's order prevents this was wrong: the variant sweeps are such runs. | Open: T-45. |
-| G4 | Peak memory, GPU utilisation and the context-bucketed loss at every evaluation (plan §10.2) are not recorded for a training run. | Open: T-41. GPU utilisation and time-to-loss-X need a definition from Phil. |
-| G5 | Attention's measured share, peak memory, the `ref` track, the spread, prefill, maximum batch at 8k and measured KV bytes are written to JSON and read by nothing. | Open: T-42. |
+| G3 | Plot 7 draws every manifest in the directory in the variant's colour, sweep points at rejected learning rates included, and shows variant losses while the gate is closed. The session-3 note that the runbook's order prevents this was wrong: the variant sweeps are such runs. | **Fixed in T-45** (#48): plot 7 draws only the Arm A runs and branches the analysis names, and MHA alone while the gate is closed. |
+| G4 | Peak memory, GPU utilisation and the context-bucketed loss at every evaluation (plan §10.2) are not recorded for a training run. | **Fixed in part, T-41** (#50): peak memory and the bucketed loss at every validation point are recorded. **For Phil**: GPU utilisation and time-to-loss-X are not; the plan does not define them. |
+| G5 | Attention's measured share, peak memory, the `ref` track, the spread, prefill, maximum batch at 8k and measured KV bytes are written to JSON and read by nothing. | **Fixed in T-42** (#49): `scripts/timing_report.py` writes `timing.md` and `inference.md`, with blank forms. |
 | G6 | One recorded diverged run makes `make_tables` and `make_plots` refuse without `--skip-unfinished`, which the runbook's final step forbids. | **Fixed in T-39** (#44): a diverged run is left out and named in a note. |
-| G7 | Checkpoints reach about 20 GB in week 1 and nothing prunes them. | Open: T-43, T-44. |
-| G8 | The plots skip the timing-source refusals the tables apply. | Open: T-45. |
-| M1 | The hardware disclosure in `headline.md` is fixed text, printed whatever the manifests say. | Open: T-45. |
+| G7 | Checkpoints reach about 20 GB in week 1 and nothing prunes them. | **Fixed in T-43** (#47) and the runbook: `scripts/prune.py`, a dry run unless `--apply` is given. |
+| G8 | The plots skip the timing-source refusals the tables apply. | **Fixed in T-45** (#48). |
+| M1 | The hardware disclosure in `headline.md` is fixed text, printed whatever the manifests say. | **Fixed in T-45** (#48): the line is generated from the manifests. |
 | M2 | A non-finite loss on the last training step blocks the manifest for good. | **Fixed in T-40** (#45). |
 | M3 | The positive control is two-sided: L6 significantly better than L8 would read as detected. | **For Phil.** |
-| M4 | `bench.py --with-ref` repeats the `opt` KV check and the maximum-batch search for each `ref` document and labels the result `ref`. | Listed; looked at in T-42. |
-| M5 | The timing pass compares no dataset hash while `configs/data.yaml` is unset, and with `--with-ref` and the share runs it is about 8,800 steps against the plan's 4,620. | Listed: T-44 states the budget; the step count is **for Phil**. |
-| M6 | A resume is refused when the number of visible CUDA devices changes; the shim does not set `CUDA_VISIBLE_DEVICES`. | Listed: T-44. |
-| M7 | The shim can only call `scripts.train`, and its example config collides by name with the runbook's MHA runs. | Listed: T-44. |
+| M4 | `bench.py --with-ref` repeats the `opt` KV check and the maximum-batch search for each `ref` document and labels the result `ref`. | **Listed, not fixed.** The tables print what the documents hold; the repeated search costs benchmark time only. |
+| M5 | The timing pass compares no dataset hash while `configs/data.yaml` is unset, and with `--with-ref` and the share runs it is about 8,800 steps against the plan's 4,620. | **Stated in the runbook** (§3.1): the pass runs after the data hashes are set and takes about twice the plan's 1.5 GPU-h. Whether to cut it is **for Phil**. |
+| M6 | A resume is refused when the number of visible CUDA devices changes; the shim does not set `CUDA_VISIBLE_DEVICES`. | **Stated in the runbook** (§0): start a job again with the same `CUDA_VISIBLE_DEVICES`. |
+| M7 | The shim can only call `scripts.train`, and its example config collides by name with the runbook's MHA runs. | **Fixed in T-44**: the example run spec carries both branch points. The shim still calls `scripts.train` only; the runbook says how to run another command with it. |
 | M8 | `lr_source` and `timing_pass_id` are free text, never checked against an existing run or file. | Listed, not fixed. |
 | M9 | A FlexAttention SWA run would record the backend `efficient`, a kernel it never called. | Listed; to settle on the T4. |
-| M10 | `gates.md` prints two "slope at 300M" values that differ once MHA has 8 seeds, unexplained. | Open: T-45. |
-| M11 | CODEOWNERS does not cover the files that decide what CI runs: `ci.yml`, `tests/conftest.py`, `tests/hardware.py`, `pyproject.toml`. | Open: T-44. |
-| M12 | No smoke run reaches an evaluation, which runs at batch 64 and not at the micro-batch. | Open: T-44. |
-| M13 | The `opt` reproducibility measurement is built and then dropped; the runbook has no step for `scripts/measure_reproducibility.py`. The session-3 statement that the tests "measure and record" was wrong. | Open: T-44. |
+| M10 | `gates.md` prints two "slope at 300M" values that differ once MHA has 8 seeds, unexplained. | **Fixed in T-45** (#48): one sentence in `gates.md`. |
+| M11 | CODEOWNERS does not cover the files that decide what CI runs: `ci.yml`, `tests/conftest.py`, `tests/hardware.py`, `pyproject.toml`. | **Fixed in T-44**, for Phil to confirm: CODEOWNERS lists the four files. |
+| M12 | No smoke run reaches an evaluation, which runs at batch 64 and not at the micro-batch. | **Fixed in T-44**: each smoke run evaluates twice (`--eval-every-steps 50`). |
+| M13 | The `opt` reproducibility measurement is built and then dropped; the runbook has no step for `scripts/measure_reproducibility.py`. The session-3 statement that the tests "measure and record" was wrong. | **Fixed in T-44**: `scripts/measure_reproducibility.py` is a runbook step (§2.2) and writes the record. The `gpu` and `t4` tests still keep nothing. |
 | M14 | Six breaks no test caught: B10 (Arm B outside the step-parity scope), B22 (`gpu_shared` always false), B36 (reruns not limited to registered seeds), B45 (`skipped_in_first_100` counts step 100), B46 (seed-count threshold `>=`), B47 (in-run validation ignores `eval_curve_windows`). | **Fixed**: each has a test now, checked against its break (#44, #45). |
 
 What the review did not cover, by its own account: anything on a GPU; `scripts/graph_diff.py` and `src/utils/flops.py` beyond running them; `src/eval/retrieval.py`; `src/attention/recurrence.py`; most test files line by line; plots 3, 9 and 10 visually; T-21 and T-38; GitHub (CI, branch protection).
@@ -204,13 +206,12 @@ These do not block the build. Each is implemented as described and can be change
 - fp32 `ref`/`opt` agreement tolerance is 1e-5, not 1e-6 (plan §5). Approved by Phil on 2026-11-12. Reason: 1e-6 is at the fp32 rounding floor; correct implementations measured up to 1.8e-6.
 - The agreement tests also run in float64 at 1e-12, an addition to "CPU tests use fp32". Approved by Phil on 2026-11-12.
 - The seed-count rule and the reported detectable-effect bound use the exact power of Welch's test, 2.63 × σ_init at 5 seeds and 1.83 at 8, not the 2.5 and 1.8 of the plan's §1.3 table (decision 79). Decided by Phil on 2026-11-12. Reason: the table's Welch rows are pooled-variance values, at which Welch's test has 76% power instead of 80%. The plan's table itself is unchanged; correcting it needs a pull request to the frozen plan.
-- Plan §10.2 asks for peak allocated and reserved memory, GPU utilisation and the context-bucketed loss at every evaluation per run. None is recorded for a training run; buckets exist at the final step only (review G4, task T-41). Found by the session-4 review; it was not listed before.
-- Plan §2.3, §8.5, §8.6 and §10.4 ask for timing and inference tables. Only `ms_per_step` of the `opt` track and one decode point reach a table (review G5, task T-42).
-- Plan §5 asks that the `opt` reproducibility tolerance be measured once and recorded. The tests measure it and keep nothing (review M13, task T-44).
+- Plan §10.2 asks for GPU utilisation and time-to-loss-X per run. Neither is recorded, because the plan does not define them (review G4). Peak memory and the bucketed loss at every validation point are recorded since T-41.
+- Plan §5 asks that the `opt` reproducibility tolerance be measured once and recorded. The record is a runbook step (`scripts/measure_reproducibility.py`, §2.2); the `gpu` and `t4` tests measure it and keep nothing, and apply no threshold (decision 99).
 
 ## Decisions
 
-All decisions are in `docs/decisions.md` (rows 1–208). Rows marked "for Phil" are readings of the plan or numbers the loop chose.
+All decisions are in `docs/decisions.md` (rows 1–214). Rows marked "for Phil" are readings of the plan or numbers the loop chose.
 
 Answered by Phil in session 2: exact Welch power for the seed-count rule and the bound (decision 79); the √2 × σ_init worst case for the paired test in the seed-count rule (decision 80). Approved by Phil in session 1: the fp32 agreement tolerance of 1e-5, the float64 checks, and the Monte-Carlo allowance of the family-wise error test (0.05 plus three standard errors, decision 7).
 
@@ -266,11 +267,11 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. Review and merge T-45, T-43 and T-41 as their workers hand back (read the diff, deliberate breaks in a detached worktree, then the pull request).
-2. T-42: `timing.md` and `inference.md` from the timing-pass and bench files, with blank forms. Not briefed yet; read `scripts/timing_pass.py` and `scripts/bench.py` for the document shapes first.
-3. T-44 last: the runbook corrections (pruning step, `--l10-cut`, an evaluation in a smoke run, the reproducibility record, the timing-pass budget, the shim), the CODEOWNERS additions (M11), and §2.3 once Phil has fixed the probe grid. Remove the "do not start" notice from `RUNBOOK.md` only when T-41 to T-45 are merged.
+1. Phil fixes the probe grid (first open question). Then: a `configs/probes.yaml` or plain loops in `RUNBOOK.md` §2.3 with `scripts/train_probe.py`, `scripts/probe_report.py` and plot 9, a test in `tests/test_runbook.py`, and T-31 closes.
+2. A fresh agent reviews T-39 to T-45 (the diffs of pull requests #44, #45 and #47 to #50 and this one) against `docs/review_s4.md`, as the second review did for the first one's fixes.
+3. Pin torch to Kaggle's version when Phil reports it, and apply his answers on the open questions and the readings.
 
-Remaining: T-41, T-42, T-43, T-44, T-45, then T-31.
+Remaining: T-31, which waits for §2.3.
 
 ## Notes for the next session
 
@@ -280,6 +281,9 @@ How the loop has been run:
 - A deliberate break that passes is not always a gap: check whether the change is equivalent (session 4 had two) before sending it back.
 - The task-flow of `CLAUDE.md` (task branches, a pull request each, squash-merge on green CI) was followed in session 4 although the session was started with a single designated branch.
 - The independent review ran on the full model for about 40 minutes beside two workers without slowing them much, as long as every pytest ran with `OMP_NUM_THREADS=1`.
+- Agents share the session's scratch directory. A worker overwrote the orchestrator's break runner there; it now lives in its own folder, and briefs name a scratch directory per task.
+- Two tasks that pass alone can fail together: T-41 added a file to every run directory and T-43's tests assert exact file sets. Merge `main` into a branch and run the full tier before its pull request, and read the whole summary line, not its tail.
+- A worker that stops at a conflict with an existing test is doing the right thing. In session 4 this happened three times (a pinned key set, a fixture without an environment, an old signature); each needed one approved edit outside the task's files.
 
 - **Run every pytest with `OMP_NUM_THREADS=1`.** On this container torch with four threads is far slower on tiny models (a worker measured a factor of about a thousand on a small matmul). With one thread the full `cpu` tier takes about four minutes.
 - Deliberate breaks are run in a separate detached worktree of the branch under review, never in the worker's own worktree, so that a worker's test run and the review cannot disturb each other.

@@ -158,17 +158,19 @@ def _checked_probes(records) -> tuple:
 
 
 def make_inputs(manifests, bench=(), probes=(), retrieval=(), *, prereg: Mapping | None = None,
-                skip_unfinished: bool = False) -> PlotInputs:
+                skip_unfinished: bool = False, l10_cut: bool = False) -> PlotInputs:
     """Select, analyse and check the inputs. TableError from the table propagates.
 
     With skip_unfinished, unfinished runs are left out by name (as in make_tables); the names
     are kept on the inputs so that the plots that draw manifests can say which were left out.
     The bench records go through the same refusals as the table's bench documents
     (make_tables.check_timing_sources): a shared GPU, or another torch, CUDA, driver, GPU or backend.
+    `l10_cut` is the tables' declaration that the ladder is cut to L6 and L8 (plan §12.2 item 4): the
+    plots must be built with the same declaration as the tables, or they show no seed count.
     """
     prereg = config.load_prereg() if prereg is None else prereg
     results, skipped = mt.select_results(list(manifests), skip_unfinished=skip_unfinished)
-    analysis = mt.analyse(results, prereg)
+    analysis = mt.analyse(results, prereg, l10_cut=l10_cut)
     bench = _checked_bench(bench)
     mt.check_timing_sources(results, None, list(bench))
     return PlotInputs(
@@ -1104,12 +1106,13 @@ PLOTS: tuple[tuple[str, Callable[[PlotInputs], Figure]], ...] = (
 )
 
 
-def build_all(manifests, bench, probes, retrieval, out_dir, *, skip_unfinished: bool = False) -> list[Path]:
+def build_all(manifests, bench, probes, retrieval, out_dir, *, skip_unfinished: bool = False,
+              l10_cut: bool = False) -> list[Path]:
     """Write the ten PNG files, in plan order, into `out_dir`. Returns their paths.
 
     Unfinished runs are refused unless skip_unfinished leaves them out, by name (plan §10.6).
     """
-    inputs = make_inputs(manifests, bench, probes, retrieval, skip_unfinished=skip_unfinished)
+    inputs = make_inputs(manifests, bench, probes, retrieval, skip_unfinished=skip_unfinished, l10_cut=l10_cut)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     paths = []
@@ -1147,6 +1150,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--skip-unfinished", action="store_true", help="leave unfinished runs out, by name"
     )
+    parser.add_argument(
+        "--l10-cut", action="store_true",
+        help="the ladder is cut to L6 and L8 (plan §12.2 item 4); give it whenever make_tables gets it",
+    )
     args = parser.parse_args(argv)
     try:
         if args.blank:
@@ -1159,6 +1166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 load_records(args.retrieval),
                 args.out,
                 skip_unfinished=args.skip_unfinished,
+                l10_cut=args.l10_cut,
             )
     except (mt.TableError, mf.ManifestError, PlotError, json.JSONDecodeError) as exc:
         print(exc, file=sys.stderr)

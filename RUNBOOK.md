@@ -10,14 +10,15 @@ Read plan §11 and §13 before the first run. Three rules that no command enforc
 
 ## Open items that block parts of this runbook
 
-**Do not start the GPU weeks from this version.** The review of 2026-11-13 (`docs/review_s4.md`) found defects that affect week 1's runs, which are final results: a trunk stopped with `--until` does not resume from its branch point as §3 says, a resume after an image change is not refused, and the final commands refuse once a diverged run is on record. They are tasks T-39 to T-44 in `TASKS.md`; this notice goes when they are merged.
-
 | Item | Blocks | Who |
 | --- | --- | --- |
 | The sweep seed (`SWEEP_SEED`). Recommended: one seed that no arm uses, for example 21. A sweep on seed 1, 2 or 3 collides with a reproducibility rerun by name and config hash. | Every LR sweep (§2.4, §2.7) | Phil |
 | The probe grid: which probes at which sizes, for which models, with how many seeds, and one width, step count and learning rate per point (`STATUS.md`, open questions). The scripts exist: `scripts/train_probe.py`, `scripts/probe_report.py`. | §2.3, Gate 1 | Phil |
 | The Kaggle image's torch, Python and CUDA versions. | Pinning (§1.5) | Phil |
 | Two proposed thresholds in `configs/prereg.yaml` (`paired_if_s_rep_ratio_below: 0.6`, `max_undetectable_param_fraction: 0.05`). | Pre-registration (§1.7) | Phil |
+| Whether a positive control detected in the wrong direction (L6 better than L8) fails it. The test is two-sided and would print `detected`. | Reading §3.4 | Phil |
+| What "GPU utilization" and "time-to-loss-X" of plan §10.2 mean. Neither is recorded; they cannot be backfilled after the runs. | Nothing runs differently; decide before week 1 if you want them | Phil |
+| Where a cut of L10 is declared: the flag `--l10-cut` on the table and plot commands (§3.4), or a key in the frozen `configs/prereg.yaml`. | Only if L10 is cut | Phil |
 | Readings of the plan listed in `STATUS.md` (sweep rule order, the comparison gate, Arm B's learning rate, and others). | Nothing; confirm or change before the freeze | Phil |
 
 ## 0. Conventions
@@ -32,12 +33,25 @@ export SHARED=no                                       # yes while a second job 
 ```
 
 - A T4 ×2 session runs two independent jobs, one per GPU, each started with `CUDA_VISIBLE_DEVICES=0` or `=1` in front of the command. No DDP (plan §2.2). While two jobs run on one GPU, or when Kaggle co-locates them, set `SHARED=yes`: the manifest records it. Jobs that produce a timing number run alone on the box and refuse a shared GPU.
-- Every `train` and `branch` command is idempotent: run the identical command again after a session dies and it resumes. A finished run exits 0 and changes nothing. A run recorded as diverged exits 3 and is not retried until you delete its manifest.
-- Exit status 2 is a refusal (a hash mismatch, an incomplete recipe, a checkpoint of another mode). Read the message; do not work around it.
+- Every `train` and `branch` command is idempotent: run the identical command again after a session dies and it resumes from the newest state the run has. A run stopped with `--until` leaves a checkpoint at that step, so nothing is run twice. A finished run exits 0 and changes nothing. A run recorded as diverged exits 3 and is not retried until you delete its manifest.
+- Start a job again with the same `CUDA_VISIBLE_DEVICES` setting it started with: a checkpoint holds the random state of every visible GPU, and a resume under another number of visible devices is refused.
+- Exit status 2 is a refusal (a hash mismatch, an incomplete recipe, a checkpoint of another mode, a checkpoint written under another torch, CUDA, driver or GPU). Read the message; do not work around it. A run cannot continue after the image changed: pin the environment (§1.5) before the first run.
 - Budgets are in steps: 100M = 1,526, 200M = 3,052, 300M = 4,578. The 100M branch leaves the trunk at step 1,221 and the 200M branch at step 2,442.
 - A learning rate appears in run names without the minus sign: `1.2e3` means 1.2e-3. Type it on the command line as `1.2e-3`.
 - Manifests land in `$OUT/manifests/opt/`. Tables and plots read that directory.
 - After any block: `python -m scripts.make_tables --manifests $OUT/manifests/opt --out $OUT/tables --skip-unfinished` rebuilds every table from what exists. It is safe at any time: it computes only what its inputs and the gates allow, and says in the notes what it skipped and why.
+- The shim notebook calls `scripts.train` with a run spec and nothing else. For a `branch`, a timing pass or the benchmark in a committed run, replace the module and its arguments on the notebook's last line and change nothing else; or run them in an interactive session.
+
+### Disk
+
+A checkpoint of the real model is about 208 MB. A run keeps its newest two and every branch point, so week 1 alone approaches Kaggle's 20 GB. Prune after every block:
+
+```bash
+python -m scripts.prune --out $OUT
+python -m scripts.prune --out $OUT --apply
+```
+
+The first command deletes nothing: it lists every file it would delete and every file or directory it leaves alone, with the reason. Read it, then run the second. It removes the non-final checkpoints of completed runs and branches, and a branch-point checkpoint once its branch has a completed, valid manifest and the trunk itself is complete. It never touches an unfinished or diverged run, a directory no manifest accounts for, or a manifest. Final checkpoints stay unless you add `--final`; keep them until the tables are final and Phase 6 is decided, because `evaluate.py` and zero-shot retrieval load them.
 
 ## 1. Verification (the 1070 and one short T4 session, before any reported GPU hour)
 
@@ -123,7 +137,7 @@ Then every variant in `opt` mode with that micro-batch and one global pair of sc
 
 ```bash
 for v in mha gqa4 gqa2 mqa mla192 mla96 swa256; do
-  python -m scripts.train --variant $v --init-seed 1 --peak-lr 1e-3 --until 100 \
+  python -m scripts.train --variant $v --init-seed 1 --peak-lr 1e-3 --until 100 --eval-every-steps 50 \
     --data $DATA --out $OUT/smoke --gpu-shared $SHARED --expected-backend $BACKEND \
     --override recipe.batch.micro_batch=$MICRO \
     --override recipe.grad_scaler.init_scale=$INIT_SCALE \
@@ -131,11 +145,23 @@ for v in mha gqa4 gqa2 mqa mla192 mla96 swa256; do
 done
 ```
 
+`--eval-every-steps 50` makes each smoke run evaluate twice (the real cadence is 250 steps, which a smoke run never reaches): the evaluation runs at batch 64, not at the micro-batch, so this is where an out-of-memory in evaluation shows. It is an operational setting and does not enter the configuration.
+
 Each run stops at step 100 and writes an unfinished manifest. Check, in each manifest under `$OUT/smoke/manifests/opt/`: `steps.attempted` is 100 and `steps.skipped_in_first_100` is at most 3, for every variant (plan §7.3); `backend` is the expected one; `precision` is `fp16`; no run exited with a backend or dtype error. If any variant skips more, change the global scaler settings and rerun all seven into a fresh directory. Never tune per variant. A variant that cannot be made stable in fp16 is a reportable finding (plan §13.6). Also read `step_seconds` and rescale the budget of plan §12.1 if a 300M run will not take about 80 minutes.
 
 The learning rate here is a placeholder, because the sweep comes later. After the sweep, look at `steps.skipped_in_first_100` again in the real runs' manifests; the same limit applies.
 
-Then write the three values into `configs/recipe.yaml` (a pull request you approve) and freeze it. From here on no command carries an `--override`. The smoke directories are not results; do not point the tables at them, and do not resume them.
+Then write the three values into `configs/recipe.yaml` (a pull request you approve) and freeze it. From here on no command carries an `--override`: the tables refuse any run made with one. The smoke directories are not results; do not point the tables at them, and do not resume them.
+
+Record the run-to-run reproducibility of `opt` mode once, for the writeup (plan §5):
+
+```bash
+python -m scripts.measure_reproducibility --variant mha --steps 200 --pairs 3 --device cuda --mode opt \
+  --data-dir $DATA --peak-lr 1e-3 --micro-batch $MICRO --init-scale $INIT_SCALE --growth-interval $GROWTH \
+  --out $OUT/reproducibility/mha_opt.json
+```
+
+It trains four identical 200-step runs and writes how far they differ. It judges nothing; keep the file.
 
 ### 2.3 Phase 1 probes, Gate 1
 
@@ -168,7 +194,7 @@ A diverged point is recorded and listed with its reason; it is not an error. Do 
 
 ### 2.5 Arm N (plan §8.1)
 
-MHA seeds 1 to 5 up to their 100M branch point, then their 100M branches. The trunks are configured for both branch points now, because the ladder needs the 200M branch of the same runs later (plan §12.1):
+MHA seeds 1 to 5 up to their 100M branch point, then their 100M branches. The trunks are configured for both branch points now, because the ladder needs the 200M branch of the same runs later (plan §12.1). A trunk stopped at step 1,221 leaves its branch-point file `trunk-step00001221.pt` and a regular checkpoint at the same step; the branch starts from the first, and §3.3 continues from there. A branch-point file is never overwritten:
 
 ```bash
 for s in 1 2 3 4 5; do
@@ -248,7 +274,13 @@ python -m scripts.timing_pass --peak-lr $MHA_LR --data-dir $DATA --device cuda -
   --expected-backend $BACKEND --with-ref --out $OUT/timing/timing_pass.json
 ```
 
-Check: the script exits 0 (it exits 1 if SWA's attention time is not below MHA's, which means a fused but dense SWA; plan §13.8). In the file, MHA, GQA-4, GQA-2 and MQA are within ±3% of each other in `ms_per_step` (the plan's prediction; if not, they rejoin Arm C). Note the file's `timing_pass_id`.
+With `--with-ref` and the attention-share runs the pass is about 8,800 steps, not the 4,620 behind the 1.5 GPU-h of plan §12.1; budget about twice that. It reads the dataset, so it runs after §2.1.
+
+```bash
+python -m scripts.timing_report --timing-pass $OUT/timing/timing_pass.json --out $OUT/tables
+```
+
+Check: `timing_pass` exits 0 (it exits 1 if SWA's attention time is not below MHA's, which means a fused but dense SWA; plan §13.8). With SWA's chunked path the plan itself expects savings near zero at context 1,024, so an exit 1 here is possible and is a finding to report, not a file to use. In `$OUT/tables/timing.md`, read the ms/step and ratio columns of MHA, GQA-4, GQA-2 and MQA against the plan's prediction that they are within ±3% of each other (if not, they rejoin Arm C); the table prints numbers and no verdict. Note the `timing_pass_id` in its source line.
 
 ### 3.2 The ladder: L6 at 5 seeds, L10 at 3, each with 100M and 200M branches
 
@@ -296,7 +328,7 @@ python -m scripts.make_plots --manifests $OUT/manifests/opt --out $OUT/plots --s
 Check `gates.md`:
 
 - "Positive control: L6 against L8 at 300M": the verdict. `detected` means the pipeline can see a 25% capacity cut. If it is `not detected`, the project ships as the noise-floor post with that finding, and every later not-detected verdict is uninformative (plan §8.4, §9.4); the notes say so.
-- "Seed count and detectable effect": `seeds per primary` is 5 or 8. If 8, `variants leaving Arm A` names MLA-96 and SWA-256, and seeds 6 to 8 are added to MHA and the three primaries in §4.
+- "Seed count and detectable effect": `seeds per primary` is 5 or 8. If 8, `variants leaving Arm A` names MLA-96 and SWA-256, and seeds 6 to 8 are added to MHA and the three primaries in §4. It stays blank until MHA seeds 1 to 5, L6 seeds 1 to 5 and L10 seeds 1 to 3 all have their 300M results; the notes name the missing seeds. If you cut L10 (plan §12.2 item 4), add `--l10-cut` to every `make_tables` and `make_plots` command from here on and say so in the pre-registration: the rule then uses the two-point slope. Decide that before you look at the result of either.
 - "Ladder slope b by budget": three values.
 
 Check `05_ladder.png`: three panels with every seed and a fit line.
@@ -330,7 +362,7 @@ python -m scripts.make_plots --manifests $OUT/manifests/opt --out $OUT/plots --s
 
 Check, in this order (plan §9.5):
 
-1. The script did not refuse. A refusal names the runs whose steps taken differ by more than 0.5%, or whose backend or versions differ. Fix that before reading anything.
+1. The script did not refuse. A refusal names the runs whose steps taken differ by more than 0.5%, whose backend, versions, recipe, init rule, precision settings or backbone differ, or that were made with `--override`. Fix that before reading anything.
 2. `headline.md`: the three primaries carry a verdict, `detected` or `not detected`, with the gap, its interval and, for an undetected gap, the bound it rules out. Only `primary_test.py` wrote those words. The notes list nothing missing for the primaries.
 3. `01_primary_gaps.png`: every seed is a dot; the band is the bound committed in §3.4.
 
@@ -371,7 +403,11 @@ python -m scripts.bench --device cuda --gpu-shared false --expected-backend $BAC
   --out-dir $OUT/bench
 ```
 
-Check: one file per variant and mode. The script fails if measured and analytic KV bytes differ by more than 5%. `ref` mode at batch 32 and cache 8k may run out of memory; narrow `--decode-batches` or `--decode-caches` for a second `ref` pass and say so. Two things to disclose with the numbers: the sliding-window cache allocates up to twice its 256-token cap, and MLA's absorbed matrices are a fixed cost per cache outside the KV bytes per token.
+```bash
+python -m scripts.timing_report --timing-pass $OUT/timing/timing_pass.json --bench $OUT/bench --out $OUT/tables
+```
+
+Check: one file per variant and mode, and `$OUT/tables/inference.md` with a prefill table, a decode table and a KV line for each. The benchmark fails if measured and analytic KV bytes differ by more than 5%. `ref` mode at batch 32 and cache 8k may run out of memory; narrow `--decode-batches` or `--decode-caches` for a second `ref` pass and say so. Two things to disclose with the numbers: the sliding-window cache allocates up to twice its 256-token cap, and MLA's absorbed matrices are a fixed cost per cache outside the KV bytes per token.
 
 ### 5.4 Arm C, optional and first on the cut list (alone on the box, one session, round-robin)
 
@@ -393,7 +429,7 @@ python -m scripts.make_tables --manifests $OUT/manifests/opt --out $OUT/tables \
 python -m scripts.make_plots --manifests $OUT/manifests/opt --bench $OUT/bench --out $OUT/plots
 ```
 
-No `--skip-unfinished` here: an unfinished run at this point is a problem to resolve, not to leave out.
+No `--skip-unfinished` here: an unfinished run at this point is a problem to resolve, not to leave out. A run recorded as diverged is the exception: it is left out and named in the notes of `headline.md` and `gates.md` (plan §7.4 item 5).
 
 Check: `headline.md` has no blank cell and its notes explain every omission; `arm_b.md` has both rankings; `context.md` has both metrics for every variant that ran; `rqw.md` states the estimate and its interpolation; all ten plots built, with the probe and retrieval plots blank until those records exist.
 
@@ -404,4 +440,6 @@ Check: `headline.md` has no blank cell and its notes explain every omission; `ar
 - Nothing here ran on a GPU, on Kaggle or on the real corpus. The `gpu` and `t4` tests are written and have never run; list them with `pytest --collect-only -q -m "gpu or t4"`.
 - The fp16, GradScaler and backend-enforcement code paths have never executed.
 - Divergence recording was tested with a forced non-finite loss, not a real diverged run.
+- The environment check on resume and the peak-memory record were tested with replaced readings on the CPU. Reading the driver, the GPU name and the CUDA memory statistics has never run.
+- `scripts/prune.py` was tested on tiny synthetic runs. Read its dry run before the first `--apply`.
 - Probes (§2.3) and Phase 6 have no commands.

@@ -8,7 +8,8 @@ data_seed: 1
 peak_lr: 0.001
 budget: 300M
 steps: null
-branches: [100M]
+# MHA's trunks carry both branch points from the start (RUNBOOK.md §2.5), so this is the run of that section.
+branches: [100M, 200M]
 # The sweep run that chose peak_lr; null for a sweep run itself.
 lr_source: null
 overrides: {}
