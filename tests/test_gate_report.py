@@ -328,9 +328,10 @@ def test_a_detected_null_control_stops_every_comparison():
 
 
 def test_no_comparison_without_the_positive_control(campaign):
-    # L6 seed 5 is missing: the ladder still fits, but the registered positive control cannot run.
+    # L6 seed 5 is missing: the reported ladder still fits, but the registered positive control cannot
+    # run, and the seed-count rule waits for the complete ladder (plan §1.4; review S4, H2).
     a = mt.analyse(without_manifest(campaign, lambda p: p.variant == "mha_L6" and p.init_seed == CONTROL_SEEDS[-1]))
-    assert a.fit is not None and a.decision is not None
+    assert a.fit is not None and a.decision is None
     assert a.positive_control is None
     assert a.comparisons == {} and a.multipliers == {}
     assert any("comparisons skipped" in note and "positive control" in note for note in a.notes)
