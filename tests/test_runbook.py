@@ -36,8 +36,8 @@ VARIABLES = {
     "L6_LR": "1.2e-3", "L6_SRC": "mha_L6-isoparam-100M-lr1.2e3-s21-d1",
     "L10_LR": "1.2e-3", "L10_SRC": "mha_L10-isoparam-100M-lr1.2e3-s21-d1",
     "V_LR": "1.2e-3", "V_SRC": "mqa-isoparam-100M-lr1.2e3-s21-d1",
-    "S_V": "1400", "TP_ID": "tp-placeholder",
     "v": "mqa", "s": "1", "d": "2", "b": "100M", "l": "mha_L6",
+    "SMOKE_LR": "4.8e-3",
     # The probes of §2.3: one model, one size, the settings the pilot fixes.
     "m": "recurrence", "n": "16", "PROBE_D": "64", "PROBE_LR": "3e-3", "PROBE_STEPS": "8000",
     "STEPS_HOP": "8000", "STEPS_CARD": "8000", "STEPS_FUZZY": "8000", "STEPS_COPY": "8000",
@@ -171,6 +171,65 @@ def test_the_until_steps_are_the_branch_point_and_the_smoke_lengths():
     assert max(smoke) == 100 and all(n <= 100 for n in smoke)
     assert 100 < decay_start(BUDGET_STEPS["300M"], FRACTION)
     assert 100 >= RECIPE["schedule"]["warmup_steps"]
+
+
+def test_the_smoke_runs_are_made_at_both_ends_of_the_sweep_grid():
+    """Decision 227: skips during the warmup depend on the peak rate, which the smoke runs do not know."""
+    line = next(l for l in RUNBOOK.splitlines() if l.strip().startswith("for SMOKE_LR in"))
+    rates = [float(x) for x in re.findall(r"[\d.]+e-\d+", line)]
+    assert rates == [min(sw.MHA_GRID), max(sw.MHA_GRID)]
+    smoke = [c for c in COMMANDS if "/smoke " in c and "--until 100" in c]
+    assert smoke and all("--peak-lr $SMOKE_LR" in c for c in smoke)
+
+
+def test_the_probe_grid_is_the_decided_one():
+    """Decision 215: MQAR at 4, 16 and 64 pairs, the seven variants and the anchor, seeds 1 to 10."""
+    blocks = "\n".join(bash_blocks())
+    block_1 = next(b for b in bash_blocks() if "--out $OUT/probes\n" in b and "--task mqar --param n_pairs=$n" in b)
+    assert "for n in 4 16 64; do" in block_1
+    assert "for m in mha gqa4 gqa2 mqa mla192 mla96 swa256 recurrence; do" in block_1
+    assert "for s in 1 2 3 4 5 6 7 8 9 10; do" in block_1
+    # The pilot trains MHA and the anchor only, on seeds that the grid does not use.
+    pilot = next(b for b in bash_blocks() if "$OUT/probes_pilot" in b)
+    assert "for m in mha recurrence; do" in pilot and "for s in 101 102; do" in pilot
+    # Block 2: the four other probes of plan §9.2, each trained for all eight models.
+    for task in ("multihop", "fuzzy", "selective_copy", "induction", "mqar_high_cardinality"):
+        assert task in blocks
+    probes = [c for c in COMMANDS if shlex.split(c)[2] == "scripts.train_probe"]
+    assert len(probes) == 7  # the pilot, block 1, and five in block 2
+    assert all("--device cuda" in c and "--expected-backend $BACKEND" in c for c in probes)
+
+
+def test_arm_c_is_cut_and_the_shared_rate_runs_are_in(monkeypatch):
+    """Decisions 224 and 230: no iso-wallclock run; three standalone 100M runs at MHA's rate per variant on its own rate."""
+    assert not any("iso_wallclock" in c or "--timing-pass-id" in c for c in COMMANDS)
+    block = next(b for b in bash_blocks() if "for v in $OWN_RATE_VARIANTS; do" in b)
+    assert "for s in 1 2 3; do" in block
+    (command,) = [c for c in COMMANDS if c.replace(" ", "") in block.replace("\\\n", " ").replace(" ", "")]
+    assert "--peak-lr $MHA_LR" in command and "--lr-source $MHA_SRC" in command
+    namespace = parse(command, monkeypatch)
+    assert namespace.budget == "100M" and namespace.branches == [] and namespace.arm in (None, "iso_token")
+    assert "shared_rate.md" in RUNBOOK
+
+
+def test_the_utilisation_log_is_started_by_the_runbook_and_by_the_shim():
+    """Decision 217: a raw nvidia-smi log beside the run; nothing in the trainer samples the GPU."""
+    query = "--query-gpu=timestamp,index,utilization.gpu,memory.used"
+    assert any("nvidia-smi" in b and query in b and "-l 10" in b for b in bash_blocks())
+    shim = (ROOT / "notebooks" / "kaggle_shim.ipynb").read_text(encoding="utf-8")
+    assert "nvidia-smi" in shim and query in shim
+    for folder in ("src", "scripts", "analysis"):
+        for source in (ROOT / folder).rglob("*.py"):
+            assert "utilization" not in source.read_text(encoding="utf-8"), source
+
+
+def test_the_commitments_are_made_before_the_runs_they_govern():
+    """Decision 220: the seed count is committed in §3.4, before week 3 starts."""
+    seed_count = RUNBOOK.index("`seed_count: 5` or `seed_count: 8`")
+    week_3 = RUNBOOK.index("## 4. GPU week 3")
+    assert RUNBOOK.index("### 3.4 ") < seed_count < week_3
+    assert "Not before `seed_count` is committed" in RUNBOOK[week_3:]
+    assert "detected in the wrong direction" in RUNBOOK  # decision 216, how to read the positive control
 
 
 def test_the_sweep_grid_and_the_registered_seeds_are_the_codes():
