@@ -8,17 +8,18 @@ Read plan §11 and §13 before the first run. Three rules that no command enforc
 - Never change `configs/recipe.yaml`, `configs/prereg.yaml` or `tests/tolerances.py` after their freeze. A later change restarts every arm (plan §7, §13.6).
 - Never tune anything per variant, never add seeds after a variant result at 300M has been read, never stitch a timing run across sessions.
 
-## Open items that block parts of this runbook
+## Open items
 
-| Item | Blocks | Who |
+Phil answered the questions this runbook used to list here on 2026-11-13; the answers are `docs/decisions.md` rows 215 to 231 and plan §18. What is left is yours to fill in while running:
+
+| Item | Where | When |
 | --- | --- | --- |
-| The sweep seed (`SWEEP_SEED`). Recommended: one seed that no arm uses, for example 21. A sweep on seed 1, 2 or 3 collides with a reproducibility rerun by name and config hash. | Every LR sweep (§2.4, §2.7) | Phil |
-| The probe grid: which probes at which sizes, for which models, with how many seeds, and one width, step count and learning rate per point (`STATUS.md`, open questions). The scripts exist: `scripts/train_probe.py`, `scripts/probe_report.py`. | §2.3, Gate 1 | Phil |
-| The Kaggle image's torch, Python and CUDA versions. | Pinning (§1.5) | Phil |
-| Two proposed thresholds in `configs/prereg.yaml` (`paired_if_s_rep_ratio_below: 0.6`, `max_undetectable_param_fraction: 0.05`). | Pre-registration (§1.7) | Phil |
-| Whether a positive control detected in the wrong direction (L6 better than L8) fails it. The test is two-sided and would print `detected`. | Reading §3.4 | Phil |
-| What "GPU utilization" and "time-to-loss-X" of plan §10.2 mean. Neither is recorded; they cannot be backfilled after the runs. | Nothing runs differently; decide before week 1 if you want them | Phil |
-| Readings of the plan listed in `STATUS.md` (sweep rule order, the comparison gate, Arm B's learning rate, and others). | Nothing; confirm or change before the freeze | Phil |
+| The Kaggle image's torch, Python and CUDA versions. | §1.5 | Before the first run |
+| `micro_batch`, `init_scale` and `growth_interval` in `configs/recipe.yaml`. | §2.2 | After the smoke runs |
+| The dataset and tokenizer hashes in `configs/data.yaml`. | §2.1 | After tokenizing |
+| The probe settings the pilot fixes (width, rate, steps per size), and the sizes of block 2 if you run it. | §2.3 | Before block 1 |
+| `ladder` in `configs/commitments.yaml`, only if you cut L10. | §3.4 | Before any L10 or seed-count result is read |
+| `seed_count` in `configs/commitments.yaml`. | §3.4 | Before the first primary run of week 3 |
 
 ## 0. Conventions
 
@@ -29,6 +30,7 @@ export DATA=/kaggle/input/attention-benchmark-tokens   # the prepared dataset, r
 export OUT=/kaggle/working/out                         # checkpoints, manifests, tables, plots
 export BACKEND=efficient                               # the fused kernel on sm75 (plan §2.3)
 export SHARED=no                                       # yes while a second job uses the same GPU
+export SWEEP_SEED=21                                   # the init seed of every sweep run; no arm uses it (decision 219)
 ```
 
 - A T4 ×2 session runs two independent jobs, one per GPU, each started with `CUDA_VISIBLE_DEVICES=0` or `=1` in front of the command. No DDP (plan §2.2). While two jobs run on one GPU, or when Kaggle co-locates them, set `SHARED=yes`: the manifest records it. Jobs that produce a timing number run alone on the box and refuse a shared GPU.
@@ -40,6 +42,18 @@ export SHARED=no                                       # yes while a second job 
 - Manifests land in `$OUT/manifests/opt/`. Tables and plots read that directory.
 - After any block: `python -m scripts.make_tables --manifests $OUT/manifests/opt --out $OUT/tables --skip-unfinished` rebuilds every table from what exists. It is safe at any time: it computes only what its inputs and the gates allow, and says in the notes what it skipped and why.
 - The shim notebook calls `scripts.train` with a run spec and nothing else. For a `branch`, a timing pass or the benchmark in a committed run, replace the module and its arguments on the notebook's last line and change nothing else; or run them in an interactive session.
+
+### GPU utilisation log
+
+Start this once per session, before the first job (plan §18, A17). It appends one line per GPU every 10 seconds to a file of its own and stops with the session:
+
+```bash
+mkdir -p $OUT/logs
+nvidia-smi --query-gpu=timestamp,index,utilization.gpu,memory.used --format=csv -l 10 \
+  >> $OUT/logs/gpu_util_$(date -u +%Y%m%dT%H%M%SZ).csv &
+```
+
+It is a raw record for the writeup: nothing in the harness reads it, no manifest holds it, and a run does not depend on it. The shim notebook starts the same log in its own cell. Keep the files; they cannot be made again after the runs.
 
 ### Disk
 
@@ -102,7 +116,7 @@ Check: 17,308,032 parameters for every non-MLA variant, the two MLA offsets as i
 
 ### 1.7 Pre-registration
 
-Confirm or change the two thresholds in `configs/prereg.yaml` (a pull request you approve; the file is frozen afterwards). Then commit the pre-registration section of `README.md` with a timestamp: the §1.2 rule, the three primaries, the seed-count rule, the positive-control test, the context-use metrics. The detectable-effect bound and the seed count are added in §3.4.
+The two thresholds in `configs/prereg.yaml` are confirmed (0.6 and 0.05), and the amendments to the plan are its §18. Commit the pre-registration section of `README.md` with a timestamp and write the commit hash into its first line: the §1.2 rule, the three primaries, the seed-count rule, the positive-control test, the learning-rate rules, the context-use metrics. `configs/prereg.yaml` is frozen from that commit on. The detectable-effect bound and the seed count are added in §3.4; the seed count also goes into `configs/commitments.yaml`.
 
 ## 2. GPU week 1: data, recipe, noise floor (about 25 GPU-h)
 
@@ -120,9 +134,9 @@ Check: `train`, `branch` and `evaluate` refuse to start until both hashes are se
 
 ### 2.2 Smoke runs, all seven variants, then the recipe freeze
 
-`configs/recipe.yaml` leaves `micro_batch`, `init_scale` and `growth_interval` unset. Find them here, with overrides. A smoke run is the first 100 steps of a real 300M run, stopped with `--until 100`, so its warmup and learning rate are those of the real run. (A separate 100-step run would start its decay at step 80.)
+`configs/recipe.yaml` leaves `micro_batch`, `init_scale` and `growth_interval` unset. Find them here, with overrides. A smoke run is the first 100 steps of a real 300M run, stopped with `--until 100`, so its warmup is that of the real run. (A separate 100-step run would start its decay at step 80.) No learning rate is known yet, and skipped steps during the warmup depend on the peak rate, so the smoke runs are made at both ends of MHA's sweep grid, 3e-4 and 4.8e-3 (plan §18, A13).
 
-First the micro-batch: the largest that fits MLA-192 in `ref` mode (plan §7.1). Try 64, then 32, 16, 8; twenty steps are enough to see whether it fits:
+First the micro-batch: the largest that fits MLA-192 in `ref` mode (plan §7.1). Try 64, then 32, 16, 8; twenty steps are enough to see whether it fits (memory does not depend on the rate; 1e-3 is a placeholder here):
 
 ```bash
 python -m scripts.train --variant mla192 --init-seed 1 --peak-lr 1e-3 --until 20 \
@@ -135,20 +149,22 @@ python -m scripts.train --variant mla192 --init-seed 1 --peak-lr 1e-3 --until 20
 Then every variant in `opt` mode with that micro-batch and one global pair of scaler settings (start from PyTorch's defaults, `INIT_SCALE=65536`, `GROWTH=2000`):
 
 ```bash
-for v in mha gqa4 gqa2 mqa mla192 mla96 swa256; do
-  python -m scripts.train --variant $v --init-seed 1 --peak-lr 1e-3 --until 100 --eval-every-steps 50 \
-    --data $DATA --out $OUT/smoke --gpu-shared $SHARED --expected-backend $BACKEND \
-    --override recipe.batch.micro_batch=$MICRO \
-    --override recipe.grad_scaler.init_scale=$INIT_SCALE \
-    --override recipe.grad_scaler.growth_interval=$GROWTH
+for SMOKE_LR in 3e-4 4.8e-3; do
+  for v in mha gqa4 gqa2 mqa mla192 mla96 swa256; do
+    python -m scripts.train --variant $v --init-seed 1 --peak-lr $SMOKE_LR --until 100 --eval-every-steps 50 \
+      --data $DATA --out $OUT/smoke --gpu-shared $SHARED --expected-backend $BACKEND \
+      --override recipe.batch.micro_batch=$MICRO \
+      --override recipe.grad_scaler.init_scale=$INIT_SCALE \
+      --override recipe.grad_scaler.growth_interval=$GROWTH
+  done
 done
 ```
 
 `--eval-every-steps 50` makes each smoke run evaluate twice (the real cadence is 250 steps, which a smoke run never reaches): the evaluation runs at batch 64, not at the micro-batch, so this is where an out-of-memory in evaluation shows. It is an operational setting and does not enter the configuration.
 
-Each run stops at step 100 and writes an unfinished manifest. Check, in each manifest under `$OUT/smoke/manifests/opt/`: `steps.attempted` is 100 and `steps.skipped_in_first_100` is at most 3, for every variant (plan §7.3); `backend` is the expected one; `precision` is `fp16`; no run exited with a backend or dtype error. If any variant skips more, change the global scaler settings and rerun all seven into a fresh directory. Never tune per variant. A variant that cannot be made stable in fp16 is a reportable finding (plan §13.6). Also read `step_seconds` and rescale the budget of plan §12.1 if a 300M run will not take about 80 minutes.
+Each of the 14 runs stops at step 100 and writes an unfinished manifest. Check, in each manifest under `$OUT/smoke/manifests/opt/`: `steps.attempted` is 100 and `steps.skipped_in_first_100` is at most 3, for every variant at both rates (plan §7.3); `backend` is the expected one; `precision` is `fp16`; no run exited with a backend or dtype error. If any variant skips more at either rate, change the global scaler settings and rerun all fourteen into a fresh directory. Never tune per variant. A variant that cannot be made stable in fp16 is a reportable finding (plan §13.6). Also read `step_seconds` and rescale the budget of plan §12.1 if a 300M run will not take about 80 minutes.
 
-The learning rate here is a placeholder, because the sweep comes later. After the sweep, look at `steps.skipped_in_first_100` again in the real runs' manifests; the same limit applies.
+After each sweep (§2.4, §2.7), look at `steps.skipped_in_first_100` in the manifest of every run at a chosen rate; the same limit applies. This matters most when the edge rule adds a rate above 4.8e-3, which no smoke run covered. A run over the limit is a question to settle before the arms start: the settings are global and frozen, and are never changed for one variant.
 
 Then write the three values into `configs/recipe.yaml` (a pull request you approve) and freeze it. From here on no command carries an `--override`: the tables refuse any run made with one. The smoke directories are not results; do not point the tables at them, and do not resume them.
 
@@ -162,11 +178,77 @@ python -m scripts.measure_reproducibility --variant mha --steps 200 --pairs 3 --
 
 It trains four identical 200-step runs and writes how far they differ. It judges nothing; keep the file.
 
-### 2.3 Phase 1 probes, Gate 1
+### 2.3 Phase 1 probes, Gate 1 (about 3 GPU-h; block 2 only if quota allows)
 
-No commands yet: the probe grid is not fixed (see the open items). `scripts/train_probe.py` trains one probe model and writes one record, `scripts/probe_report.py` writes `probes.md` from the records, and plot 9 draws them. This section gets the exact loops when the grid is fixed.
+The grid (plan §18, A12). Block 1 decides Gate 1: MQAR at 4, 16 and 64 pairs, the seven variants and the recurrence anchor, init seeds 1 to 10, 240 runs. Block 2 is probes 2 to 5 at one size each, the same eight models and seeds, 320 runs; run it only if the week's quota allows. Every model of a point gets the same width, step count and learning rate. `scripts/train_probe.py` trains one model and writes one record; a record that exists is not trained again, so every loop below can be restarted.
 
-**Gate 1** (plan §9.2): the recurrence anchor fails as the number of pairs grows, which shows the probes can discriminate. SWA's behaviour is reported, not gating. Either way the LM arms run.
+**Pilot, MHA and the anchor only.** It fixes the width, the rate and the steps per size, and it times a run. Its seeds, 101 and 102, are not part of the grid. Start from the settings that solved 4 pairs on CPU in the test suite (width 64, rate 3e-3) and from a first guess for the steps:
+
+```bash
+export PROBE_D=64 PROBE_LR=3e-3
+export STEPS_4=4000 STEPS_16=8000 STEPS_64=16000        # first guesses; the pilot corrects them
+for n in 4 16 64; do
+  eval PROBE_STEPS=\$STEPS_$n
+  for m in mha recurrence; do
+    for s in 101 102; do
+      python -m scripts.train_probe --variant $m --task mqar --param n_pairs=$n --d-model $PROBE_D --seed $s \
+        --steps $PROBE_STEPS --peak-lr $PROBE_LR --device cuda --expected-backend $BACKEND --out $OUT/probes_pilot
+    done
+  done
+done
+python -m scripts.probe_report --probes $OUT/probes_pilot --out $OUT/tables_pilot
+```
+
+The rule for the pilot, fixed here before any probe result exists:
+
+- A size is settled when MHA's held-out token accuracy in `$OUT/tables_pilot/probes.md` is at least 0.99 on both pilot seeds. (The 0.99 is the build loop's proposal; change it here, before the pilot, if you want another level.)
+- If a size is not settled, double its `STEPS_` value and run the pilot again for that size. After two doublings without success, set `PROBE_D=128` for every size and start the pilot again from the first guesses.
+- The anchor's pilot runs decide nothing. They show its level and its run time.
+- Budget: from the run times, 240 runs must fit about 3 GPU-h, a mean of 45 s per run. If they do not, that is your decision to make before block 1: raise the budget or drop the 64-pair point. Do not shorten the steps below what the rule settled.
+
+Write the settled `PROBE_D`, `PROBE_LR`, `STEPS_4`, `STEPS_16` and `STEPS_64` into `docs/decisions.md` and commit before block 1. The pilot directory is not part of any report.
+
+**Block 1.**
+
+```bash
+for n in 4 16 64; do
+  eval PROBE_STEPS=\$STEPS_$n
+  for m in mha gqa4 gqa2 mqa mla192 mla96 swa256 recurrence; do
+    for s in 1 2 3 4 5 6 7 8 9 10; do
+      python -m scripts.train_probe --variant $m --task mqar --param n_pairs=$n --d-model $PROBE_D --seed $s \
+        --steps $PROBE_STEPS --peak-lr $PROBE_LR --device cuda --expected-backend $BACKEND --out $OUT/probes
+    done
+  done
+done
+python -m scripts.probe_report --probes $OUT/probes --out $OUT/tables
+python -m scripts.make_plots --manifests $OUT/manifests/opt --probes $OUT/probes --out $OUT/plots --skip-unfinished
+```
+
+Check `$OUT/tables/probes.md` and `09_probes.png`: every model has 10 seeds at each size; the token accuracy of each softmax variant; the anchor's token accuracy at 4, 16 and 64 pairs against the no-recall level 1/n drawn in the plot. The report prints numbers and no verdict.
+
+**Gate 1** (plan §9.2): passes when the recurrence anchor fails as the number of pairs grows, which shows the probes can discriminate. You judge that from the numbers; the plan gives no threshold. SWA's behaviour is reported, not gating. If even the anchor does not fail, the probes are broken and are redesigned. Either way the LM arms run.
+
+**Block 2, optional.** One size per probe. The sizes below are the build loop's proposal (16, the middle size of block 1, wherever a probe has pairs); they are yours to change before the first block-2 run, and not after. Probe 3 is MQAR with 1,024 keys and values at width 128, which is head dimension 16. Settle the steps for each with the same pilot rule (MHA and the anchor, seeds 101 and 102) before the loop:
+
+```bash
+for m in mha gqa4 gqa2 mqa mla192 mla96 swa256 recurrence; do
+  for s in 1 2 3 4 5 6 7 8 9 10; do
+    python -m scripts.train_probe --variant $m --task multihop --param n_chains=16 --d-model $PROBE_D --seed $s \
+      --steps $STEPS_HOP --peak-lr $PROBE_LR --device cuda --expected-backend $BACKEND --out $OUT/probes
+    python -m scripts.train_probe --variant $m --task mqar --panel mqar_high_cardinality \
+      --param n_pairs=16 --param n_keys=1024 --param n_values=1024 --d-model 128 --seed $s \
+      --steps $STEPS_CARD --peak-lr $PROBE_LR --device cuda --expected-backend $BACKEND --out $OUT/probes
+    python -m scripts.train_probe --variant $m --task fuzzy --param n_pairs=16 --d-model $PROBE_D --seed $s \
+      --steps $STEPS_FUZZY --peak-lr $PROBE_LR --device cuda --expected-backend $BACKEND --out $OUT/probes
+    python -m scripts.train_probe --variant $m --task selective_copy --param n_data=16 --param n_blank=64 \
+      --d-model $PROBE_D --seed $s \
+      --steps $STEPS_COPY --peak-lr $PROBE_LR --device cuda --expected-backend $BACKEND --out $OUT/probes
+    python -m scripts.train_probe --variant $m --task induction --param length=64 --d-model $PROBE_D --seed $s \
+      --steps $STEPS_INDUCTION --peak-lr $PROBE_LR --device cuda --expected-backend $BACKEND --out $OUT/probes
+  done
+done
+python -m scripts.probe_report --probes $OUT/probes --out $OUT/tables
+```
 
 ### 2.4 MHA learning-rate sweep (5 runs at 100M, plus edge points)
 
@@ -273,13 +355,13 @@ python -m scripts.timing_pass --peak-lr $MHA_LR --data-dir $DATA --device cuda -
   --expected-backend $BACKEND --with-ref --out $OUT/timing/timing_pass.json
 ```
 
-With `--with-ref` and the attention-share runs the pass is about 8,800 steps, not the 4,620 behind the 1.5 GPU-h of plan §12.1; budget about twice that. It reads the dataset, so it runs after §2.1.
+With `--with-ref` and the attention-share runs the pass is about 8,800 steps, not the 4,620 behind the 1.5 GPU-h of plan §12.1; budget about 3 GPU-h (plan §18, A14). It reads the dataset, so it runs after §2.1.
 
 ```bash
 python -m scripts.timing_report --timing-pass $OUT/timing/timing_pass.json --out $OUT/tables
 ```
 
-Check: `timing_pass` exits 0 (it exits 1 if SWA's attention time is not below MHA's, which means a fused but dense SWA; plan §13.8). With SWA's chunked path the plan itself expects savings near zero at context 1,024, so an exit 1 here is possible and is a finding to report, not a file to use. In `$OUT/tables/timing.md`, read the ms/step and ratio columns of MHA, GQA-4, GQA-2 and MQA against the plan's prediction that they are within ±3% of each other (if not, they rejoin Arm C); the table prints numbers and no verdict. Note the `timing_pass_id` in its source line.
+Check: `timing_pass` exits 0. It prints SWA's attention time per step beside MHA's (plan §2.3 item 2). If SWA's is not below MHA's, the pass is still valid for every variant: SWA's timings are kept and carry the mark † with the note "not faster than a dense kernel on this GPU" in `timing.md`, `headline.md` and `rqw.md` (plan §18, A15). With SWA's chunked path the plan itself expects savings near zero at context 1,024, so this is a likely outcome and a finding to report. In `$OUT/tables/timing.md`, read the ms/step and ratio columns of MHA, GQA-4, GQA-2 and MQA against the plan's prediction that they are within ±3% of each other; the table prints numbers and no verdict. Note the `timing_pass_id` in its source line.
 
 ### 3.2 The ladder: L6 at 5 seeds, L10 at 3, each with 100M and 200M branches
 
@@ -326,17 +408,24 @@ python -m scripts.make_plots --manifests $OUT/manifests/opt --out $OUT/plots --s
 
 Check `gates.md`:
 
-- "Positive control: L6 against L8 at 300M": the verdict. `detected` means the pipeline can see a 25% capacity cut. If it is `not detected`, the project ships as the noise-floor post with that finding, and every later not-detected verdict is uninformative (plan §8.4, §9.4); the notes say so.
+- "Positive control: L6 against L8 at 300M": the verdict. `detected` means L6 is worse than L8 and the pipeline can see a 25% capacity cut. `not detected`, or `detected in the wrong direction` (L6 significantly better than L8), means the control has failed: the project ships as the noise-floor post with that finding, and every later not-detected verdict is uninformative (plan §8.4, §9.4, §18 A6); the notes say so.
 - "Seed count and detectable effect": `seeds per primary` is 5 or 8. If 8, `variants leaving Arm A` names MLA-96 and SWA-256, and seeds 6 to 8 are added to MHA and the three primaries in §4. It stays blank until MHA seeds 1 to 5, L6 seeds 1 to 5 and L10 seeds 1 to 3 all have their 300M results; the notes name the missing seeds. If you cut L10 (plan §12.2 item 4), declare it by setting `ladder: l6_l8` in `configs/commitments.yaml` by pull request before you look at either result: the rule then uses the two-point slope. After the rule prints `seeds per primary`, commit that number as `seed_count` in `configs/commitments.yaml` by pull request before week 3; until then the tables test no primary.
 - "Ladder slope b by budget": three values.
 
 Check `05_ladder.png`: three panels with every seed and a fit line.
 
-Commit to the pre-registration, **before any variant result at 300M is read**: the detectable gap of the chosen design in nats and the seed count (plan §1.3, §1.4). Publish the noise-floor post.
+- "Declarations (configs/commitments.yaml)": `ladder` and `committed seed count` as the committed file has them. If `ladder slope b at 300M` is not positive, `seeds per primary` is 8, the fraction is blank and no multiplier will be reported (plan §18, A4).
+
+Commit, **before any variant result at 300M is read** and before the first run of §4:
+
+1. To the pre-registration section of `README.md`: the detectable gap of the chosen design in nats and the seed count (plan §1.3, §1.4).
+2. To `configs/commitments.yaml`, by pull request: `seed_count: 5` or `seed_count: 8`, the number `seeds per primary` shows.
+
+Then build the tables again from a checkout that has that commit: the "seed count not committed" note is gone. Until it is, and whenever the committed number differs from the rule's, the tables compute no primary and no exploratory comparison, and say so. Publish the noise-floor post.
 
 ## 4. GPU week 3: the primaries (about 21 GPU-h, about 38 if the rule picked 8 seeds)
 
-For each primary, at the rate and `lr_source` its sweep section gave. Seeds 1 to 5, or 1 to 8 if the rule picked 8:
+Not before `seed_count` is committed (§3.4). For each primary, at the rate and `lr_source` its sweep section gave. Seeds 1 to 5, or 1 to 8 if the rule picked 8:
 
 ```bash
 for v in gqa4 mqa mla192; do
@@ -397,6 +486,15 @@ done
 
 ### 5.3 Inference benchmark (alone on the box)
 
+First a trial of one repetition for two variants, to see that every point fits in memory in both modes; its files are not results:
+
+```bash
+python -m scripts.bench --device cuda --gpu-shared false --expected-backend $BACKEND --with-ref \
+  --repetitions 1 --variants mha mla192 --out-dir $OUT/bench_trial
+```
+
+Then the benchmark:
+
 ```bash
 python -m scripts.bench --device cuda --gpu-shared false --expected-backend $BACKEND --with-ref \
   --out-dir $OUT/bench
@@ -406,33 +504,40 @@ python -m scripts.bench --device cuda --gpu-shared false --expected-backend $BAC
 python -m scripts.timing_report --timing-pass $OUT/timing/timing_pass.json --bench $OUT/bench --out $OUT/tables
 ```
 
-Check: one file per variant and mode, and `$OUT/tables/inference.md` with a prefill table, a decode table and a KV line for each. The benchmark fails if measured and analytic KV bytes differ by more than 5%. `ref` mode at batch 32 and cache 8k may run out of memory; narrow `--decode-batches` or `--decode-caches` for a second `ref` pass and say so. Two things to disclose with the numbers: the sliding-window cache allocates up to twice its 256-token cap, and MLA's absorbed matrices are a fixed cost per cache outside the KV bytes per token.
+The benchmark measures every point three times, round-robin over the variants, and reports the median with the smallest and largest value (plan §18, A16); allow three times the time of a single pass.
 
-### 5.4 Arm C, optional and first on the cut list (alone on the box, one session, round-robin)
+Check: one file per variant and mode, and `$OUT/tables/inference.md` with a prefill table, a decode table and a KV line for each, every timing with its range over the three repetitions. The benchmark fails if measured and analytic KV bytes differ by more than 5%. The files are written after the last repetition, so an out-of-memory error in any track ends the benchmark with nothing written. `ref` mode at batch 32 and cache 8k may run out of memory: find that out first with one repetition into a scratch directory (the command below), and if it does not fit, narrow `--decode-batches` or `--decode-caches` for the real run and say so. Two things to disclose with the numbers: the sliding-window cache allocates up to twice its 256-token cap, and MLA's absorbed matrices are a fixed cost per cache outside the KV bytes per token.
 
-`rqw.md` gives each variant's afforded steps `S_v`. Run MHA, SWA-256 and MLA-192 in the order MHA s1, SWA s1, MLA s1, MHA s2, and so on, in one session; if it dies, restart the whole arm (plan §8.5):
+### 5.4 Shared-rate runs (3 seeds at 100M for each Arm A variant on its own rate)
+
+`lr_sweep.md` says, for every variant, whether it runs at MHA's rate ("tie rule") or at its own. For each variant in Arm A whose rate differs from MHA's, run seeds 1 to 3 standalone at 100M at MHA's rate (plan §18, A7). Set `OWN_RATE_VARIANTS` to those variants; if there is none, skip this section. A variant that left Arm A under the seed-count rule gets no such runs.
 
 ```bash
-python -m scripts.train --variant $v --arm iso_wallclock --init-seed $s --peak-lr $V_LR --lr-source $V_SRC \
-  --steps $S_V --timing-pass-id $TP_ID \
-  --data $DATA --out $OUT/arm_c --gpu-shared no --expected-backend $BACKEND
+for v in $OWN_RATE_VARIANTS; do
+  for s in 1 2 3; do
+    python -m scripts.train --variant $v --init-seed $s --peak-lr $MHA_LR --lr-source $MHA_SRC \
+      --budget 100M --branches --data $DATA --out $OUT --gpu-shared $SHARED --expected-backend $BACKEND
+  done
+done
 ```
 
-Check: elapsed time against the budget B in `rqw.md`; flag any run more than 3% off. The tables do not read `$OUT/arm_c`; report Arm C beside the estimate.
+About 1.3 GPU-h per variant. Check after §5.5: `shared_rate.md` has, for each such variant, its three 100M branches at its own rate, the three runs at MHA's rate, and the difference with its interval; a variant on MHA's rate says so; the notes name any run still missing. The table makes no detection claim.
+
+Arm C is cut (plan §18, A18): the wall-clock question keeps the computed estimate in `rqw.md`.
 
 ### 5.5 All tables and plots, Gate 4
 
 ```bash
 python -m scripts.make_tables --manifests $OUT/manifests/opt --out $OUT/tables \
   --timing-pass $OUT/timing/timing_pass.json --bench $OUT/bench
-python -m scripts.make_plots --manifests $OUT/manifests/opt --bench $OUT/bench --out $OUT/plots
+python -m scripts.make_plots --manifests $OUT/manifests/opt --bench $OUT/bench --probes $OUT/probes --out $OUT/plots
 ```
 
 No `--skip-unfinished` here: an unfinished run at this point is a problem to resolve, not to leave out. A run recorded as diverged is the exception: it is left out and named in the notes of `headline.md` and `gates.md` (plan §7.4 item 5).
 
-Check: `headline.md` has no blank cell and its notes explain every omission; `arm_b.md` has both rankings; `context.md` has both metrics for every variant that ran; `rqw.md` states the estimate and its interpolation; all ten plots built, with the probe and retrieval plots blank until those records exist.
+Check: `headline.md` has no blank cell and its notes explain every omission; `gates.md` shows the committed seed count equal to `seeds per primary`; `arm_b.md` has both rankings; `context.md` has both metrics for every variant that ran; `shared_rate.md` is complete for every variant on its own rate; `rqw.md` states the estimate and its interpolation; all ten plots built, with the retrieval plot blank.
 
-**Gate 4** (plan §9.7): Phase 6 runs only if a primary gap was detected or a late-context gap's interval in `context.md` excludes zero. Phase 6 has generators and a scorer (`src/eval/retrieval.py`) and no run script: the RoPE extension beyond 1,024 tokens is open decision 5, and the build loop did not close it.
+**Gate 4** (plan §9.7): Phase 6 runs only if a primary gap was detected or a late-context gap's interval in `context.md` excludes zero. Phase 6 has generators and a scorer (`src/eval/retrieval.py`) and no run script. If the gate opens, Phase 6 is its own build with its own review, and settles the RoPE extension beyond 1,024 tokens (the plan's open decision 5) then (plan §18, A19).
 
 ## What the build loop did not verify
 
@@ -441,4 +546,6 @@ Check: `headline.md` has no blank cell and its notes explain every omission; `ar
 - Divergence recording was tested with a forced non-finite loss, not a real diverged run.
 - The environment check on resume and the peak-memory record were tested with replaced readings on the CPU. Reading the driver, the GPU name and the CUDA memory statistics has never run.
 - `scripts/prune.py` was tested on tiny synthetic runs. Read its dry run before the first `--apply`.
-- Probes (§2.3) and Phase 6 have no commands.
+- Phase 6 has no commands and no run script (plan §18, A19). Arm C is cut (A18).
+- The probe commands of §2.3 were parsed, not run: the pilot's first guesses for the steps are guesses, and `scripts/train_probe.py` has never run on a GPU.
+- The `nvidia-smi` log line of §0 was not run.
