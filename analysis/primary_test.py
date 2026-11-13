@@ -38,6 +38,8 @@ TESTS = (PAIRED, WELCH)
 VERDICT_DETECTED = "detected"
 VERDICT_NOT_DETECTED = "not detected"
 VERDICT_EXPLORATORY = "exploratory"
+# Decision 216: a significant positive control in the other direction is a failed control.
+VERDICT_WRONG_DIRECTION = "detected in the wrong direction"
 
 CONFIDENCE = 0.95
 
@@ -443,7 +445,17 @@ def positive_control(
     seeds = list(pc["init_seeds"])
     v = ordered_losses(small_losses, seeds, pc["small"])
     r = ordered_losses(mha_losses, seeds, pc["reference"])
-    return _single(pc["small"], pc["reference"], "positive_control", test, seeds, seeds, v, r, pc["alpha"])
+    # The test is two-sided (decision 216); only the reading of its verdict is one-sided: the
+    # control counts as detected only when the smaller model is worse than MHA.
+    res = run_test(test, v, r)
+    alpha = pc["alpha"]
+    if float(res.p) > alpha:
+        verdict = VERDICT_NOT_DETECTED
+    elif float(res.mean_gap) > 0.0:
+        verdict = VERDICT_DETECTED
+    else:
+        verdict = VERDICT_WRONG_DIRECTION
+    return _comparison(pc["small"], pc["reference"], "positive_control", test, seeds, seeds, v, r, res, res.p, alpha, verdict)
 
 
 def exploratory(

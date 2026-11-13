@@ -46,6 +46,13 @@ The ladder slope b at 300M in this section is fitted on the registered seeds onl
 | variants leaving Arm A | — |
 | detectable gap of the chosen design, nats | — |
 
+## Declarations (configs/commitments.yaml)
+
+| item | value |
+|---|---|
+| ladder | full |
+| committed seed count | — |
+
 ## Ladder slope b by budget
 
 | item | value |

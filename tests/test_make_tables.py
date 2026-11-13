@@ -25,6 +25,7 @@ from tests.fixtures.fake_campaign import (
 )
 from tests.fixtures.fake_manifests import fake_manifest
 from tests.tolerances import STEPS_TAKEN_PARITY_REL
+from tests.fixtures.commitments import analyse_committed, tables_main
 
 ROOT = Path(__file__).resolve().parents[1]
 BLANK = mt.BLANK
@@ -85,7 +86,7 @@ def campaign() -> list[dict]:
 
 @pytest.fixture(scope="module")
 def analysis(campaign) -> mt.Analysis:
-    return mt.analyse(campaign)
+    return analyse_committed(campaign)
 
 
 @pytest.fixture(scope="module")
@@ -95,7 +96,7 @@ def rows(analysis) -> list[dict]:
 
 @pytest.fixture(scope="module")
 def eight_seed_analysis() -> mt.Analysis:
-    return mt.analyse(fake_campaign(sigma=0.01, n_primary_seeds=8, gaps={"mqa": 0.05}))
+    return analyse_committed(fake_campaign(sigma=0.01, n_primary_seeds=8, gaps={"mqa": 0.05}))
 
 
 # --- Refusal gates: check_comparable ----------------------------------------------
@@ -371,7 +372,7 @@ def _verdict_cells(rows: list[dict]) -> list[str]:
 
 
 def test_without_reruns_there_is_no_verdict_anywhere():
-    a = mt.analyse(fake_campaign(gaps={"mqa": 0.05}, without=("reruns",)))
+    a = analyse_committed(fake_campaign(gaps={"mqa": 0.05}, without=("reruns",)))
     assert a.selection is None and a.decision is None and a.comparisons == {}
     rows = mt.headline_rows(a)
     assert set(_verdict_cells(rows)) <= {BLANK, "reference"}
@@ -381,7 +382,7 @@ def test_without_reruns_there_is_no_verdict_anywhere():
 
 def test_with_one_primary_missing_a_seed_none_of_the_three_has_a_verdict(campaign):
     partial = _drop(campaign, variant="mqa", init_seed=5)
-    a = mt.analyse(partial)
+    a = analyse_committed(partial)
     assert a.decision is not None and a.decision.n_seeds == 5
     assert not {"gqa4", "mqa", "mla192"} & set(a.comparisons)
     rows = _by_variant(mt.headline_rows(a))
@@ -396,7 +397,7 @@ def test_with_one_primary_missing_a_seed_none_of_the_three_has_a_verdict(campaig
 
 def test_without_the_ladder_no_seed_count_and_no_verdict_is_given():
     """Part B needs the ladder fit for the seed-count rule, so the table gives no verdict."""
-    a = mt.analyse(fake_campaign(gaps={"mqa": 0.05}, without=("ladder",)))
+    a = analyse_committed(fake_campaign(gaps={"mqa": 0.05}, without=("ladder",)))
     assert a.fit is None and a.decision is None
     assert a.comparisons == {} and a.multipliers == {}
     assert set(_verdict_cells(mt.headline_rows(a))) <= {BLANK, "reference"}
@@ -406,18 +407,19 @@ def test_without_the_ladder_no_seed_count_and_no_verdict_is_given():
 
 def test_with_only_mha_l6_missing_the_note_names_it():
     """The ladder part is mha_L6 alone; mha_L10 is still there and does not rescue the fit."""
-    a = mt.analyse(fake_campaign(gaps={"mqa": 0.05}, without=("ladder",)))
+    a = analyse_committed(fake_campaign(gaps={"mqa": 0.05}, without=("ladder",)))
     assert "ladder fit: mha_L6 300M results are missing" in a.notes
 
 
 def test_without_l10_the_fit_uses_the_two_other_points():
-    a = mt.analyse(fake_campaign(without=("ladder_l10",)))
+    a = analyse_committed(fake_campaign(without=("ladder_l10",)))
     assert a.fit is not None
     assert set(p.name for p in a.fit.points) == {"mha", "mha_L6"}
     # The seed-count rule is applied "after ... the ladder" (plan §1.4): absent L10 runs are not
     # a decision to cut them (review S4, H2). Declared cut (plan §12.2 item 4), the rule is two-point.
     assert a.decision is None
-    assert mt.analyse(fake_campaign(without=("ladder_l10",)), l10_cut=True).decision.n_seeds == 5
+    cut = {"ladder": "l6_l8", "seed_count": None}
+    assert mt.analyse(fake_campaign(without=("ladder_l10",)), commitments=cut).decision.n_seeds == 5
 
 
 # --- Learning rates, ignored runs and refusals -----------------------------------------
@@ -426,7 +428,7 @@ def test_without_l10_the_fit_uses_the_two_other_points():
 def test_mixed_learning_rates_of_one_variant_raise(campaign):
     mixed = campaign + [fake_manifest("mha", init_seed=9, peak_lr=3e-3)]
     with pytest.raises(mt.TableError) as caught:
-        mt.analyse(mixed)
+        analyse_committed(mixed)
     message = str(caught.value)
     assert "mha" in message and "more than one peak learning rate" in message
     assert "3e3" in message and "1e3" in message
@@ -439,7 +441,7 @@ def test_a_100m_sweep_point_at_another_learning_rate_is_ignored(campaign, analys
         fake_manifest("mha", budget="100M", branches=[], init_seed=1, peak_lr=3e-3, val_loss=9.0),
         fake_manifest("gqa4", budget="100M", branches=[], init_seed=1, peak_lr=5e-4, val_loss=9.0),
     ]
-    a = mt.analyse(campaign + extra)
+    a = analyse_committed(campaign + extra)
     assert a.reruns_100m == analysis.reruns_100m
     assert a.losses_100m == analysis.losses_100m
     assert a.losses == analysis.losses
@@ -451,7 +453,7 @@ def test_null_other_data_seed_and_other_arm_runs_are_ignored(campaign, analysis)
         fake_manifest("gqa4", init_seed=1, data_seed=2, val_loss=9.0),
         fake_manifest("gqa4", arm="iso_backbone", init_seed=1, val_loss=9.0),
     ]
-    a = mt.analyse(campaign + extra)
+    a = analyse_committed(campaign + extra)
     assert a.losses == analysis.losses
     assert "null" not in a.losses
     assert a.comparisons.keys() == analysis.comparisons.keys()
@@ -461,7 +463,7 @@ def test_analyse_refuses_incomparable_runs(campaign):
     bad = copy.deepcopy(fake_manifest("gqa2", init_seed=1, val_loss=3.0))
     bad["backend"] = "math"
     with pytest.raises(mt.TableError, match="backend"):
-        mt.analyse(campaign + [bad])
+        analyse_committed(campaign + [bad])
 
 
 # --- Timing columns and rendering ------------------------------------------------------
@@ -503,7 +505,7 @@ def test_main_writes_headline_md_and_returns_zero(tmp_path, campaign, analysis, 
     for manifest in campaign:
         mf.write_manifest(manifest, manifests)
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(manifests), "--out", str(out)]) == 0
+    assert tables_main(["--manifests", str(manifests), "--out", str(out)]) == 0
     written = (out / "headline.md").read_text(encoding="utf-8")
     assert written == mt.render_markdown(mt.headline_rows(analysis), analysis.notes, results=campaign)
     assert str(out / "headline.md") in capsys.readouterr().out
@@ -517,7 +519,7 @@ def test_main_refusal_returns_one_and_writes_nothing(tmp_path, campaign, capsys)
     bad["data"]["dataset_sha256"] = "d" * 64
     mf.write_manifest(bad, manifests)
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(manifests), "--out", str(out)]) == 1
+    assert tables_main(["--manifests", str(manifests), "--out", str(out)]) == 1
     assert "dataset hash" in capsys.readouterr().err
     assert not (out / "headline.md").exists()
 
@@ -529,8 +531,8 @@ def test_main_leaves_unfinished_runs_out_only_when_asked(tmp_path, campaign):
     unfinished = fake_manifest("gqa2", init_seed=9, completed=False)
     mf.write_manifest(unfinished, manifests)
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(manifests), "--out", str(out)]) == 1
-    assert mt.main(["--manifests", str(manifests), "--out", str(out), "--skip-unfinished"]) == 0
+    assert tables_main(["--manifests", str(manifests), "--out", str(out)]) == 1
+    assert tables_main(["--manifests", str(manifests), "--out", str(out), "--skip-unfinished"]) == 0
     text = (out / "headline.md").read_text(encoding="utf-8")
     assert unfinished["name"] in text
 
@@ -539,7 +541,7 @@ def test_main_leaves_unfinished_runs_out_only_when_asked(tmp_path, campaign):
 
 
 def test_blank_rows_have_the_static_columns_and_nothing_else():
-    rows = _by_variant(mt.headline_rows(mt.analyse([])))
+    rows = _by_variant(mt.headline_rows(analyse_committed([])))
     for variant in ALL_VARIANTS:
         row = rows[variant]
         assert row["params"] != BLANK and row["d_ff"] != BLANK
@@ -553,7 +555,7 @@ def test_blank_rows_have_the_static_columns_and_nothing_else():
 
 
 def test_blank_analysis_has_notes_for_every_missing_input():
-    notes = mt.analyse([]).notes
+    notes = analyse_committed([]).notes
     assert any("MHA 100M branches" in note for note in notes)
     assert any("reruns" in note for note in notes)
     assert any("ladder fit: MHA 300M results are missing" == note for note in notes)
@@ -561,12 +563,12 @@ def test_blank_analysis_has_notes_for_every_missing_input():
 
 def test_committed_blank_table_is_generated_from_no_manifests():
     committed = (ROOT / "results" / "tables" / "blank" / "headline.md").read_bytes()
-    generated = mt.render_markdown(mt.headline_rows(mt.analyse([])), mt.analyse([]).notes, results=[])
+    generated = mt.render_markdown(mt.headline_rows(analyse_committed([])), analyse_committed([]).notes, results=[])
     assert committed == generated.encode("utf-8")
 
 
 def test_main_blank_matches_the_committed_file(tmp_path):
-    assert mt.main(["--blank", "--out", str(tmp_path)]) == 0
+    assert tables_main(["--blank", "--out", str(tmp_path)]) == 0
     committed = (ROOT / "results" / "tables" / "blank" / "headline.md").read_bytes()
     assert (tmp_path / "headline.md").read_bytes() == committed
 
@@ -578,7 +580,7 @@ def test_the_test_is_selected_before_any_300m_result_exists(campaign, analysis):
     early = [m for m in campaign if mf.parse_run_name(m["name"]).branch == "100M"
              or mf.parse_run_name(m["name"]).tokens == "100M"]
     assert early and all(m["steps"]["total"] == 1526 for m in early)
-    result = mt.analyse(early)
+    result = analyse_committed(early)
     assert result.selection is not None
     assert result.selection == analysis.selection
     assert result.fit is None and result.decision is None
@@ -590,7 +592,7 @@ def test_a_branch_at_another_learning_rate_is_refused(campaign):
     """Added in review: a variant's branches and results share one learning rate."""
     other = fake_manifest("mha", init_seed=1, branch="100M", peak_lr=2e-3, val_loss=3.6)
     with pytest.raises(mt.TableError, match="more than one peak learning rate"):
-        mt.analyse(list(campaign) + [other])
+        analyse_committed(list(campaign) + [other])
 
 
 def test_seeds_outside_the_registered_sets_are_shown_but_never_tested(campaign, analysis, rows):
@@ -600,7 +602,7 @@ def test_seeds_outside_the_registered_sets_are_shown_but_never_tested(campaign, 
         fake_manifest("gqa4", init_seed=6, val_loss=1.0),  # a primary, far from the others
         fake_manifest("gqa2", init_seed=4, val_loss=1.0),  # an exploratory variant
     ]
-    with_extra = mt.analyse(list(campaign) + extra)
+    with_extra = analyse_committed(list(campaign) + extra)
     assert with_extra.comparisons == analysis.comparisons
     assert with_extra.multipliers == analysis.multipliers
     assert with_extra.decision == analysis.decision
@@ -630,9 +632,9 @@ def test_each_disclosure_is_one_line_naming_its_plan_section_in_the_fixed_order(
 def test_the_disclosures_end_the_headline_after_the_notes_for_blank_full_and_gate_shut_tables(analysis, campaign):
     gate_shut = fake_campaign(gaps={"mqa": 0.05}, without=("null",))
     cases = {
-        "blank": (mt.analyse([]), []),
+        "blank": (analyse_committed([]), []),
         "full campaign": (analysis, campaign),
-        "gate shut": (mt.analyse(gate_shut), gate_shut),
+        "gate shut": (analyse_committed(gate_shut), gate_shut),
     }
     assert cases["blank"][0].notes and cases["gate shut"][0].notes  # so that "after the notes" is checked
     for label, (a, results) in cases.items():
@@ -752,7 +754,7 @@ def test_the_headline_built_from_another_gpu_names_that_gpu(tmp_path, campaign):
     for manifest in _on_other_gpu(campaign):
         mf.write_manifest(manifest, manifests)
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(manifests), "--out", str(out)]) == 0
+    assert tables_main(["--manifests", str(manifests), "--out", str(out)]) == 0
     text = (out / "headline.md").read_text(encoding="utf-8")
     assert "Tesla P100-PCIE-16GB (sm60)" in text
     assert "every number here is from a T4" not in text

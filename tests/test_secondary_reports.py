@@ -38,6 +38,7 @@ from tests.fixtures.fake_secondary import (
     write_timing_document,
 )
 from tests.fixtures.fake_manifests import fake_manifest
+from tests.fixtures.commitments import analyse_committed, tables_main
 
 ROOT = Path(__file__).resolve().parents[1]
 BLANK_DIR = ROOT / "results" / "tables" / "blank"
@@ -100,7 +101,7 @@ def arm_a_campaign() -> list[dict]:
 @pytest.fixture(scope="module")
 def paired(arm_a_campaign):
     manifests = arm_a_campaign + arm_b_manifests(arm_a_campaign)
-    return manifests, mt.analyse(manifests)
+    return manifests, analyse_committed(manifests)
 
 
 @pytest.fixture(scope="module")
@@ -108,7 +109,7 @@ def welch(arm_a_campaign):
     """The Welch case: the reruns scatter far more than sigma_init, so s_rep / sigma_init is large."""
     base = with_context(secondary_campaign(gaps={"mqa": 0.05}, rerun_sigma=0.02))
     manifests = base + arm_b_manifests(base)
-    return manifests, mt.analyse(manifests)
+    return manifests, analyse_committed(manifests)
 
 
 @pytest.fixture(scope="module")
@@ -116,14 +117,14 @@ def no_null(arm_a_campaign):
     """The gate is shut: the null control is missing."""
     base = with_context(secondary_campaign(without=("null",), gaps={"mqa": 0.05}))
     manifests = base + arm_b_manifests(base)
-    return manifests, mt.analyse(manifests)
+    return manifests, analyse_committed(manifests)
 
 
 @pytest.fixture(scope="module")
 def eight():
     """Eight seeds: the seed-count rule extends the primaries and mla96 and swa256 leave Arm A."""
     manifests = with_context(secondary_campaign(sigma=0.01, n_primary_seeds=8, gaps={"mqa": 0.05}))
-    return manifests, mt.analyse(manifests)
+    return manifests, analyse_committed(manifests)
 
 
 @pytest.fixture(params=["paired", "welch"])
@@ -199,8 +200,8 @@ def test_arm_a_minus_arm_b_is_primary_test_secondary_with_arm_a_first(case):
 
 def test_a_wider_mlp_that_helps_gives_a_negative_arm_a_minus_arm_b(arm_a_campaign):
     # Arm B worse by a constant: Arm A minus Arm B is negative. Arm B better: positive.
-    worse = mt.analyse(arm_a_campaign + arm_b_manifests(arm_a_campaign, offset=0.25, noise=0.0))
-    better = mt.analyse(arm_a_campaign + arm_b_manifests(arm_a_campaign, offset=-0.25, noise=0.0))
+    worse = analyse_committed(arm_a_campaign + arm_b_manifests(arm_a_campaign, offset=0.25, noise=0.0))
+    better = analyse_committed(arm_a_campaign + arm_b_manifests(arm_a_campaign, offset=-0.25, noise=0.0))
     for variant in ARM_B_VARIANTS:
         assert worse.arm_b[variant].arm_a_minus_arm_b.mean_gap < 0
         assert better.arm_b[variant].arm_a_minus_arm_b.mean_gap > 0
@@ -209,7 +210,7 @@ def test_a_wider_mlp_that_helps_gives_a_negative_arm_a_minus_arm_b(arm_a_campaig
 def test_a_missing_arm_b_seed_gives_none_and_a_note_naming_it(paired):
     manifests, _ = paired
     kept = _without(manifests, variant="mqa", arm="isobackbone", seed=2, tokens="100M")
-    analysis = mt.analyse(kept)
+    analysis = analyse_committed(kept)
     result = analysis.arm_b["mqa"]
     assert set(result.losses) == {1, 3}
     assert result.vs_mha is None and result.arm_a_minus_arm_b is None
@@ -222,7 +223,7 @@ def test_a_variant_with_no_arm_b_run_has_empty_losses_and_one_note(paired):
     kept = manifests
     for seed in ARM_B_SEEDS:
         kept = _without(kept, variant="mqa", arm="isobackbone", seed=seed, tokens="100M")
-    analysis = mt.analyse(kept)
+    analysis = analyse_committed(kept)
     result = analysis.arm_b["mqa"]
     assert result.losses == {} and result.vs_mha is None and result.arm_a_minus_arm_b is None
     notes = [n for n in analysis.notes if n.startswith("Arm B mqa")]
@@ -233,7 +234,7 @@ def test_two_learning_rates_for_one_arm_b_variant_raise(paired):
     manifests, _ = paired
     extra = fake_manifest("mqa", arm="iso_backbone", budget="100M", branches=[], init_seed=1, peak_lr=3e-3, val_loss=3.0)
     with pytest.raises(mt.TableError, match="more than one peak learning rate"):
-        mt.analyse(manifests + [extra])
+        analyse_committed(manifests + [extra])
 
 
 def test_without_the_null_control_the_comparisons_wait_and_the_losses_are_listed(no_null):
@@ -247,7 +248,7 @@ def test_without_the_null_control_the_comparisons_wait_and_the_losses_are_listed
 
 
 def test_the_blank_analysis_has_one_empty_result_per_arm_variant_and_no_arm_b_note():
-    blank = mt.analyse([])
+    blank = analyse_committed([])
     assert list(blank.arm_b) == list(ARM_B_VARIANTS)
     for result in blank.arm_b.values():
         assert result.losses == {} and result.arm_a_losses == {}
@@ -294,7 +295,7 @@ def test_primaries_use_the_decision_seeds_and_exploratory_variants_their_three(c
 
 def test_a_result_without_a_val_block_gives_none_and_names_variant_metric_and_seed(paired):
     manifests, _ = paired
-    analysis = mt.analyse(with_val_removed(manifests, variant="gqa4", init_seed=2))
+    analysis = analyse_committed(with_val_removed(manifests, variant="gqa4", init_seed=2))
     cu = analysis.context_use["gqa4"]
     assert cu.late_context is None and cu.icl_score is None
     assert cu.late_context_values[2] is None and cu.icl_values[2] is None
@@ -306,7 +307,7 @@ def test_a_result_without_a_val_block_gives_none_and_names_variant_metric_and_se
 
 def test_a_missing_mha_value_gives_none_for_every_variant_and_names_mha(paired):
     manifests, _ = paired
-    analysis = mt.analyse(with_val_removed(manifests, variant="mha", init_seed=1))
+    analysis = analyse_committed(with_val_removed(manifests, variant="mha", init_seed=1))
     for cu in analysis.context_use.values():
         assert cu.late_context is None and cu.icl_score is None
     assert any(n.startswith("context use: mha late-context loss is missing for seeds [1]") for n in analysis.notes)
@@ -400,7 +401,7 @@ def test_context_md_shows_the_left_arm_variants_and_dashes_when_nothing_is_compu
     text = mt.render_context(analysis)
     assert _cells(text, "swa256")[3] == mt.LEFT_ARM
     assert _cells(text, "mla96")[6] == mt.LEFT_ARM
-    blank_text = mt.render_context(mt.analyse([]))
+    blank_text = mt.render_context(analyse_committed([]))
     assert _first_column(blank_text) == list(CONTEXT_VARIANTS)
     for variant in CONTEXT_VARIANTS:
         assert all(cell == mt.BLANK for cell in _cells(blank_text, variant)[1:])
@@ -418,9 +419,9 @@ def test_main_fills_the_timing_and_decode_columns_from_the_readers(tmp_path, pai
     bench = tmp_path / "bench"
     write_bench_documents(bench, [bench_document(v) for v in DECODE_TOK_PER_S] + [bench_document("mha", "ref")])
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(directory), "--out", str(out), "--timing-pass", str(timing), "--bench", str(bench)]) == 0
+    assert tables_main(["--manifests", str(directory), "--out", str(out), "--timing-pass", str(timing), "--bench", str(bench)]) == 0
     results = mt.select_results(mt.load_manifests(directory))[0]
-    analysis = mt.analyse(results)
+    analysis = analyse_committed(results)
     expected = mt.render_markdown(
         mt.headline_rows(
             analysis,
@@ -487,7 +488,7 @@ def test_main_refusal_exits_one_and_writes_no_file(tmp_path, paired):
     timing = tmp_path / "timing.json"
     write_timing_document(timing, timing_document(shared=True))
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(directory), "--out", str(out), "--timing-pass", str(timing)]) == 1
+    assert tables_main(["--manifests", str(directory), "--out", str(out), "--timing-pass", str(timing)]) == 1
     assert not any((out / name).exists() for name in BLANK_NAMES)
 
 
@@ -500,7 +501,7 @@ def test_rqw_md_equals_render_rqw_of_the_estimate_called_in_the_test(tmp_path, p
     timing = tmp_path / "timing.json"
     write_timing_document(timing, timing_document())
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(directory), "--out", str(out), "--timing-pass", str(timing)]) == 0
+    assert tables_main(["--manifests", str(directory), "--out", str(out), "--timing-pass", str(timing)]) == 0
     expected = mt.render_rqw(rq.estimate(results, tp.read_ms_per_step(timing)), None)
     assert (out / "rqw.md").read_text(encoding="utf-8") == expected
     assert "estimated" in expected and rq.INTERPOLATION in expected
@@ -512,7 +513,7 @@ def test_rqw_waits_for_the_controls_when_the_gate_is_shut(tmp_path, no_null):
     timing = tmp_path / "timing.json"
     write_timing_document(timing, timing_document())
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(directory), "--out", str(out), "--timing-pass", str(timing)]) == 0
+    assert tables_main(["--manifests", str(directory), "--out", str(out), "--timing-pass", str(timing)]) == 0
     text = (out / "rqw.md").read_text(encoding="utf-8")
     assert mt.GATE_WAIT in text
     assert "| variant |" not in text
@@ -522,7 +523,7 @@ def test_rqw_without_a_timing_pass_is_the_blank_form(tmp_path, paired):
     manifests, _ = paired
     directory = _write_manifests(tmp_path / "manifests", manifests)
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(directory), "--out", str(out)]) == 0
+    assert tables_main(["--manifests", str(directory), "--out", str(out)]) == 0
     text = (out / "rqw.md").read_text(encoding="utf-8")
     assert text == mt.render_rqw(None, None)
     assert mt.NO_TIMING in text
@@ -532,14 +533,14 @@ def test_rqw_without_a_timing_pass_is_the_blank_form(tmp_path, paired):
 
 
 def test_committed_blank_files_are_generated_from_no_manifests():
-    blank = mt.analyse([])
+    blank = analyse_committed([])
     assert (BLANK_DIR / "arm_b.md").read_text(encoding="utf-8") == mt.render_arm_b(blank)
     assert (BLANK_DIR / "context.md").read_text(encoding="utf-8") == mt.render_context(blank)
     assert (BLANK_DIR / "rqw.md").read_text(encoding="utf-8") == mt.render_rqw(None, None)
 
 
 def test_main_blank_writes_all_five_files_equal_to_the_committed_ones(tmp_path):
-    assert mt.main(["--blank", "--out", str(tmp_path)]) == 0
+    assert tables_main(["--blank", "--out", str(tmp_path)]) == 0
     for name in BLANK_NAMES:
         assert (tmp_path / name).read_bytes() == (BLANK_DIR / name).read_bytes(), name
 
@@ -552,7 +553,7 @@ def mixed_rates(arm_a_campaign):
     """mqa's Arm B runs at another peak learning rate from its Arm A runs; gqa4 and gqa2 at the same."""
     manifests = arm_a_campaign + arm_b_manifests(arm_a_campaign, variants=("gqa4", "gqa2"))
     manifests += arm_b_manifests(arm_a_campaign, variants=("mqa",), peak_lr=3e-3)
-    return manifests, mt.analyse(manifests)
+    return manifests, analyse_committed(manifests)
 
 
 def _lr_of(manifests, *, variant, arm, tokens, branch=None) -> float:

@@ -662,6 +662,7 @@ def test_verdict_strings():
     assert pt.VERDICT_DETECTED == "detected"
     assert pt.VERDICT_NOT_DETECTED == "not detected"
     assert pt.VERDICT_EXPLORATORY == "exploratory"
+    assert pt.VERDICT_WRONG_DIRECTION == "detected in the wrong direction"  # decision 216
 
 
 def test_the_verdict_scan_finds_a_planted_literal():
@@ -669,7 +670,7 @@ def test_the_verdict_scan_finds_a_planted_literal():
     assert verdict_literals(planted) == [(3, "Not  detected at this scale")]
     assert verdict_literals('x = "undetected"\ny = "detector"\n') == []
     own = (ROOT / "analysis" / "primary_test.py").read_text()
-    assert len(verdict_literals(own)) == 2  # the two constants, defined once each
+    assert len(verdict_literals(own)) == 3  # the three constants, defined once each
 
 
 def test_no_other_code_emits_a_verdict():

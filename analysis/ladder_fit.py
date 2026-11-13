@@ -369,12 +369,14 @@ class SeedCountDecision:
     detectable_in_sigma_init: float  # 5-seed multiplier
     detectable_gap: float  # nats
     slope: float  # ladder b at the primary budget
-    param_multiplier: float  # m = exp(-gap / b)
-    undetectable_param_fraction: float  # 1 - m
+    param_multiplier: float | None  # m = exp(-gap / b); None when the slope is not positive
+    undetectable_param_fraction: float | None  # 1 - m; None when the slope is not positive
     threshold: float
     # What the design that was picked can detect, for the pre-registered bound.
     bound_in_sigma_init: float
     bound_gap: float
+    # Decision 223: a slope that is not positive gives 8 seeds and no parameter equivalent.
+    slope_not_positive: bool = False
 
 
 def seed_count_rule(
@@ -399,17 +401,23 @@ def seed_count_rule(
     sc = prereg["seed_count"]
     base = list(sc["base_seeds"])
     extended_seeds = base + list(sc["added_seeds"])
-    if not fit.b > 0.0:
-        raise LadderError(
-            f"the ladder slope is {fit.b:.6g}: the rule cannot convert a gap into parameters"
-        )
+    if not math.isfinite(fit.b):
+        raise LadderError(f"the ladder slope is {fit.b!r}: the rule needs a finite slope")
+    # Decision 223: a slope that is not positive cannot convert a gap into parameters, and
+    # the rule gives 8 seeds (plan §1.4 gives 8 as the slope falls toward zero).
+    slope_not_positive = fit.b <= 0.0
     sigma_init = sigma_init_at_test_budget(mha_losses, prereg)
     in_sigma = detectable_multiplier(len(base), test, prereg)
     gap = in_sigma * sigma_init
-    m = math.exp(-gap / fit.b)
-    fraction = 1.0 - m
     threshold = sc["max_undetectable_param_fraction"]
-    extended = fraction > threshold
+    if slope_not_positive:
+        m = None
+        fraction = None
+        extended = True
+    else:
+        m = math.exp(-gap / fit.b)
+        fraction = 1.0 - m
+        extended = fraction > threshold
     n_seeds = len(extended_seeds) if extended else len(base)
     bound_in_sigma = detectable_multiplier(n_seeds, test, prereg)
     return SeedCountDecision(
@@ -427,4 +435,5 @@ def seed_count_rule(
         threshold=threshold,
         bound_in_sigma_init=bound_in_sigma,
         bound_gap=bound_in_sigma * sigma_init,
+        slope_not_positive=slope_not_positive,
     )

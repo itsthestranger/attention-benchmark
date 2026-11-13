@@ -1,0 +1,9 @@
+# The two declarations Phil makes during the campaign, by pull request at the gate (decision 220).
+#
+# ladder: `full`, or `l6_l8` for the ladder cut to L6 and L8 (plan §12.2 item 4). Declared
+#   before either result is looked at.
+# seed_count: null until the seed-count rule (plan §1.4) has printed 5 or 8; then that number.
+#   While it is null, or differs from what the rule prints, the tables test no primary and no
+#   exploratory comparison.
+ladder: full
+seed_count: null
