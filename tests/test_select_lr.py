@@ -111,7 +111,7 @@ def test_the_blank_report_has_every_section_and_no_decision(tmp_path):
         assert "**lr_source:** —" in body
 
 
-def test_the_blank_report_needs_no_sweep_seed_and_reads_no_manifests(tmp_path):
+def test_the_blank_report_reads_no_manifests(tmp_path):
     assert sel.main(["--blank", "--manifests", str(tmp_path / "missing"), "--out", str(tmp_path)]) == 0
 
 
@@ -130,8 +130,7 @@ def full(tmp_path_factory):
     manifests = mt.load_manifests(directory)
     choices, points, notes = sel.build(manifests, SWEEP_SEED)
     out = tmp_path_factory.mktemp("out")
-    assert sel.main(["--manifests", str(directory), "--sweep-seed", str(SWEEP_SEED),
-                     "--out", str(out)]) == 0
+    assert sel.main(["--manifests", str(directory), "--out", str(out)]) == 0
     return choices, points, (out / "lr_sweep.md").read_text(encoding="utf-8")
 
 
@@ -287,7 +286,7 @@ def test_variants_wait_for_mha_when_mha_is_not_chosen(tmp_path):
     manifests += [sweep_run("gqa4", 1.2e-3, 3.5)]
     out = tmp_path / "out"
     assert sel.main(["--manifests", str(write(manifests, tmp_path / "m")),
-                     "--sweep-seed", str(SWEEP_SEED), "--out", str(out)]) == 0
+                     "--out", str(out)]) == 0
     text = (out / "lr_sweep.md").read_text(encoding="utf-8")
     assert "**Status:** incomplete" in section(text, "mha")
     assert "waiting for MHA's sweep" in section(text, "gqa4")
@@ -302,8 +301,7 @@ def test_variants_wait_for_the_noise_floor_when_arm_n_is_missing(tmp_path):
     assert choices[sw.REFERENCE].status == sw.CHOSEN
     assert "gqa4" not in choices
     assert notes  # the analysis says what is missing
-    assert sel.main(["--manifests", str(directory), "--sweep-seed", str(SWEEP_SEED),
-                     "--out", str(tmp_path / "out")]) == 0
+    assert sel.main(["--manifests", str(directory), "--out", str(tmp_path / "out")]) == 0
     text = (tmp_path / "out" / "lr_sweep.md").read_text(encoding="utf-8")
     assert "waiting for the noise floor" in section(text, "gqa4")
     assert "**Status:** chosen" in section(text, "mha")
@@ -316,8 +314,7 @@ def test_a_sweep_in_which_every_point_diverged_is_refused(tmp_path):
     manifests = mha_sweep({lr: None for lr in sw.MHA_GRID})
     directory = write(manifests, tmp_path / "m")
     out = tmp_path / "out"
-    assert sel.main(["--manifests", str(directory), "--sweep-seed", str(SWEEP_SEED),
-                     "--out", str(out)]) != 0
+    assert sel.main(["--manifests", str(directory), "--out", str(out)]) != 0
     assert not (out / "lr_sweep.md").exists()
 
 
@@ -325,14 +322,49 @@ def test_unreadable_manifests_are_refused(tmp_path):
     directory = tmp_path / "m"
     directory.mkdir()
     (directory / "broken.json").write_text("{not json", encoding="utf-8")
-    assert sel.main(["--manifests", str(directory), "--sweep-seed", str(SWEEP_SEED),
-                     "--out", str(tmp_path / "out")]) != 0
+    assert sel.main(["--manifests", str(directory), "--out", str(tmp_path / "out")]) != 0
 
 
-def test_a_sweep_seed_is_required_unless_blank(tmp_path):
+def test_the_sweep_seed_is_the_registered_one_and_not_a_flag(tmp_path, capsys):
+    """Decision 219: `lr_sweep.init_seed` of configs/prereg.yaml, one seed that no arm uses."""
+    prereg = config.load_prereg()
+    assert prereg["lr_sweep"] == {"init_seed": SWEEP_SEED}
+    assert sw.registered_sweep_seed(prereg) == SWEEP_SEED
     with pytest.raises(SystemExit) as refused:
-        sel.main(["--out", str(tmp_path)])
-    assert refused.value.code != 0
+        sel.main(["--blank", "--out", str(tmp_path), "--sweep-seed", str(SWEEP_SEED)])
+    assert refused.value.code == 2
+    capsys.readouterr()
+
+
+def test_the_report_reads_the_runs_of_the_registered_seed_only(tmp_path, monkeypatch, capsys):
+    directory = write(full_sweep(), tmp_path / "m")
+    assert sel.main(["--manifests", str(directory), "--out", str(tmp_path / "a")]) == 0
+    assert f"**Rate to use:** {mf.format_lr(REF)}" in section((tmp_path / "a" / sel.REPORT_NAME).read_text(encoding="utf-8"), "mha")
+    # Under another registered sweep seed the same manifests hold no sweep run at all.
+    other = config.load_prereg()
+    other["lr_sweep"]["init_seed"] = SWEEP_SEED + 1
+    monkeypatch.setattr(config, "load_prereg", lambda: other)
+    assert sel.main(["--manifests", str(directory), "--out", str(tmp_path / "b")]) == 0
+    capsys.readouterr()
+    text = (tmp_path / "b" / sel.REPORT_NAME).read_text(encoding="utf-8")
+    assert f"- Sweep seed: {SWEEP_SEED + 1}" in text
+    assert "**Rate to use:** —" in section(text, "mha")
+
+
+@pytest.mark.parametrize("broken", ["registered", "missing", "not a seed"])
+def test_a_prereg_without_a_usable_sweep_seed_refuses_the_report(tmp_path, monkeypatch, capsys, broken):
+    prereg = config.load_prereg()
+    if broken == "registered":
+        prereg["lr_sweep"]["init_seed"] = prereg["seed_count"]["base_seeds"][0]
+    elif broken == "missing":
+        del prereg["lr_sweep"]
+    else:
+        prereg["lr_sweep"]["init_seed"] = "21"
+    monkeypatch.setattr(config, "load_prereg", lambda: prereg)
+    directory = write(full_sweep(), tmp_path / "m")
+    assert sel.main(["--manifests", str(directory), "--out", str(tmp_path / "out")]) != 0
+    assert "sweep seed" in capsys.readouterr().err
+    assert not (tmp_path / "out" / sel.REPORT_NAME).exists()
 
 
 def test_a_trunk_checkpoint_in_the_manifests_does_not_refuse_the_report(tmp_path):

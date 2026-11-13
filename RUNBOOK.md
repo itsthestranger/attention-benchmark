@@ -12,7 +12,6 @@ Read plan §11 and §13 before the first run. Three rules that no command enforc
 
 | Item | Blocks | Who |
 | --- | --- | --- |
-| The sweep seed (`SWEEP_SEED`). Recommended: one seed that no arm uses, for example 21. A sweep on seed 1, 2 or 3 collides with a reproducibility rerun by name and config hash. | Every LR sweep (§2.4, §2.7) | Phil |
 | The probe grid: which probes at which sizes, for which models, with how many seeds, and one width, step count and learning rate per point (`STATUS.md`, open questions). The scripts exist: `scripts/train_probe.py`, `scripts/probe_report.py`. | §2.3, Gate 1 | Phil |
 | The Kaggle image's torch, Python and CUDA versions. | Pinning (§1.5) | Phil |
 | Two proposed thresholds in `configs/prereg.yaml` (`paired_if_s_rep_ratio_below: 0.6`, `max_undetectable_param_fraction: 0.05`). | Pre-registration (§1.7) | Phil |
@@ -30,6 +29,7 @@ export DATA=/kaggle/input/attention-benchmark-tokens   # the prepared dataset, r
 export OUT=/kaggle/working/out                         # checkpoints, manifests, tables, plots
 export BACKEND=efficient                               # the fused kernel on sm75 (plan §2.3)
 export SHARED=no                                       # yes while a second job uses the same GPU
+export SWEEP_SEED=21                                   # lr_sweep.init_seed of configs/prereg.yaml: the seed of every sweep run, used by no arm
 ```
 
 - A T4 ×2 session runs two independent jobs, one per GPU, each started with `CUDA_VISIBLE_DEVICES=0` or `=1` in front of the command. No DDP (plan §2.2). While two jobs run on one GPU, or when Kaggle co-locates them, set `SHARED=yes`: the manifest records it. Jobs that produce a timing number run alone on the box and refuse a shared GPU.
@@ -176,7 +176,7 @@ for LR in 3e-4 6e-4 1.2e-3 2.4e-3 4.8e-3; do
   python -m scripts.train --variant mha --init-seed $SWEEP_SEED --peak-lr $LR --budget 100M --branches \
     --data $DATA --out $OUT --gpu-shared $SHARED --expected-backend $BACKEND
 done
-python -m scripts.select_lr --manifests $OUT/manifests/opt --sweep-seed $SWEEP_SEED --out $OUT/tables
+python -m scripts.select_lr --manifests $OUT/manifests/opt --out $OUT/tables
 ```
 
 Check `$OUT/tables/lr_sweep.md`, section `mha`:
@@ -258,7 +258,7 @@ for l in mha_L6 mha_L10; do
       --data $DATA --out $OUT --gpu-shared $SHARED --expected-backend $BACKEND
   done
 done
-python -m scripts.select_lr --manifests $OUT/manifests/opt --sweep-seed $SWEEP_SEED --out $OUT/tables
+python -m scripts.select_lr --manifests $OUT/manifests/opt --out $OUT/tables
 ```
 
 Check `lr_sweep.md`, one section per name: follow `incomplete` and `extend` as in §2.4 until every section says `chosen`. The rule that decided is printed: "tie rule" means the variant's best rate beat MHA's by less than `sigma_init` and MHA's rate is used (plan §7.4). Record, for every name, the rate and the `lr_source` run. The shared-recipe and tuned losses are printed side by side; that gap is itself a finding to report.

@@ -1,11 +1,14 @@
 """The learning-rate sweep report (plan §7.4), built from run manifests and nothing else.
 
-    python -m scripts.select_lr --sweep-seed 21 --manifests results/manifests --out results/tables
+    python -m scripts.select_lr --manifests results/manifests --out results/tables
     python -m scripts.select_lr --blank --out results/tables/blank
 
 MHA is swept first with the five points of plan §7.4; every other headline variant
 and both ladder sizes are then swept with the three points around MHA's rate. Each
 name's rate is chosen by the rules of `analysis/lr_sweep.py`. Nothing is typed by hand.
+
+The sweep runs are those on the init seed `lr_sweep.init_seed` of `configs/prereg.yaml`
+(decision 219): one seed that no arm uses, registered and not a command-line choice.
 
 The exit status is 0 when the report was written, whatever the statuses. It is
 non-zero only on a refusal: unreadable manifests, or a sweep the rules cannot read.
@@ -187,20 +190,15 @@ def render(choices: Mapping[str, sw.Choice], points: Mapping[str, Sequence[sw.Po
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the learning-rate sweep report.")
     parser.add_argument("--manifests", default="results/manifests", help="directory of manifests")
-    parser.add_argument("--sweep-seed", type=int, default=None,
-                        help="the init seed of the sweep runs (required unless --blank)")
     parser.add_argument("--out", default="results/tables", help="directory to write lr_sweep.md to")
     parser.add_argument("--blank", action="store_true",
                         help="ignore --manifests; write the report for no runs")
     args = parser.parse_args(argv)
-    if not args.blank and args.sweep_seed is None:
-        parser.error("--sweep-seed is required unless --blank is given")
 
-    sweep_seed = None if args.blank else args.sweep_seed
     try:
-        # Refused before anything is read: a sweep on an arm's seed would mix the sweep into the arm.
-        if sweep_seed is not None:
-            sw.check_sweep_seed(sweep_seed, config.load_prereg())
+        # The registered sweep seed. Refused before anything is read if an arm uses it: a sweep on
+        # an arm's seed would mix the sweep into the arm.
+        sweep_seed = None if args.blank else sw.registered_sweep_seed(config.load_prereg())
         manifests = [] if args.blank else mt.load_manifests(args.manifests)
         choices, points, sigma_notes = build(manifests, sweep_seed)
     except (sw.SweepError, mt.TableError, mf.ManifestError) as exc:

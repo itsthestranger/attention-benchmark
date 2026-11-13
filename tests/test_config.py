@@ -363,6 +363,27 @@ def test_prereg_exploratory_and_controls():
     }
 
 
+def test_prereg_sweep_seed_is_one_no_arm_uses():
+    """Decision 219: every learning-rate sweep runs on init seed 21."""
+    p = config.load_prereg()
+    assert p["lr_sweep"] == {"init_seed": 21}
+    used = (
+        set(p["seed_count"]["base_seeds"]) | set(p["seed_count"]["added_seeds"])
+        | set(p["null_control"]["init_seeds"]) | set(p["exploratory"]["init_seeds"])
+        | set(p["positive_control"]["init_seeds"]) | set(p["test_selection"]["sigma_init"]["init_seeds"])
+        | set(p["test_selection"]["reproducibility_pairs"]["init_seeds"])
+    )
+    assert p["lr_sweep"]["init_seed"] not in used
+
+
+def test_prereg_thresholds_are_confirmed_not_proposed():
+    """Decision 221: 0.6 and 0.05, and the file no longer calls them proposals."""
+    p = config.load_prereg()
+    assert p["test_selection"]["paired_if_s_rep_ratio_below"] == 0.6
+    assert p["seed_count"]["max_undetectable_param_fraction"] == 0.05
+    assert "PROPOS" not in (CONFIGS / "prereg.yaml").read_text().upper()
+
+
 def test_prereg_context_use():
     cu = config.load_prereg()["context_use"]
     assert cu["buckets"] == [[0, 64], [64, 256], [256, 512], [512, 1024]]
