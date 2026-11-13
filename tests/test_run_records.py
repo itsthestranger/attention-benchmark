@@ -284,6 +284,62 @@ def test_a_branch_session_resets_its_peak_statistics_and_reads_its_own(
     assert m["final_metrics"]["peak_memory"] == {"allocated_bytes": THIRD[0], "reserved_bytes": THIRD[1]}
 
 
+def test_the_reading_after_the_final_evaluation_counts(specs, synthetic, trunk_resolved, monkeypatch, tmp_path):
+    """The final evaluation is part of the finishing session: its peak can be the session's peak.
+
+    Every reading grows, so the last reading is the largest. It is taken after final_metrics has
+    returned; the checkpoint readings all come before the final evaluation starts.
+    """
+    log = []
+    calls = {"n": 0}
+
+    def growing_peak(device):
+        calls["n"] += 1
+        log.append(("reading", calls["n"]))
+        return {"allocated_bytes": calls["n"], "reserved_bytes": calls["n"]}
+
+    real_final_metrics = rc.final_metrics
+
+    def logged_final_metrics(trainer, job, curve_entries):
+        log.append(("final", "start"))
+        result = real_final_metrics(trainer, job, curve_entries)
+        log.append(("final", "end"))
+        return result
+
+    monkeypatch.setattr(rc, "peak_memory", growing_peak)
+    monkeypatch.setattr(rc, "final_metrics", logged_final_metrics)
+    out = tmp_path / "after_final"
+    assert run_train(specs.trunk, out, synthetic.root) == 0
+    start = log.index(("final", "start"))
+    end = log.index(("final", "end"))
+    before = [v for kind, v in log[:start] if kind == "reading"]
+    after = [v for kind, v in log[end + 1:] if kind == "reading"]
+    assert before and after, "the run must take readings at a checkpoint and after the final evaluation"
+    last = after[-1]
+    assert last > max(before)
+    m = manifest_of(out, "opt", mf.run_name(trunk_resolved))
+    assert m["final_metrics"]["peak_memory"] == {"allocated_bytes": last, "reserved_bytes": last}
+
+
+def test_a_session_stopped_before_any_cadence_checkpoint_records_its_peak(
+    specs, synthetic, trunk_resolved, readings, tmp_path
+):
+    """Stop at step 3, below the checkpoint cadence (8): no hook records this session.
+
+    The first session's reading is the larger, so the manifest reports it, not the finishing session's.
+    """
+    out = tmp_path / "stop_early"
+    readings["pair"] = (900, 800)
+    assert run_train(specs.trunk, out, synthetic.root, extra=("--until", "3")) == 0
+    peaks = json.loads((ckpt_dir_of(out, "opt", trunk_resolved) / rc.PEAK_FILE).read_text(encoding="utf-8"))
+    assert list(peaks.values()) == [{"allocated_bytes": 900, "reserved_bytes": 800}]
+    readings["pair"] = (100, 200)
+    assert run_train(specs.trunk, out, synthetic.root) == 0
+    m = manifest_of(out, "opt", mf.run_name(trunk_resolved))
+    assert len(m["session_ids"]) == 2
+    assert m["final_metrics"]["peak_memory"] == {"allocated_bytes": 900, "reserved_bytes": 800}
+
+
 def test_the_peak_file_is_not_a_checkpoint(reference, trunk_resolved):
     directory = ckpt_dir_of(reference("opt"), "opt", trunk_resolved)
     assert (directory / rc.PEAK_FILE).is_file()
