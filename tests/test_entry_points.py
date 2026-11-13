@@ -284,7 +284,7 @@ def test_cold_start_writes_a_valid_completed_manifest(reference, trunk_resolved,
     assert m["data"]["tokenizer_sha256"] == synthetic.meta["tokenizer_sha256"]
     stream = rc.make_stream(rc.open_data(synthetic.root, trunk_resolved, str(synthetic.pinned)), trunk_resolved)
     assert m["data"]["order_sha256"] == stream.order_sha256
-    assert set(m["final_metrics"]) == {"val_loss", "test_loss", "train_loss", "val", "test", "val_curve"}
+    assert set(m["final_metrics"]) == {"val_loss", "test_loss", "train_loss", "val", "test", "val_curve", "peak_memory"}
     assert m["resume_count"] == 0 and len(m["session_ids"]) == 1
     assert m["backend"] is None and m["precision"] == "fp32" and m["mode"] == "opt"
     assert m["gpu_shared"] is False and m["branch"] is None and m["lr_source"] is None
