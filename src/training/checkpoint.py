@@ -7,7 +7,8 @@ A checkpoint directory is ``checkpoint_dir(root, resolved)``, that is
 never share one. Inside it:
 
     step{step:08d}.pt          regular checkpoints; the newest ``keep`` (default 2) survive
-    trunk-step{step:08d}.pt    branch-point checkpoints; never pruned here
+    trunk-step{step:08d}.pt    branch-point checkpoints; never pruned here, and never
+                               overwritten while they load (a damaged one is replaced)
     .ckpt-*.tmp                a write in progress; removed on failure, ignored by listings
 
 Guarantees
@@ -18,17 +19,21 @@ Guarantees
   regular checkpoints are kept so that a truncated newest file still leaves a fallback.
 - Complete: a checkpoint holds the model weights (fp32 master weights, moved to the CPU),
   the optimizer state, the GradScaler state (None when scaling is off), the step records,
-  the torch RNG state, the CUDA RNG states when the machine has CUDA, and the full
-  resolved configuration.
+  the torch RNG state, the CUDA RNG states when the machine has CUDA, the full resolved
+  configuration, and the environment it was written in (``current_environment()``).
 - Position is ``trainer.step`` and nothing else. The data stream and the learning-rate
   schedule are pure functions of the step, so restoring the step restores both. No other
   position is stored.
-- Checked before changed: ``restore`` refuses a state whose config hash, mode or precision
-  differ from the trainer's, or a trainer that has already taken a step, before it touches
-  the trainer.
-- Automatic: ``resume_or_start`` finds the newest checkpoint that loads, from the
-  configuration alone. Nothing here asks a question, reads input, seeds the global RNG or
-  draws from it.
+- Environment: a state written under another torch, CUDA, driver or GPU is refused by
+  ``restore``. Other fields (Python, for example) are stored but not compared. A checkpoint
+  without an environment does not load.
+- Checked before changed: ``restore`` refuses a state whose config hash, mode, precision or
+  environment differ from the trainer's, or a trainer that has already taken a step, before
+  it touches the trainer.
+- Automatic: ``resume_or_start`` restores the newest checkpoint of the configuration that
+  loads, regular or branch point; at the same step the regular one wins. A file that does
+  not load is skipped. A refusal by ``restore`` is not skipped: it propagates. Nothing here
+  asks a question, reads input, seeds the global RNG or draws from it.
 """
 
 from __future__ import annotations
@@ -48,8 +53,12 @@ import torch
 
 from src import config
 from src.training.trainer import StepRecord
+from src.utils import manifest as mf
 
 SCHEMA_VERSION = 1
+
+# The environment fields a resume compares. The other fields of the environment are stored, not compared.
+ENV_FIELDS = ("torch", "cuda", "driver", "gpu_name")
 
 _STEP_FILE = re.compile(r"step([0-9]+)\.pt")
 _BRANCH_FILE = re.compile(r"trunk-step([0-9]+)\.pt")
@@ -68,6 +77,7 @@ _REQUIRED_KEYS = (
     "torch_rng_state",
     "resume_count",
     "branch_point",
+    "environment",
 )
 _RECORD_FIELDS = len(dataclasses.fields(StepRecord))
 
@@ -91,6 +101,14 @@ def checkpoint_dir(root, resolved) -> Path:
 def _file_name(step: int, branch_point: bool) -> str:
     prefix = "trunk-" if branch_point else ""
     return f"{prefix}step{step:08d}.pt"
+
+
+def current_environment() -> dict:
+    """The environment this process runs in: ``src.utils.manifest.collect_environment()``.
+
+    Every use in this module goes through this function, so a test can replace it.
+    """
+    return mf.collect_environment()
 
 
 def _listing(directory, pattern: re.Pattern) -> list[Path]:
@@ -138,6 +156,7 @@ def _capture(trainer, *, branch_point: bool, resume_count: int) -> dict:
         "cuda_rng_state": cuda_rng,
         "resume_count": resume_count,
         "branch_point": branch_point,
+        "environment": current_environment(),
     }
 
 
@@ -168,14 +187,28 @@ def save_checkpoint(trainer, directory, *, branch_point: bool = False, keep: int
     Regular checkpoints are named ``step{step:08d}.pt``; branch points are named
     ``trunk-step{step:08d}.pt``. Afterwards only the newest ``keep`` regular checkpoints
     remain.
+
+    A branch point that already exists and loads is never overwritten: the save raises
+    CheckpointError naming the file, and the directory is left as it was. A branch point
+    that exists but does not load is replaced.
     """
     if not _is_int(keep) or keep < 1:
         raise ValueError(f"keep must be an int >= 1, got {keep!r}")
     if not _is_int(resume_count) or resume_count < 0:
         raise ValueError(f"resume_count must be an int >= 0, got {resume_count!r}")
     directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
     final = directory / _file_name(trainer.step, branch_point)
+    if branch_point and final.exists():
+        try:
+            load_checkpoint(final)
+        except CheckpointError:
+            pass  # damaged: replaced below
+        else:
+            raise CheckpointError(
+                f"{final.name}: a branch point of step {trainer.step} already exists in {directory}; "
+                "it is never overwritten"
+            )
+    directory.mkdir(parents=True, exist_ok=True)
     state = _capture(trainer, branch_point=branch_point, resume_count=resume_count)
     _write_atomic(state, final)
     _prune(directory, keep)
@@ -225,6 +258,9 @@ def _validate(state: object) -> None:
         raise CheckpointError("mode and precision must be strings")
     if not isinstance(state["branch_point"], bool):
         raise CheckpointError("branch_point must be a bool")
+    environment = state["environment"]
+    if not isinstance(environment, dict) or any(field not in environment for field in ENV_FIELDS):
+        raise CheckpointError(f"environment must be a dict holding {', '.join(ENV_FIELDS)}")
     if not isinstance(state["model"], dict) or not all(torch.is_tensor(v) for v in state["model"].values()):
         raise CheckpointError("model must be a dict of tensors")
     if not isinstance(state["optimizer"], dict):
@@ -310,6 +346,16 @@ def _cuda_rng_for(trainer, state: dict) -> list | None:
     return saved
 
 
+def _check_environment(saved: dict, now: dict) -> None:
+    """Refuse a state written under another torch, CUDA, driver or GPU (plan §0, §10.6)."""
+    for field in ENV_FIELDS:
+        if saved[field] != now.get(field):
+            raise CheckpointError(
+                f"the checkpoint was written with {field} {saved[field]!r}, this machine has "
+                f"{field} {now.get(field)!r}; a resume needs the same {field}"
+            )
+
+
 def restore(trainer, state: dict) -> None:
     """Put a loaded state into a fresh trainer built from the same resolved configuration.
 
@@ -324,6 +370,7 @@ def restore(trainer, state: dict) -> None:
         raise CheckpointError(
             f"the checkpoint is precision {state['precision']!r}, the trainer is {trainer.precision!r}"
         )
+    _check_environment(state["environment"], current_environment())
     if trainer.step != 0 or trainer.steps_taken != 0 or trainer.records:
         raise CheckpointError("the trainer has already taken a step; restore into a fresh trainer")
     if state["step"] > trainer.total_steps:
@@ -356,17 +403,37 @@ class ResumeInfo:
     resume_count: int         # how many times this run has been resumed, this time included
 
 
-def resume_or_start(trainer, root) -> ResumeInfo:
-    """Restore the newest valid checkpoint of this trainer's configuration, or start fresh.
+def _newest_first(directory) -> list[Path]:
+    """Regular and branch-point checkpoints of one directory, newest step first.
 
-    Branch points are not resumed from; they belong to branches.
+    At the same step the regular checkpoint comes first.
     """
-    found = latest_valid_checkpoint(checkpoint_dir(root, trainer.resolved))
-    if found is None:
-        return ResumeInfo(step=0, path=None, resume_count=0)
-    path, state = found
-    restore(trainer, state)
-    return ResumeInfo(step=trainer.step, path=path, resume_count=state["resume_count"] + 1)
+    keyed = []
+    for path in list_checkpoints(directory):
+        keyed.append((int(_STEP_FILE.fullmatch(path.name).group(1)), 1, path))
+    for path in list_branch_points(directory):
+        keyed.append((int(_BRANCH_FILE.fullmatch(path.name).group(1)), 0, path))
+    keyed.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    return [path for _, _, path in keyed]
+
+
+def resume_or_start(trainer, root) -> ResumeInfo:
+    """Restore the newest checkpoint of this trainer's configuration, or start fresh.
+
+    Regular checkpoints and branch points of the configuration's own directory are both
+    candidates, newest step first; at the same step the regular one is taken. A file that
+    does not load is skipped. A checkpoint that loads but that ``restore`` refuses (another
+    configuration, mode, precision or environment) is not skipped: the refusal propagates,
+    and the trainer is unchanged.
+    """
+    for path in _newest_first(checkpoint_dir(root, trainer.resolved)):
+        try:
+            state = load_checkpoint(path)
+        except CheckpointError:
+            continue  # damaged: skipped, not deleted
+        restore(trainer, state)
+        return ResumeInfo(step=trainer.step, path=path, resume_count=state["resume_count"] + 1)
+    return ResumeInfo(step=0, path=None, resume_count=0)
 
 
 # --- The on_step hook --------------------------------------------------------------------------
