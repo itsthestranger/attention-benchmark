@@ -411,3 +411,58 @@ def test_existing_comparisons_and_notes_do_not_change_with_ignored_runs():
     assert with_extra.multipliers == plain.multipliers
     assert with_extra.notes == plain.notes
     assert with_extra.shared_rate == {} == plain.shared_rate
+
+
+# --- Added by the orchestrator in review: three breaks the tests above did not catch ----------------
+
+
+def test_runs_that_no_comparison_reads_stay_outside_the_steps_parity_check(moved):
+    """Only a shared-rate run is read. A standalone 100M run on seeds 1 to 3 at MHA's rate of a variant
+    that itself runs at MHA's rate, or of a ladder size, is read by nothing, so a skippy one must not
+    stop the tables (plan §13.6: parity is checked among the runs a comparison reads)."""
+    manifests, analysis = moved
+    same_rate_variant = next(v for v in HEADLINE_NON_MHA if v != VARIANT and analysis.peak_lr.get(v) == MHA_RATE)
+    skippy_same_rate = with_skips(standalone(same_rate_variant, 1, MHA_RATE, 3.3), 8)
+    skippy_ladder = with_skips(
+        fake_manifest("mha", ladder="mha_L6", budget="100M", branches=[], init_seed=1, peak_lr=MHA_RATE, val_loss=3.3), 8
+    )
+    for extra in (skippy_same_rate, skippy_ladder):
+        again = analyse_committed(manifests + [extra])
+        assert again.shared_rate == analysis.shared_rate and again.comparisons == analysis.comparisons
+
+
+def test_a_ladder_size_on_its_own_rate_gets_no_shared_rate_result_and_its_runs_are_not_read():
+    """Decision 224: the ladder sizes get no such runs. With mha_L6 moved to its own rate, a skippy
+    standalone 100M L6 run at MHA's rate on seed 1 is read by nothing."""
+    base = secondary_campaign(gaps={VARIANT: 0.05})
+    moved_ladder = []
+    for manifest in base:
+        parsed = mf.parse_run_name(manifest["name"])
+        if parsed.variant != "mha_L6":
+            moved_ladder.append(manifest)
+            continue
+        extra = {"branch": parsed.branch} if parsed.branch else {}
+        moved_ladder.append(fake_manifest(
+            "mha", ladder="mha_L6", init_seed=parsed.init_seed, peak_lr=OWN_RATE,
+            val_loss=float(manifest["final_metrics"]["val_loss"]), **extra,
+        ))
+    assert moved_ladder != base
+    plain = analyse_committed(moved_ladder)
+    assert plain.shared_rate == {} and plain.peak_lr["mha_L6"] == OWN_RATE
+    skippy = with_skips(
+        fake_manifest("mha", ladder="mha_L6", budget="100M", branches=[], init_seed=1, peak_lr=MHA_RATE, val_loss=3.3), 8
+    )
+    again = analyse_committed(moved_ladder + [skippy])
+    assert again.shared_rate == {} and again.comparisons == plain.comparisons
+    assert not any(note.startswith("shared-rate runs:") for note in again.notes)
+
+
+def test_two_variants_on_their_own_rates_come_in_headline_order():
+    first, second = "gqa2", "mqa"  # headline order is mqa before gqa2
+    assert mt.HEADLINE_VARIANTS.index(second) < mt.HEADLINE_VARIANTS.index(first)
+    base = secondary_campaign(gaps={VARIANT: 0.05})
+    manifests = at_rate(at_rate(base, first, OWN_RATE), second, OWN_RATE)
+    manifests = manifests + shared_runs(manifests, first) + shared_runs(manifests, second)
+    analysis = analyse_committed(manifests)
+    assert list(analysis.shared_rate) == [second, first]
+    assert all(result.tuned_minus_shared is not None for result in analysis.shared_rate.values())
