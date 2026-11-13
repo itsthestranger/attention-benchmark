@@ -31,6 +31,7 @@ from scripts import make_plots as mp
 from scripts import make_tables as mt
 from src import config
 from src.utils import manifest as mf
+from tests.fixtures import fake_plot_inputs as fpi
 from tests.fixtures.commitments import committed, write_commitments
 from tests.fixtures.fake_campaign import fake_campaign
 from tests.fixtures.synthetic_losses import synthetic_ladder
@@ -344,6 +345,45 @@ def test_the_headline_table_has_no_verdict_without_the_commitment(campaign):
 
     assert mt.BLANK not in verdicts(done) and pt.VERDICT_DETECTED in verdicts(done)
     assert set(verdicts(uncommitted)) == {mt.BLANK}
+
+
+@pytest.fixture(scope="module")
+def eight_seed_campaign() -> list[dict]:
+    campaign_ = fpi.with_eval_fields(fake_campaign(sigma=0.01, n_primary_seeds=8, gaps={"mqa": 0.05}))
+    assert committed(campaign_)["seed_count"] == 8, "this synthetic campaign is meant to ask for 8 seeds"
+    return campaign_
+
+
+def test_an_uncommitted_eight_seed_rule_does_not_show_through_the_tables(eight_seed_campaign):
+    """Break 13 and 14 of the T-47 review: "left Arm A" is a consequence of the seed count, so the
+    headline and the context table say it only once the count is committed."""
+    done = mt.analyse(eight_seed_campaign, commitments=committed(eight_seed_campaign))
+    uncommitted = mt.analyse(eight_seed_campaign, commitments={"ladder": FULL, "seed_count": None})
+    wrong = mt.analyse(eight_seed_campaign, commitments={"ladder": FULL, "seed_count": 5})
+    assert uncommitted.decision == done.decision and done.decision.extended
+
+    def headline_verdicts_of(a):
+        return [row["verdict"] for row in mt.headline_rows(a)]
+
+    assert headline_verdicts_of(done).count(mt.LEFT_ARM) == len(done.decision.leaves_arm_a) == 2
+    assert mt.LEFT_ARM in mt.render_context(done)
+    for a in (uncommitted, wrong):
+        assert mt.LEFT_ARM not in headline_verdicts_of(a)
+        assert mt.LEFT_ARM not in mt.render_context(a)
+
+
+def test_context_use_waits_for_the_commitment():
+    """Break 15 of the T-47 review, on runs that carry context values."""
+    campaign_ = fpi.with_eval_fields(fake_campaign(gaps={"mqa": 0.05}))
+    done = mt.analyse(campaign_, commitments=committed(campaign_))
+    assert all(use.late_context is not None and use.icl_score is not None for use in done.context_use.values())
+    for seed_count in (None, 8):
+        a = mt.analyse(campaign_, commitments={"ladder": FULL, "seed_count": seed_count})
+        # As without any decision: no context-use gap against MHA is computed.
+        assert all(use.late_context is None and use.icl_score is None for use in a.context_use.values())
+        assert a.context_use == mt.analyse(
+            [m for m in campaign_ if "mha_L" not in m["name"]], commitments={"ladder": FULL, "seed_count": None}
+        ).context_use
 
 
 def test_a_seed_count_committed_before_the_rule_has_a_decision_computes_nothing():
