@@ -485,6 +485,15 @@ done
 
 ### 5.3 Inference benchmark (alone on the box)
 
+First a trial of one repetition for two variants, to see that every point fits in memory in both modes; its files are not results:
+
+```bash
+python -m scripts.bench --device cuda --gpu-shared false --expected-backend $BACKEND --with-ref \
+  --repetitions 1 --variants mha mla192 --out-dir $OUT/bench_trial
+```
+
+Then the benchmark:
+
 ```bash
 python -m scripts.bench --device cuda --gpu-shared false --expected-backend $BACKEND --with-ref \
   --out-dir $OUT/bench
@@ -496,7 +505,7 @@ python -m scripts.timing_report --timing-pass $OUT/timing/timing_pass.json --ben
 
 The benchmark measures every point three times, round-robin over the variants, and reports the median with the smallest and largest value (plan §18, A16); allow three times the time of a single pass.
 
-Check: one file per variant and mode, and `$OUT/tables/inference.md` with a prefill table, a decode table and a KV line for each, every timing with its range over the three repetitions. The benchmark fails if measured and analytic KV bytes differ by more than 5%. `ref` mode at batch 32 and cache 8k may run out of memory; narrow `--decode-batches` or `--decode-caches` for a second `ref` pass and say so. Two things to disclose with the numbers: the sliding-window cache allocates up to twice its 256-token cap, and MLA's absorbed matrices are a fixed cost per cache outside the KV bytes per token.
+Check: one file per variant and mode, and `$OUT/tables/inference.md` with a prefill table, a decode table and a KV line for each, every timing with its range over the three repetitions. The benchmark fails if measured and analytic KV bytes differ by more than 5%. The files are written after the last repetition, so an out-of-memory error in any track ends the benchmark with nothing written. `ref` mode at batch 32 and cache 8k may run out of memory: find that out first with one repetition into a scratch directory (the command below), and if it does not fit, narrow `--decode-batches` or `--decode-caches` for the real run and say so. Two things to disclose with the numbers: the sliding-window cache allocates up to twice its 256-token cap, and MLA's absorbed matrices are a fixed cost per cache outside the KV bytes per token.
 
 ### 5.4 Shared-rate runs (3 seeds at 100M for each Arm A variant on its own rate)
 
