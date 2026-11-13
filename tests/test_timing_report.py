@@ -56,10 +56,28 @@ def hand_timing_doc() -> dict:
 
 
 def hand_bench_doc(variant: str = "mha", mode: str = "opt") -> dict:
-    """A bench document whose prefill, decode and KV cells are hand-chosen."""
+    """A bench document whose prefill, decode and KV cells are hand-chosen, with three repetitions.
+
+    Prefill latency has the repetitions 3.5, 4.0, 4.5 (median 4.0, range 3.5 to 4.5); decode ms/token
+    has 2.25, 2.5, 2.75 (median 2.5, range 2.25 to 2.75). The tok/s repetitions are chosen so that
+    their medians are 256,000 and 12,800.
+    """
     doc = bench_document(variant, mode, backend="efficient" if mode == "opt" else None, tok_per_s=12800.0)
-    doc["prefill"] = [{"context": 1024, "batch": 1, "latency_ms": 4.0, "tok_per_s": 256000.0, "peak_bytes": 5 * MIB}]
-    doc["decode"] = [{"batch": 32, "cache": 4096, "ms_per_token": 2.5, "tok_per_s": 12800.0, "peak_bytes": 7 * MIB}]
+    doc["prefill"] = [{
+        "context": 1024, "batch": 1,
+        "latency_ms": 4.0, "latency_ms_by_repetition": [3.5, 4.0, 4.5], "latency_ms_min": 3.5, "latency_ms_max": 4.5,
+        "tok_per_s": 256000.0, "tok_per_s_by_repetition": [224000.0, 256000.0, 288000.0],
+        "tok_per_s_min": 224000.0, "tok_per_s_max": 288000.0,
+        "peak_bytes": 5 * MIB,
+    }]
+    doc["decode"] = [{
+        "batch": 32, "cache": 4096,
+        "ms_per_token": 2.5, "ms_per_token_by_repetition": [2.25, 2.5, 2.75],
+        "ms_per_token_min": 2.25, "ms_per_token_max": 2.75,
+        "tok_per_s": 12800.0, "tok_per_s_by_repetition": [11000.0, 12800.0, 14600.0],
+        "tok_per_s_min": 11000.0, "tok_per_s_max": 14600.0,
+        "peak_bytes": 7 * MIB,
+    }]
     doc["kv_bytes_per_token"] = {"analytic": 1536, "measured": 1920.0, "measured_tokens": 1024}
     doc["max_batch_at_8k"] = 40
     return doc
@@ -227,15 +245,16 @@ def test_the_timing_file_has_its_header_source_line_and_captions():
 def test_a_prefill_row_has_every_cell_hand_computed():
     section = report.inference_tables([hand_bench_doc()])[0]
     assert section.prefill == [{
-        "context": "1024", "batch": "1", "latency, ms": "4.000", "tokens/s": "256000.0",
-        "peak allocated, MiB": "5.0",
+        "context": "1024", "batch": "1", "latency, ms": "4.000", "latency, ms (min\u2013max)": "3.500\u20134.500",
+        "tokens/s": "256000.0", "peak allocated, MiB": "5.0",
     }]
 
 
 def test_a_decode_row_has_every_cell_hand_computed():
     section = report.inference_tables([hand_bench_doc()])[0]
     assert section.decode == [{
-        "batch": "32", "cache": "4096", "ms/token": "2.500", "tokens/s": "12800.0", "peak allocated, MiB": "7.0",
+        "batch": "32", "cache": "4096", "ms/token": "2.500", "ms/token (min\u2013max)": "2.250\u20132.750",
+        "tokens/s": "12800.0", "peak allocated, MiB": "7.0",
     }]
 
 
@@ -252,8 +271,8 @@ def test_the_kv_line_has_every_cell_hand_computed():
 
 def test_the_rendered_rows_are_the_hand_computed_lines():
     text = report.render_inference([hand_bench_doc()])
-    assert "| 1024 | 1 | 4.000 | 256000.0 | 5.0 |" in text
-    assert "| 32 | 4096 | 2.500 | 12800.0 | 7.0 |" in text
+    assert "| 1024 | 1 | 4.000 | 3.500–4.500 | 256000.0 | 5.0 |" in text
+    assert "| 32 | 4096 | 2.500 | 2.250–2.750 | 12800.0 | 7.0 |" in text
     assert "| 1536.0 | 1920.0 | 1024 | 1.250 | 40 |" in text
 
 
@@ -263,7 +282,7 @@ def test_a_null_cell_of_a_document_is_blank():
     doc["kv_bytes_per_token"] = {"analytic": 1536, "measured": None, "measured_tokens": None}
     doc["max_batch_at_8k"] = None
     text = report.render_inference([doc])
-    assert "| 1024 | 1 | 4.000 | 256000.0 | — |" in text
+    assert "| 1024 | 1 | 4.000 | 3.500–4.500 | 256000.0 | — |" in text
     assert "| 1536.0 | — | — | — | — |" in text
 
 
@@ -278,6 +297,9 @@ def test_the_inference_file_has_its_captions_and_the_precision_source_line():
     text = report.render_inference([hand_bench_doc()])
     assert text.splitlines()[0] == "# Inference benchmark (plan §8.6, §10.4)"
     assert "Source: precision fp16; backend efficient; GPU Synthetic T4; torch 2.15.0; CUDA 13.2; driver 999.0." in text
+    assert "Repetitions: 3." in text
+    assert "the median of the repetitions named in each section's source line" in text
+    assert "the range column gives the smallest and the largest repetition" in text
     assert text.count(PLAN_KV) == 1
     assert "| analytic bytes/token | measured bytes/token | measured over tokens | measured / analytic (plan §10.4) | max batch at cache 8k |" in text
 
@@ -428,6 +450,61 @@ def test_the_render_functions_refuse_what_the_command_line_refuses():
         report.render_timing(doc)
     with pytest.raises(report.TimingReportError, match="two bench documents for mha/opt"):
         report.render_inference([hand_bench_doc(), hand_bench_doc()])
+
+
+# --- bench/2 repetitions: the checks of the report -----------------------------------------------
+
+
+def single_repetition(doc: dict) -> dict:
+    """The same document with one repetition per point: every list holds its median alone."""
+    doc["repetitions"] = 1
+    for row in doc["prefill"] + doc["decode"]:
+        for field in [k[: -len("_by_repetition")] for k in row if k.endswith("_by_repetition")]:
+            value = row[field]
+            row[f"{field}_by_repetition"] = [value]
+            row[f"{field}_min"] = row[f"{field}_max"] = value
+    return doc
+
+
+def test_a_by_repetition_list_of_the_wrong_length_is_refused():
+    doc = hand_bench_doc()
+    doc["prefill"][0]["latency_ms_by_repetition"] = [3.5, 4.0]
+    with pytest.raises(report.TimingReportError, match="latency_ms_by_repetition"):
+        report.check_bench_documents([doc])
+
+
+def test_a_minimum_above_the_median_is_refused():
+    doc = hand_bench_doc()
+    doc["decode"][0]["ms_per_token_min"] = 2.6  # above the median 2.5 (and not the list's minimum)
+    with pytest.raises(report.TimingReportError, match="expected min <= median <= max"):
+        report.check_bench_documents([doc])
+
+
+def test_a_median_that_is_not_the_median_of_its_repetitions_is_refused():
+    doc = hand_bench_doc()
+    doc["prefill"][0]["latency_ms"] = 3.9  # the list [3.5, 4.0, 4.5] has median 4.0
+    with pytest.raises(report.TimingReportError, match="not the statistics"):
+        report.check_bench_documents([doc])
+
+
+def test_documents_with_different_repetition_counts_are_refused():
+    three = hand_bench_doc("mha")
+    one = single_repetition(hand_bench_doc("mqa"))
+    with pytest.raises(report.TimingReportError, match="disagree on the number of repetitions"):
+        report.check_bench_documents([three, one])
+
+
+def test_a_bench_1_document_is_refused_by_the_report(tmp_path, capsys):
+    doc = hand_bench_doc()
+    doc["schema"] = "bench/1"
+    directory = bench_dir(tmp_path, doc)
+    assert "bench/1" in assert_refused(tmp_path, capsys, "--bench", str(directory))
+
+
+def test_one_repetition_documents_render_their_range_as_one_value():
+    text = report.render_inference([single_repetition(hand_bench_doc())])
+    assert "| 1024 | 1 | 4.000 | 4.000–4.000 | 256000.0 | 5.0 |" in text
+    assert "Repetitions: 1." in text
 
 
 # --- No verdict ----------------------------------------------------------------------------------

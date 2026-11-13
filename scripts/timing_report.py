@@ -1,4 +1,4 @@
-"""The timing and inference tables (plan §8.5, §8.6, §10.4), built from timing_pass/1 and bench/1 documents.
+"""The timing and inference tables (plan §8.5, §8.6, §10.4), built from timing_pass/1 and bench/2 documents.
 
     python -m scripts.timing_report --timing-pass results/timing/timing_pass.json \
         --bench results/bench --out results/tables
@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import statistics
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,8 +84,9 @@ TIMING_CAPTIONS = (
     "(forward and backward) over the whole step's time, in percent (plan §8.5).",
     "Peak memory is torch.cuda.max_memory_allocated; the timing document records no reserved figure.",
 )
-PREFILL_COLUMNS = ("context", "batch", "latency, ms", "tokens/s", "peak allocated, MiB")
-DECODE_COLUMNS = ("batch", "cache", "ms/token", "tokens/s", "peak allocated, MiB")
+RANGE_SEP = "–"  # en dash: "min–max" in the range columns
+PREFILL_COLUMNS = ("context", "batch", "latency, ms", "latency, ms (min–max)", "tokens/s", "peak allocated, MiB")
+DECODE_COLUMNS = ("batch", "cache", "ms/token", "ms/token (min–max)", "tokens/s", "peak allocated, MiB")
 KV_COLUMNS = (
     "analytic bytes/token",
     "measured bytes/token",
@@ -93,8 +95,10 @@ KV_COLUMNS = (
     f"max batch at cache {MAX_BATCH_CONTEXT}",
 )
 INFERENCE_CAPTIONS = (
+    "Every number is the median of the repetitions named in each section's source line, measured round-robin "
+    "over the variants; the range column gives the smallest and the largest repetition (decision 225).",
     "Prefill is one forward over batch x context tokens with no cache; latency is the mean over the "
-    "measured repetitions (plan §8.6).",
+    "timed calls of each repetition (plan §8.6).",
     "Decode is ms/token and tokens/s at each batch and cache length, the cache filled to the cache length "
     "before timing (plan §8.6).",
     "Track `opt` runs opt mode, with the SDPA backend named in its source line enforced (plan §2.3 item 1). "
@@ -214,10 +218,44 @@ def check_timing_document(doc) -> None:
         raise TimingReportError(_listing("the timing document cannot be reported", problems))
 
 
-_BENCH_KEYS = ("kv_bytes_per_token", "prefill", "decode", "max_batch_at_8k")
-_PREFILL_KEYS = ("context", "batch", "latency_ms", "tok_per_s", "peak_bytes")
-_DECODE_KEYS = ("batch", "cache", "ms_per_token", "tok_per_s", "peak_bytes")
+_BENCH_KEYS = ("repetitions", "kv_bytes_per_token", "prefill", "decode", "max_batch_at_8k")
+_PREFILL_IDENTITY = ("context", "batch")
+_DECODE_IDENTITY = ("batch", "cache")
+_PREFILL_TIMED = ("latency_ms", "tok_per_s")
+_DECODE_TIMED = ("ms_per_token", "tok_per_s")
 _KV_KEYS = ("analytic", "measured", "measured_tokens")
+
+
+def _timed_keys(identity: tuple, timed: tuple) -> list[str]:
+    """The keys of a bench/2 point: identity, then for each timed field its median, its repetitions, min and max, then peak_bytes."""
+    keys = list(identity)
+    for field in timed:
+        keys += [field, f"{field}_by_repetition", f"{field}_min", f"{field}_max"]
+    return keys + ["peak_bytes"]
+
+
+_PREFILL_KEYS = tuple(_timed_keys(_PREFILL_IDENTITY, _PREFILL_TIMED))
+_DECODE_KEYS = tuple(_timed_keys(_DECODE_IDENTITY, _DECODE_TIMED))
+
+
+def _point_problems(label: str, row, repetitions, timed: tuple) -> list[str]:
+    """Problems with the timed fields of one point: lists of `repetitions` positive numbers, and
+    median, min and max that are the statistics of that list with min <= median <= max."""
+    problems = []
+    for field in timed:
+        name = f"{label}: {field}"
+        values = row.get(f"{field}_by_repetition")
+        if not isinstance(values, list) or len(values) != repetitions or not all(_is_positive(v) for v in values):
+            problems.append(f"{name}_by_repetition {values!r}, expected {repetitions} positive numbers")
+            continue
+        lo, median, hi = row.get(f"{field}_min"), row.get(field), row.get(f"{field}_max")
+        if not all(_is_positive(v) for v in (lo, median, hi)):
+            problems.append(f"{name}: median, min and max {median!r}, {lo!r}, {hi!r}, expected positive numbers")
+        elif not lo <= median <= hi:
+            problems.append(f"{name}: min {lo}, median {median}, max {hi}; expected min <= median <= max")
+        elif lo != min(values) or hi != max(values) or median != statistics.median(values):
+            problems.append(f"{name}: median, min and max are not the statistics of {name}_by_repetition")
+    return problems
 
 
 def check_bench_documents(docs: Sequence) -> None:
@@ -225,6 +263,7 @@ def check_bench_documents(docs: Sequence) -> None:
     a missing field, or a second document for one (variant, mode)."""
     problems = []
     seen: set[tuple] = set()
+    counts = set()
     for index, doc in enumerate(docs):
         label = f"bench document {index}"
         if not isinstance(doc, Mapping):
@@ -242,18 +281,31 @@ def check_bench_documents(docs: Sequence) -> None:
         if missing:
             problems.append(f"{label} lacks {missing}")
             continue
+        repetitions = doc["repetitions"]
+        counts.add(repetitions)
+        valid = isinstance(repetitions, int) and not isinstance(repetitions, bool) and repetitions >= 1
+        if not valid:
+            problems.append(f"{label}: repetitions {repetitions!r}, expected an integer of at least 1")
         for row in doc["prefill"]:
             if not all(key in row for key in _PREFILL_KEYS):
                 problems.append(f"{label}: a prefill row lacks one of {list(_PREFILL_KEYS)}")
+            elif valid:
+                problems += _point_problems(f"{label}, prefill context {row['context']}", row, repetitions, _PREFILL_TIMED)
         for row in doc["decode"]:
             if not all(key in row for key in _DECODE_KEYS):
                 problems.append(f"{label}: a decode row lacks one of {list(_DECODE_KEYS)}")
+            elif valid:
+                problems += _point_problems(
+                    f"{label}, decode batch {row['batch']} cache {row['cache']}", row, repetitions, _DECODE_TIMED
+                )
         if not all(key in doc["kv_bytes_per_token"] for key in _KV_KEYS):
             problems.append(f"{label}: kv_bytes_per_token lacks one of {list(_KV_KEYS)}")
         key = (variant, mode)
         if key in seen:
             problems.append(f"two bench documents for {variant}/{mode}: each (variant, mode) must appear once")
         seen.add(key)
+    if len(counts) > 1:
+        problems.append(f"the bench documents disagree on the number of repetitions: {sorted(map(str, counts))}")
     if problems:
         raise TimingReportError(_listing("the bench documents cannot be reported", problems))
 
@@ -289,6 +341,11 @@ def _mib(value) -> str:
 
 def _text(value) -> str:
     return BLANK if value is None else str(value)
+
+
+def _span(low, high, decimals: int) -> str:
+    """The range of a repetition series, smallest to largest: "min–max"."""
+    return f"{_fmt(low, decimals)}{RANGE_SEP}{_fmt(high, decimals)}"
 
 
 def _md_table(columns: Sequence[str], rows: Sequence[Mapping[str, str]]) -> list[str]:
@@ -378,7 +435,7 @@ def _bench_source(doc: Mapping) -> str:
     return (
         f"Source: precision {_text(doc.get('precision'))}; backend {_text(doc.get('backend'))}; "
         f"GPU {_text(env.get('gpu_name'))}; torch {_text(env.get('torch'))}; CUDA {_text(env.get('cuda'))}; "
-        f"driver {_text(env.get('driver'))}."
+        f"driver {_text(env.get('driver'))}. Repetitions: {_text(doc.get('repetitions'))}."
     )
 
 
@@ -401,8 +458,9 @@ def _section(doc: Mapping) -> Section:
             PREFILL_COLUMNS[0]: _text(row["context"]),
             PREFILL_COLUMNS[1]: _text(row["batch"]),
             PREFILL_COLUMNS[2]: _fmt(row["latency_ms"], LATENCY_DECIMALS),
-            PREFILL_COLUMNS[3]: _fmt(row["tok_per_s"], TOKS_DECIMALS),
-            PREFILL_COLUMNS[4]: _mib(row["peak_bytes"]),
+            PREFILL_COLUMNS[3]: _span(row["latency_ms_min"], row["latency_ms_max"], LATENCY_DECIMALS),
+            PREFILL_COLUMNS[4]: _fmt(row["tok_per_s"], TOKS_DECIMALS),
+            PREFILL_COLUMNS[5]: _mib(row["peak_bytes"]),
         }
         for row in doc["prefill"]
     ]
@@ -411,8 +469,9 @@ def _section(doc: Mapping) -> Section:
             DECODE_COLUMNS[0]: _text(row["batch"]),
             DECODE_COLUMNS[1]: _text(row["cache"]),
             DECODE_COLUMNS[2]: _fmt(row["ms_per_token"], MS_TOKEN_DECIMALS),
-            DECODE_COLUMNS[3]: _fmt(row["tok_per_s"], TOKS_DECIMALS),
-            DECODE_COLUMNS[4]: _mib(row["peak_bytes"]),
+            DECODE_COLUMNS[3]: _span(row["ms_per_token_min"], row["ms_per_token_max"], MS_TOKEN_DECIMALS),
+            DECODE_COLUMNS[4]: _fmt(row["tok_per_s"], TOKS_DECIMALS),
+            DECODE_COLUMNS[5]: _mib(row["peak_bytes"]),
         }
         for row in doc["decode"]
     ]
@@ -460,7 +519,7 @@ def _section_lines(section: Section) -> list[str]:
 
 
 def render_inference(docs: Sequence[Mapping] | None) -> str:
-    """inference.md from bench/1 documents, or the blank form for None or []."""
+    """inference.md from bench/2 documents, or the blank form for None or []."""
     lines = [INFERENCE_TITLE, ""] + list(INFERENCE_CAPTIONS) + [""]
     for section in inference_tables(docs):
         lines += _section_lines(section)
