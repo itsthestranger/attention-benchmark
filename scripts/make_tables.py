@@ -1419,8 +1419,13 @@ def headline_rows(
     *,
     train_ms_per_step: Mapping[str, float] | None = None,
     decode_tok_per_s: Mapping[str, float] | None = None,
+    swa_check: tp.SwaCheck | None = None,
 ) -> list[dict]:
-    """One row per headline variant, keyed by COLUMNS, every value a string."""
+    """One row per headline variant, keyed by COLUMNS, every value a string.
+
+    `swa_check` is the timing pass's SWA check. When SWA is not faster than MHA, SWA's train ms/step
+    cell carries SWA_DENSE_MARK (plan §2.3 item 2, decision 226); the note is the table's, added by `main`.
+    """
     reference = "mha"
     reference_present = bool(analysis.losses.get(reference))
     rows = []
@@ -1441,6 +1446,8 @@ def headline_rows(
             "decode tok/s (batch 32, cache 4k)": _timing(decode_tok_per_s, variant),
             "val loss, every seed": BLANK if withheld else _losses_cell(analysis.losses.get(variant, {})),
         }
+        if variant == tp.SWA_VARIANT and tp.swa_not_faster(swa_check) and cells["train ms/step"] != BLANK:
+            cells["train ms/step"] += tp.SWA_DENSE_MARK
         if variant == reference:
             if reference_present:
                 cells["gap vs MHA [95% CI]"] = "reference"
@@ -1992,8 +1999,13 @@ def render_context(analysis: Analysis) -> str:
 # --- RQ-W: the computed wall-clock estimate (plan §8.5, step 2) ----------------------
 
 
-def render_rqw(estimate: rq.WallclockEstimate | None, reason: str | None) -> str:
-    """rqw.md. With no estimate, the blank form with `reason` (default: no timing pass was given)."""
+def render_rqw(estimate: rq.WallclockEstimate | None, reason: str | None, *, swa_check: tp.SwaCheck | None = None) -> str:
+    """rqw.md. With no estimate, the blank form with `reason` (default: no timing pass was given).
+
+    `swa_check`: when SWA is not faster than MHA, SWA's ms/step cell is marked and the note is
+    added under the table (plan §2.3 item 2, decision 226).
+    """
+    not_faster = tp.swa_not_faster(swa_check)
     lines = ["# RQ-W: wall-clock estimate (plan §8.5)", ""]
     if estimate is None:
         lines += [f"Budget B: {BLANK}", "", RQW_CAPTION, "", f"Not computed: {reason or NO_TIMING}.", ""]
@@ -2012,7 +2024,8 @@ def render_rqw(estimate: rq.WallclockEstimate | None, reason: str | None) -> str
         rows.append(
             {
                 "variant": v.variant,
-                "ms/step": f"{v.ms_per_step:.3f}",
+                "ms/step": f"{v.ms_per_step:.3f}"
+                + (tp.SWA_DENSE_MARK if not_faster and v.variant == tp.SWA_VARIANT else ""),
                 "step-time ratio to MHA": f"{v.step_time_ratio:.3f}",
                 "steps afforded S_v": str(v.steps),
                 "extrapolated": "yes" if v.extrapolated else "no",
@@ -2023,10 +2036,18 @@ def render_rqw(estimate: rq.WallclockEstimate | None, reason: str | None) -> str
             }
         )
     lines += _md_table(RQW_COLUMNS, rows)
+    if not_faster:
+        lines += ["", f"{tp.SWA_DENSE_MARK} {tp.swa_dense_note(swa_check)}"]
     return "\n".join(lines) + "\n"
 
 
-def _rqw_report(analysis: Analysis, results: Sequence[dict], ms_per_step: Mapping[str, float] | None) -> str:
+def _rqw_report(
+    analysis: Analysis,
+    results: Sequence[dict],
+    ms_per_step: Mapping[str, float] | None,
+    *,
+    swa_check: tp.SwaCheck | None = None,
+) -> str:
     if ms_per_step is None:
         return render_rqw(None, NO_TIMING)
     if not analysis.comparisons_allowed:
@@ -2035,7 +2056,7 @@ def _rqw_report(analysis: Analysis, results: Sequence[dict], ms_per_step: Mappin
         estimate = rq.estimate(list(results), dict(ms_per_step))
     except rq.EstimateError as exc:
         return render_rqw(None, f"the estimate cannot be computed: {exc}")
-    return render_rqw(estimate, None)
+    return render_rqw(estimate, None, swa_check=swa_check)
 
 
 # --- Timing and bench sources: refusals (plan §2.2, §10.6, §11) ----------------------
@@ -2148,12 +2169,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         bench_docs = _load_bench_documents(args.bench) if args.bench else []
         check_timing_sources(results, timing_doc, bench_docs)
         ms_per_step = tp.read_ms_per_step(args.timing_pass) if timing_doc is not None else None
+        swa_check = tp.swa_check_of(timing_doc) if timing_doc is not None else None
         decode = bd.read_decode_tok_per_s(args.bench) if args.bench else None
     except (TableError, mf.ManifestError, tp.TimingError, bd.BenchError, config.ConfigError, json.JSONDecodeError, OSError) as exc:
         print(exc, file=sys.stderr)
         return 1
 
     notes = list(analysis.notes)
+    if tp.swa_not_faster(swa_check):
+        notes.append(f"{tp.SWA_DENSE_MARK} {tp.swa_dense_note(swa_check)}")
     diverged = diverged_runs(manifests)
     if diverged:
         notes.append("diverged runs on record, not results (plan §7.4 item 5): " + ", ".join(diverged))
@@ -2162,14 +2186,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     noted = dataclasses.replace(analysis, notes=tuple(notes))
     texts = {
         "headline.md": render_markdown(
-            headline_rows(analysis, train_ms_per_step=ms_per_step, decode_tok_per_s=decode), notes,
+            headline_rows(analysis, train_ms_per_step=ms_per_step, decode_tok_per_s=decode, swa_check=swa_check), notes,
             results=results,
         ),
         "gates.md": render_gates(noted),
         "arm_b.md": render_arm_b(noted),
         "shared_rate.md": render_shared_rate(noted),
         "context.md": render_context(noted),
-        "rqw.md": _rqw_report(analysis, results, ms_per_step),
+        "rqw.md": _rqw_report(analysis, results, ms_per_step, swa_check=swa_check),
     }
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

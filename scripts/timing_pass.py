@@ -29,9 +29,10 @@ surrounding norms and MLP. CUDA is synchronised at each boundary.
 script; its numbers mean nothing about the study. Plan §8.5: the pass runs alone on the box.
 On CUDA `--gpu-shared` is required, and the script refuses `true`. On CUDA `--expected-backend`
 is required too (plan §2.3 item 1): every training step runs with only that SDPA kernel enabled,
-and the name is written to the document's "backend" key. It is refused on CPU. On CUDA the SWA-below-MHA
-assertion (plan §2.3 item 2) makes the script exit non-zero when it fails; on CPU it is only
-reported.
+and the name is written to the document's "backend" key. It is refused on CPU. The SWA comparison
+(plan §2.3 item 2) is reported on every device and never makes the script exit non-zero. When SWA's
+attention time is not below MHA's, the file keeps the measurement, and the tables mark SWA's timings
+as not faster than a dense kernel on this GPU (decision 226).
 """
 
 from __future__ import annotations
@@ -327,6 +328,34 @@ def require_swa_below_mha(variants: dict) -> SwaCheck:
     return check
 
 
+# When SWA's attention time is not below MHA's, the measurement stands and every table that prints
+# SWA's timings marks them with this (plan §2.3 item 2, §13.8, decision 226). Hiding a true measurement
+# is not disclosure; saying what it means is.
+SWA_DENSE_MARK = "†"
+SWA_DENSE_NOTE = (
+    "SWA is not faster than a dense kernel on this GPU: its attention takes {swa:.3f} ms/step, "
+    "MHA's {mha:.3f} ms/step. SWA's timings are kept and marked (plan §2.3 item 2, §13.8)."
+)
+
+
+def swa_dense_note(check: SwaCheck) -> str:
+    """SWA_DENSE_NOTE with the two attention times of `check`."""
+    return SWA_DENSE_NOTE.format(swa=check.swa_attention_ms, mha=check.mha_attention_ms)
+
+
+def swa_check_of(doc_or_variants) -> SwaCheck | None:
+    """The SWA check of a timing_pass/1 document or of its `variants` mapping; None when the MHA or SWA opt entry is absent."""
+    variants = doc_or_variants.get("variants", doc_or_variants)
+    if REFERENCE_VARIANT not in variants or SWA_VARIANT not in variants:
+        return None
+    return check_swa_below_mha(variants)
+
+
+def swa_not_faster(check: SwaCheck | None) -> bool:
+    """True when the check was made and SWA's attention time is not below MHA's."""
+    return check is not None and not check.holds
+
+
 # --- The pass ---------------------------------------------------------------------------
 
 
@@ -516,16 +545,14 @@ def main(argv=None) -> int:
     path = write_timing_file(args.out, document)
     print(f"wrote {path}")
 
-    variants = document["variants"]
-    if REFERENCE_VARIANT in variants and SWA_VARIANT in variants:
-        check = check_swa_below_mha(variants)
+    check = swa_check_of(document)
+    if check is not None:
         print(
             f"SWA attention {check.swa_attention_ms:.3f} ms/step vs MHA {check.mha_attention_ms:.3f}: "
             f"{'below (holds)' if check.holds else 'NOT below'}"
         )
-        if device.type == "cuda" and not check.holds:
-            print("plan §2.3 item 2 fails on this GPU; the run is not a valid timing result", file=sys.stderr)
-            return 1
+        if swa_not_faster(check):
+            print(f"{SWA_DENSE_MARK} {swa_dense_note(check)} (decision 226)", file=sys.stderr)
     return 0
 
 
