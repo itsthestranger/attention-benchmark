@@ -483,7 +483,7 @@ def test_timing_mappings_fill_their_columns_with_one_decimal(analysis):
 
 
 def test_render_markdown_layout_and_notes(rows):
-    text = mt.render_markdown(rows, ["first note", "second note"])
+    text = mt.render_markdown(rows, ["first note", "second note"], results=())
     lines = text.splitlines()
     assert lines[0] == "| " + " | ".join(mt.COLUMNS) + " |"
     assert lines[1].startswith("|---")
@@ -492,7 +492,7 @@ def test_render_markdown_layout_and_notes(rows):
     assert "- first note" in text and "- second note" in text
     assert text.endswith("\n")
     assert "Notes:" in text
-    assert "Notes:" not in mt.render_markdown(rows, ())
+    assert "Notes:" not in mt.render_markdown(rows, (), results=())
 
 
 # --- The command line ----------------------------------------------------------------------
@@ -505,7 +505,7 @@ def test_main_writes_headline_md_and_returns_zero(tmp_path, campaign, analysis, 
     out = tmp_path / "tables"
     assert mt.main(["--manifests", str(manifests), "--out", str(out)]) == 0
     written = (out / "headline.md").read_text(encoding="utf-8")
-    assert written == mt.render_markdown(mt.headline_rows(analysis), analysis.notes)
+    assert written == mt.render_markdown(mt.headline_rows(analysis), analysis.notes, results=campaign)
     assert str(out / "headline.md") in capsys.readouterr().out
 
 
@@ -561,7 +561,7 @@ def test_blank_analysis_has_notes_for_every_missing_input():
 
 def test_committed_blank_table_is_generated_from_no_manifests():
     committed = (ROOT / "results" / "tables" / "blank" / "headline.md").read_bytes()
-    generated = mt.render_markdown(mt.headline_rows(mt.analyse([])), mt.analyse([]).notes)
+    generated = mt.render_markdown(mt.headline_rows(mt.analyse([])), mt.analyse([]).notes, results=[])
     assert committed == generated.encode("utf-8")
 
 
@@ -619,24 +619,163 @@ def test_seeds_outside_the_registered_sets_are_shown_but_never_tested(campaign, 
 DISCLOSURE_SECTIONS = ("§13.2", "§13.3", "§13.4", "§13.5", "§13.1")
 
 
-def test_each_disclosure_is_one_line_naming_its_plan_section_in_the_fixed_order():
-    assert len(mt.DISCLOSURES) == len(DISCLOSURE_SECTIONS)
-    found = [line[line.rindex("(plan ") + len("(plan "):].rstrip(".)") for line in mt.DISCLOSURES]
-    assert found == list(DISCLOSURE_SECTIONS)
+def test_each_disclosure_is_one_line_naming_its_plan_section_in_the_fixed_order(campaign):
+    for results in ([], campaign):
+        lines = mt.disclosures(results)
+        assert len(lines) == len(DISCLOSURE_SECTIONS)
+        found = [line[line.rindex("(plan ") + len("(plan "):].rstrip(".)") for line in lines]
+        assert found == list(DISCLOSURE_SECTIONS)
 
 
-def test_the_disclosures_end_the_headline_after_the_notes_for_blank_full_and_gate_shut_tables(analysis):
+def test_the_disclosures_end_the_headline_after_the_notes_for_blank_full_and_gate_shut_tables(analysis, campaign):
+    gate_shut = fake_campaign(gaps={"mqa": 0.05}, without=("null",))
     cases = {
-        "blank": mt.analyse([]),
-        "full campaign": analysis,
-        "gate shut": mt.analyse(fake_campaign(gaps={"mqa": 0.05}, without=("null",))),
+        "blank": (mt.analyse([]), []),
+        "full campaign": (analysis, campaign),
+        "gate shut": (mt.analyse(gate_shut), gate_shut),
     }
-    assert cases["blank"].notes and cases["gate shut"].notes  # so that "after the notes" is checked
-    for label, a in cases.items():
-        text = mt.render_markdown(mt.headline_rows(a), a.notes)
-        positions = [text.index(f"- {line}\n") for line in mt.DISCLOSURES]
+    assert cases["blank"][0].notes and cases["gate shut"][0].notes  # so that "after the notes" is checked
+    for label, (a, results) in cases.items():
+        lines = mt.disclosures(results)
+        text = mt.render_markdown(mt.headline_rows(a), a.notes, results=results)
+        positions = [text.index(f"- {line}\n") for line in lines]
         assert positions == sorted(positions), label
         assert text.count("Disclosures:") == 1, label
-        assert text.endswith(f"- {mt.DISCLOSURES[-1]}\n"), label
+        assert text.endswith(f"- {lines[-1]}\n"), label
         if a.notes:
             assert text.index("\nNotes:\n") < positions[0], label
+
+
+# The four disclosures that are fixed text, as they were before the hardware line was generated
+# (plan §13.2, §13.3, §13.5, §13.1), in the order `disclosures` keeps them.
+FIXED_DISCLOSURES = (
+    "MLA bundles two changes, low-rank KV compression and decoupled RoPE; they cannot be fully "
+    "separated, and compression alone was not measured (plan §13.2).",
+    "Kernel maturity is not architecture: MHA, GQA and MQA use a mature fused kernel, while SWA's "
+    "block-skipping path and MLA's absorbed path are newer or hand-written, so any SWA or MLA timing "
+    "gap is partly implementation (plan §13.3).",
+    "Scale: 17M parameters, context 1,024, 300M tokens, one corpus and one tokenizer; nothing here "
+    "extrapolates to production scale (plan §13.5).",
+    "Parameter matching moves capacity into the MLP: iso-parameter variants spend their KV-projection "
+    "savings on a wider MLP, so iso-parameter does not isolate attention; see the Arm B table "
+    "(plan §13.1).",
+)
+P100_ENVIRONMENT = {
+    "python": "3.11.9",
+    "torch": "2.15.0",
+    "cuda": "13.2",
+    "driver": "999.0",
+    "gpu_name": "Tesla P100-PCIE-16GB",
+    "compute_capability": [6, 0],
+}
+
+
+CPU_ENVIRONMENT = {**P100_ENVIRONMENT, "cuda": None, "driver": None, "gpu_name": None, "compute_capability": None}
+
+
+def _on_other_gpu(manifests: list[dict]) -> list[dict]:
+    """The same runs as another campaign would record them: a P100 and the math backend."""
+    out = copy.deepcopy(manifests)
+    for manifest in out:
+        manifest["environment"] = dict(P100_ENVIRONMENT)
+        manifest["backend"] = "math"
+        _valid(manifest)
+    return out
+
+
+def _on_cpu(manifests: list[dict]) -> list[dict]:
+    """Runs with no GPU: no backend is recorded (manifest rule 8), and precision is fp32."""
+    out = copy.deepcopy(manifests)
+    for manifest in out:
+        manifest["environment"] = dict(CPU_ENVIRONMENT)
+        manifest["backend"] = None
+        manifest["precision"] = "fp32"
+        _valid(manifest)
+    return out
+
+
+def _hardware_line(results) -> str:
+    (line,) = [line for line in mt.disclosures(results) if line.startswith("Hardware:")]
+    return line
+
+
+def test_the_hardware_line_names_the_gpu_and_backend_the_manifests_record(campaign):
+    line = _hardware_line(campaign)
+    assert campaign[0]["environment"]["gpu_name"] in line
+    assert "(sm75)" in line  # compute capability [7, 5] of the synthetic T4
+    assert "the memory-efficient kernel" in line  # backend "efficient" of the synthetic T4
+    assert "not FlashAttention-2 and no fp8" in line and line.endswith("(plan §13.4).")
+
+
+def test_a_campaign_on_another_gpu_is_not_described_as_a_t4(campaign):
+    other = _on_other_gpu(campaign)
+    line = _hardware_line(other)
+    assert "Tesla P100-PCIE-16GB (sm60)" in line
+    assert "the math kernel" in line
+    assert "T4" not in line
+    assert "memory-efficient" not in line
+
+
+def test_with_no_results_the_hardware_line_says_no_run_is_recorded_and_names_the_plan_hardware():
+    line = _hardware_line([])
+    assert "no run is recorded yet" in line
+    assert "the Kaggle T4 (sm75) with the memory-efficient kernel" in line
+    assert line.endswith("(plan §13.4).")
+
+
+def test_runs_with_no_gpu_record_no_backend_so_no_kernel_is_named(campaign):
+    line = _hardware_line(_on_cpu(campaign))
+    assert "no GPU (CPU)" in line
+    assert "have no backend, so no kernel is named" in line
+    assert "memory-efficient" not in line and "math kernel" not in line
+
+
+def test_a_mixed_campaign_names_both_gpus_and_both_kernels(campaign):
+    mixed = _on_other_gpu(campaign)[:10] + copy.deepcopy(campaign)[10:]
+    line = _hardware_line(mixed)
+    assert "Synthetic T4 (sm75)" in line and "Tesla P100-PCIE-16GB (sm60)" in line
+    assert "the memory-efficient kernel" in line and "the math kernel" in line
+
+
+def test_the_four_fixed_disclosures_are_unchanged_and_keep_their_order(campaign):
+    other = _on_other_gpu(campaign)
+    for results in ([], campaign, other):
+        lines = mt.disclosures(results)
+        assert lines[0] == FIXED_DISCLOSURES[0]
+        assert lines[1] == FIXED_DISCLOSURES[1]
+        assert lines[3] == FIXED_DISCLOSURES[2]
+        assert lines[4] == FIXED_DISCLOSURES[3]
+
+
+def test_the_headline_built_from_another_gpu_names_that_gpu(tmp_path, campaign):
+    manifests = tmp_path / "manifests"
+    for manifest in _on_other_gpu(campaign):
+        mf.write_manifest(manifest, manifests)
+    out = tmp_path / "tables"
+    assert mt.main(["--manifests", str(manifests), "--out", str(out)]) == 0
+    text = (out / "headline.md").read_text(encoding="utf-8")
+    assert "Tesla P100-PCIE-16GB (sm60)" in text
+    assert "every number here is from a T4" not in text
+
+
+def _with_backend(manifests: list[dict], backend: str) -> list[dict]:
+    """The same runs, recorded with another backend (on the synthetic T4)."""
+    out = copy.deepcopy(manifests)
+    for manifest in out:
+        manifest["backend"] = backend
+        _valid(manifest)
+    return out
+
+
+def test_a_result_on_the_flash_backend_makes_no_flash_attention_claim(campaign):
+    line = _hardware_line(_with_backend(campaign, "flash"))
+    assert "the flash backend" in line
+    assert "FlashAttention-2" not in line  # the manifests cannot support that claim
+    assert line.endswith("no fp8; rankings may differ on other hardware (plan §13.4).")
+
+
+def test_the_flash_clause_stays_for_every_other_backend_and_for_no_results(campaign):
+    for backend in ("efficient", "math", "cudnn"):
+        line = _hardware_line(_with_backend(campaign, backend))
+        assert "not FlashAttention-2 and no fp8; rankings may differ on other hardware (plan §13.4)." in line, backend
+    assert "not FlashAttention-2 and no fp8; rankings" in _hardware_line([])

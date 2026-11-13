@@ -33,6 +33,8 @@
 
 ## Seed count and detectable effect
 
+The ladder slope b at 300M in this section is fitted on the registered seeds only (plan §1.4), while the ladder slope by budget below uses every run present, so the two values at 300M differ once MHA has eight seeds.
+
 | item | value |
 |---|---|
 | sigma_init at 300M, MHA seeds 1-5 | — |
