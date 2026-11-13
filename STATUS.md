@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-13, session 5. Phil answered every open question except Kaggle's versions (decisions 215 to 231). The answers are being applied as tasks T-46 to T-53 (`TASKS.md`, M7); nothing below that line of work is built yet unless "Done" lists it. The `cpu` tier is green on `main` at `538a730`: 3,622 tests. The sections below the session-5 table still describe the state at the end of session 4 and are rewritten when T-53 closes.
+Last updated: 2026-11-13, session 5, after T-51. Phil answered every open question except Kaggle's versions (decisions 215 to 231). T-46 to T-51 apply the answers and are merged; T-52 (the frozen files) is an open pull request waiting for Phil's approval; T-53 (a fresh agent's review of T-39 to T-52) has not started. The `cpu` tier is green on `main` at `d706f0c`: 3,785 tests, about five and a half minutes. The sections below "Session 5" still describe the state at the end of session 4, except where a session-5 row says otherwise; they are rewritten when T-53 closes.
 
 ## Session 5 (2026-11-13): Phil's decisions and what follows from them
 
@@ -75,11 +75,18 @@ How session 5 is run: the task flow of `CLAUDE.md` (a task branch and a pull req
 - T-42 `timing.md` and `inference.md` (#49).
 - T-41 the bucketed loss at every validation point and peak memory (#50).
 - T-44 runbook corrections, `make_plots --l10-cut`, CODEOWNERS (#51).
+- T-46 the decisions of session 5 and the tasks that apply them (#52).
+- T-47 the positive control's direction, a slope that is not positive, `configs/commitments.yaml` (#53).
+- T-50 tuned against shared learning rate, `shared_rate.md` (#54).
+- T-49 the inference benchmark in three round-robin repetitions, `bench/2` (#55).
+- T-48 SWA not below MHA in the timing pass is recorded and marked, not refused (#56).
+- T-51 the runbook for the decisions of session 5, with the probe commands of §2.3 (#57).
 
 ## In progress
 
-- Nothing is running. Every worker has stopped and every branch is pushed.
-- `RUNBOOK.md` §2.3 (probe commands): waits for the probe grid from Phil. It is the one part of the handover that is not written.
+- T-52, branch `task/T-52-frozen`: the sweep seed, the confirmed thresholds and the bucket comment in `configs/prereg.yaml`; the rule in prose in `README.md`; plan §18 (amendments); the coverage allowance in `tests/tolerances.py` with its test; `select_lr` reads the registered seed. A pull request labelled `needs-phil`; Phil approves and merges it.
+- T-53: a fresh agent reviews T-39 to T-52. Not started. Its brief is written; it reviews the T-52 branch, which holds everything.
+- No worker is running.
 
 ## Handover checklist (plan §17.4)
 
@@ -88,11 +95,11 @@ How session 5 is run: the task flow of `CLAUDE.md` (a task branch and a pull req
 | 1 | Every task merged, `cpu` tier green in CI | Met except T-31, the handover itself, which closes when item 4 does. |
 | 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met; listed below (105 collected). |
 | 3 | Headline table and all ten plots generate from fake manifests and blank | Met. `probes.md`, `timing.md` and `inference.md` build blank and from synthetic records too. |
-| 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | **Not met in one place**: §2.3 (probes, Gate 1) has no commands, because the plan does not fix the probe grid. Everything else is written, and every command parses with its script's own parser. |
+| 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | Met since T-51 (#57): §2.3 has the pilot, block 1 and block 2. Every command parses with its script's own parser; none has run on a GPU. |
 | 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 214. |
 | 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Two reviews done (sessions 3 and 4); the second one's findings are below with their status. The fixes for it (T-39 to T-45) were reviewed by the orchestrator with deliberate breaks, not by a fresh agent. The session-3 fixes had the same status, and the second review found defects in them, so a short fresh pass over T-39 to T-45 is recommended before the first GPU hour. |
 
-The harness is ready for Phil's verification step (`RUNBOOK.md` §1) and for week 1 except the probes. It is not "done" by the checklist until §2.3 is written.
+Items 1 and 6 are open: T-52 waits for Phil, and the fixes of sessions 4 and 5 have not been seen by a fresh agent (T-53).
 
 ## Session-4 review (2026-11-13)
 
