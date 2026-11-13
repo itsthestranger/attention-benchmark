@@ -49,6 +49,7 @@ from tests.fixtures.fake_campaign import (
 )
 from tests.fixtures.fake_manifests import fake_manifest
 from tests.tolerances import FLOAT64_IDENTITY, scale_relative_error
+from tests.fixtures.commitments import analyse_committed, tables_main
 
 ROOT = Path(__file__).resolve().parents[1]
 BLANK_GATES = ROOT / "results" / "tables" / "blank" / "gates.md"
@@ -91,8 +92,12 @@ EXPECTED_SECTIONS = {
         "variants leaving Arm A",
         "detectable gap of the chosen design, nats",
     ),
+    # Decision 220: what configs/commitments.yaml declares, beside what the rule computes.
+    "Declarations (configs/commitments.yaml)": ("ladder", "committed seed count"),
     "Ladder slope b by budget": ("100M", "200M", "300M"),
 }
+
+DECLARATIONS = "Declarations (configs/commitments.yaml)"
 
 PREREG = config.load_prereg()
 SELECTION_SEEDS = tuple(PREREG["test_selection"]["sigma_init"]["init_seeds"])
@@ -142,12 +147,12 @@ def campaign() -> list[dict]:
 
 @pytest.fixture(scope="module")
 def analysis(campaign) -> mt.Analysis:
-    return mt.analyse(campaign)
+    return analyse_committed(campaign)
 
 
 @pytest.fixture(scope="module")
 def blank() -> mt.Analysis:
-    return mt.analyse([])
+    return analyse_committed([])
 
 
 @pytest.fixture(scope="module")
@@ -184,7 +189,7 @@ def test_data_order_runs_are_seed_one_under_each_data_seed(campaign, analysis, m
 
 def test_a_data_order_run_of_another_init_seed_is_not_read(campaign, analysis):
     stray = fake_manifest("mha", budget="100M", branches=[], init_seed=2, data_seed=2, val_loss=9.0)
-    assert mt.analyse(campaign + [stray]).data_order_100m == analysis.data_order_100m
+    assert analyse_committed(campaign + [stray]).data_order_100m == analysis.data_order_100m
 
 
 def test_a_null_run_at_another_learning_rate_is_not_read(campaign):
@@ -192,7 +197,7 @@ def test_a_null_run_at_another_learning_rate_is_not_read(campaign):
     moved.append(
         fake_manifest("null", budget="100M", branches=[], init_seed=NULL_SEEDS[0], peak_lr=2e-3, val_loss=3.5)
     )
-    a = mt.analyse(moved)
+    a = analyse_committed(moved)
     assert NULL_SEEDS[0] not in a.null_100m
     assert a.null_control is None
     assert any("null control" in note and str(NULL_SEEDS[0]) in note for note in a.notes)
@@ -217,7 +222,7 @@ def test_sigma_init_from_the_null_seeds_is_their_sample_sd(analysis):
 
 
 def test_sigma_data_needs_all_three_data_seeds(campaign):
-    a = mt.analyse(without_manifest(campaign, lambda p: p.variant == "mha" and p.data_seed == DATA_ORDER_SEEDS[-1]))
+    a = analyse_committed(without_manifest(campaign, lambda p: p.variant == "mha" and p.data_seed == DATA_ORDER_SEEDS[-1]))
     assert a.sigma_data is None
     assert any("sigma_data" in note and str(DATA_ORDER_SEEDS[-1]) in note for note in a.notes)
 
@@ -253,14 +258,14 @@ def test_positive_control_is_primary_tests_own_on_seeds_one_to_five(analysis, ca
 
 def test_positive_control_ignores_seeds_six_to_eight():
     eight = fake_campaign(sigma=0.01, n_primary_seeds=8, gaps={"mqa": 0.05})
-    a = mt.analyse(eight)
+    a = analyse_committed(eight)
     assert a.decision.n_seeds == 8, "this synthetic campaign is meant to pick 8 seeds"
     assert a.positive_control.seeds == CONTROL_SEEDS
     assert a.positive_control.reference_seeds == CONTROL_SEEDS
 
 
 def test_a_missing_null_seed_leaves_the_null_control_uncomputed(campaign):
-    a = mt.analyse(without_manifest(campaign, lambda p: p.variant == "null" and p.init_seed == NULL_SEEDS[2]))
+    a = analyse_committed(without_manifest(campaign, lambda p: p.variant == "null" and p.init_seed == NULL_SEEDS[2]))
     assert a.null_control is None
     assert a.sigma_init_null is None
     assert any("null control" in note and str(NULL_SEEDS[2]) in note for note in a.notes)
@@ -284,7 +289,7 @@ def test_branch_fits_are_ladder_fits_of_the_branch_losses(campaign, analysis, bu
 
 
 def test_branch_fits_are_absent_without_ladder_branches():
-    a = mt.analyse(fake_campaign())
+    a = analyse_committed(fake_campaign())
     assert a.fits["300M"] == a.fit and a.fit is not None
     assert a.fits["100M"] is None and a.fits["200M"] is None
     assert any("ladder fit at 200M" in note for note in a.notes)
@@ -302,7 +307,7 @@ def test_with_both_controls_passing_every_comparison_is_computed(analysis):
 
 
 def test_gate_two_stage_has_the_floor_and_the_null_control_and_nothing_downstream(campaign):
-    a = mt.analyse(gate_two_stage(campaign))
+    a = analyse_committed(gate_two_stage(campaign))
     assert a.selection is not None
     assert a.null_control is not None
     assert a.sigma_data is not None and a.sigma_init_null is not None
@@ -313,7 +318,7 @@ def test_gate_two_stage_has_the_floor_and_the_null_control_and_nothing_downstrea
 
 
 def test_no_comparison_without_the_null_control():
-    a = mt.analyse(fake_campaign(gaps={"mqa": 0.05}, without=("null",)))
+    a = analyse_committed(fake_campaign(gaps={"mqa": 0.05}, without=("null",)))
     assert a.null_control is None
     assert a.decision is not None, "the seed-count rule reads MHA and ladder runs only and still applies"
     assert a.comparisons == {} and a.multipliers == {}
@@ -321,7 +326,7 @@ def test_no_comparison_without_the_null_control():
 
 
 def test_a_detected_null_control_stops_every_comparison():
-    a = mt.analyse(fake_campaign(gaps={"mqa": 0.05}, null_gap=0.5))
+    a = analyse_committed(fake_campaign(gaps={"mqa": 0.05}, null_gap=0.5))
     assert a.null_control.verdict == pt.VERDICT_DETECTED
     assert a.comparisons == {} and a.multipliers == {}
     assert any("null control" in note and "plan §9.3" in note for note in a.notes)
@@ -330,7 +335,7 @@ def test_a_detected_null_control_stops_every_comparison():
 def test_no_comparison_without_the_positive_control(campaign):
     # L6 seed 5 is missing: the reported ladder still fits, but the registered positive control cannot
     # run, and the seed-count rule waits for the complete ladder (plan §1.4; review S4, H2).
-    a = mt.analyse(without_manifest(campaign, lambda p: p.variant == "mha_L6" and p.init_seed == CONTROL_SEEDS[-1]))
+    a = analyse_committed(without_manifest(campaign, lambda p: p.variant == "mha_L6" and p.init_seed == CONTROL_SEEDS[-1]))
     assert a.fit is not None and a.decision is None
     assert a.positive_control is None
     assert a.comparisons == {} and a.multipliers == {}
@@ -340,7 +345,7 @@ def test_no_comparison_without_the_positive_control(campaign):
 def test_an_undetected_positive_control_is_flagged_and_comparisons_still_run(campaign, analysis, monkeypatch):
     undetected = dataclasses.replace(analysis.positive_control, verdict=pt.VERDICT_NOT_DETECTED)
     monkeypatch.setattr(mt.pt, "positive_control", lambda *args, **kwargs: undetected)
-    a = mt.analyse(campaign)
+    a = analyse_committed(campaign)
     assert a.positive_control.verdict == pt.VERDICT_NOT_DETECTED
     assert set(a.comparisons) == set(analysis.comparisons)
     assert any("positive control" in note and "uninformative" in note and "plan §8.4" in note for note in a.notes)
@@ -359,6 +364,8 @@ def test_report_sections_and_labels_are_fixed(analysis, blank):
 
 def test_blank_report_has_no_value(blank):
     values = mt.gate_values(blank)
+    # The one value a campaign without runs has: the ladder the committed file declares.
+    assert values[DECLARATIONS].pop("ladder") == "full"
     assert all(value is None for section in values.values() for value in section.values())
     assert blank.null_control is None and blank.positive_control is None
     assert blank.sigma_data is None and blank.sigma_init_null is None
@@ -408,7 +415,7 @@ def test_report_values_are_the_analysis_objects_own(analysis):
 
 
 def test_an_extended_design_names_the_variants_that_leave():
-    a = mt.analyse(fake_campaign(sigma=0.01, n_primary_seeds=8, gaps={"mqa": 0.05}))
+    a = analyse_committed(fake_campaign(sigma=0.01, n_primary_seeds=8, gaps={"mqa": 0.05}))
     count = mt.gate_values(a)["Seed count and detectable effect"]
     assert count["seeds per primary"] == 8
     assert count["variants leaving Arm A"] == tuple(PREREG["seed_count"]["leave_arm_a_if_extended"])
@@ -430,7 +437,8 @@ def test_rendered_blank_report_shows_a_dash_in_every_row(blank):
     text = mt.render_gates(blank)
     n_rows = sum(len(labels) for labels in EXPECTED_SECTIONS.values())
     rows = [line for line in text.splitlines() if line.endswith(f"| {DASH} |")]
-    assert len(rows) == n_rows
+    assert len(rows) == n_rows - 1  # every row but the declared ladder, which the committed file always has
+    assert "| ladder | full |" in text
     for note in blank.notes:
         assert note in text
 
@@ -444,13 +452,13 @@ def test_rendered_verdicts_are_primary_tests_words(analysis):
 
 
 def test_a_detected_null_control_is_said_at_the_top_of_the_report():
-    a = mt.analyse(fake_campaign(null_gap=0.5))
+    a = analyse_committed(fake_campaign(null_gap=0.5))
     text = mt.render_gates(a)
     first_section = text.index(next(iter(EXPECTED_SECTIONS)))
     warning = text.index("NULL CONTROL")
     assert warning < first_section
     assert "plan §9.3" in text[:first_section]
-    assert "NULL CONTROL" not in mt.render_gates(mt.analyse(fake_campaign()))
+    assert "NULL CONTROL" not in mt.render_gates(analyse_committed(fake_campaign()))
 
 
 # --- 7. The command line and the committed blank report -----------------------------------------
@@ -482,7 +490,7 @@ def test_committed_blank_report_is_generated_from_no_manifests(blank):
 
 
 def test_main_blank_writes_both_tables(tmp_path):
-    assert mt.main(["--blank", "--out", str(tmp_path)]) == 0
+    assert tables_main(["--blank", "--out", str(tmp_path)]) == 0
     assert (tmp_path / "gates.md").read_bytes() == BLANK_GATES.read_bytes()
     assert (tmp_path / "headline.md").is_file()
 
@@ -492,5 +500,5 @@ def test_main_writes_the_gate_report_from_manifests(tmp_path, campaign, analysis
     for manifest in campaign:
         mf.write_manifest(manifest, directory)
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(directory), "--out", str(out)]) == 0
+    assert tables_main(["--manifests", str(directory), "--out", str(out)]) == 0
     assert (out / "gates.md").read_text(encoding="utf-8") == mt.render_gates(analysis)

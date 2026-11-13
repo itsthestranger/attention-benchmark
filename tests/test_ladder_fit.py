@@ -309,8 +309,10 @@ def test_a_slope_of_the_wrong_sign_has_no_multiplier():
     assert fit.b < 0
     with pytest.raises(lf.LadderError):
         lf.effective_multiplier(0.01, 0.001, 4, fit)
-    with pytest.raises(lf.LadderError):
-        lf.seed_count_rule({s: 3.0 + 0.01 * s for s in range(1, 6)}, fit, test=pt.WELCH, prereg=PREREG)
+    # The seed-count rule does not need a parameter equivalent: a slope that is not positive gives
+    # 8 seeds (decision 223, tests/test_session5_rule.py).
+    decision = lf.seed_count_rule({s: 3.0 + 0.01 * s for s in range(1, 6)}, fit, test=pt.WELCH, prereg=PREREG)
+    assert decision.n_seeds == 8 and decision.param_multiplier is None
 
 
 @pytest.mark.parametrize("bad", [dict(gap=float("nan")), dict(gap_se=-1.0), dict(gap_se=float("inf")), dict(gap_df=0)])

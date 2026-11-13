@@ -17,7 +17,6 @@ Read plan §11 and §13 before the first run. Three rules that no command enforc
 | Two proposed thresholds in `configs/prereg.yaml` (`paired_if_s_rep_ratio_below: 0.6`, `max_undetectable_param_fraction: 0.05`). | Pre-registration (§1.7) | Phil |
 | Whether a positive control detected in the wrong direction (L6 better than L8) fails it. The test is two-sided and would print `detected`. | Reading §3.4 | Phil |
 | What "GPU utilization" and "time-to-loss-X" of plan §10.2 mean. Neither is recorded; they cannot be backfilled after the runs. | Nothing runs differently; decide before week 1 if you want them | Phil |
-| Where a cut of L10 is declared: the flag `--l10-cut` on the table and plot commands (§3.4), or a key in the frozen `configs/prereg.yaml`. | Only if L10 is cut | Phil |
 | Readings of the plan listed in `STATUS.md` (sweep rule order, the comparison gate, Arm B's learning rate, and others). | Nothing; confirm or change before the freeze | Phil |
 
 ## 0. Conventions
@@ -328,7 +327,7 @@ python -m scripts.make_plots --manifests $OUT/manifests/opt --out $OUT/plots --s
 Check `gates.md`:
 
 - "Positive control: L6 against L8 at 300M": the verdict. `detected` means the pipeline can see a 25% capacity cut. If it is `not detected`, the project ships as the noise-floor post with that finding, and every later not-detected verdict is uninformative (plan §8.4, §9.4); the notes say so.
-- "Seed count and detectable effect": `seeds per primary` is 5 or 8. If 8, `variants leaving Arm A` names MLA-96 and SWA-256, and seeds 6 to 8 are added to MHA and the three primaries in §4. It stays blank until MHA seeds 1 to 5, L6 seeds 1 to 5 and L10 seeds 1 to 3 all have their 300M results; the notes name the missing seeds. If you cut L10 (plan §12.2 item 4), add `--l10-cut` to every `make_tables` and `make_plots` command from here on and say so in the pre-registration: the rule then uses the two-point slope. Decide that before you look at the result of either.
+- "Seed count and detectable effect": `seeds per primary` is 5 or 8. If 8, `variants leaving Arm A` names MLA-96 and SWA-256, and seeds 6 to 8 are added to MHA and the three primaries in §4. It stays blank until MHA seeds 1 to 5, L6 seeds 1 to 5 and L10 seeds 1 to 3 all have their 300M results; the notes name the missing seeds. If you cut L10 (plan §12.2 item 4), declare it by setting `ladder: l6_l8` in `configs/commitments.yaml` by pull request before you look at either result: the rule then uses the two-point slope. After the rule prints `seeds per primary`, commit that number as `seed_count` in `configs/commitments.yaml` by pull request before week 3; until then the tables test no primary.
 - "Ladder slope b by budget": three values.
 
 Check `05_ladder.png`: three panels with every seed and a fit line.

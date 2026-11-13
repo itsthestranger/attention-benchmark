@@ -72,6 +72,37 @@ def load_prereg() -> dict:
     return _read(CONFIG_DIR / "prereg.yaml")
 
 
+# Decision 220: the two declarations Phil makes during the campaign, by pull request at the gate.
+_COMMITMENT_KEYS = ("ladder", "seed_count")
+_COMMITTED_LADDERS = ("full", "l6_l8")
+
+
+def load_commitments(path: str | Path | None = None) -> dict:
+    """configs/commitments.yaml (or `path`): the ladder and the committed seed count, validated."""
+    if path is None:
+        path = CONFIG_DIR / "commitments.yaml"
+    try:
+        held = _read(Path(path))
+    except OSError as exc:
+        raise ConfigError(f"{path}: cannot read commitments: {exc}") from exc
+    if set(held) != set(_COMMITMENT_KEYS):
+        raise ConfigError(f"{path}: the keys must be exactly {list(_COMMITMENT_KEYS)}, got {sorted(held)}")
+    ladder = held["ladder"]
+    if not isinstance(ladder, str) or ladder not in _COMMITTED_LADDERS:
+        raise ConfigError(f"{path}: ladder must be one of {list(_COMMITTED_LADDERS)}, got {ladder!r}")
+    seed_count = held["seed_count"]
+    if seed_count is not None:
+        allowed = _seed_counts()
+        if not _is_int(seed_count) or seed_count not in allowed:
+            raise ConfigError(f"{path}: seed_count must be null or one of {allowed} (the rule's counts), got {seed_count!r}")
+    return {"ladder": ladder, "seed_count": seed_count}
+
+
+def _seed_counts() -> list[int]:
+    sc = load_prereg()["seed_count"]
+    return [len(sc["base_seeds"]), len(sc["base_seeds"]) + len(sc["added_seeds"])]
+
+
 def load_variant(name: str) -> dict:
     return _named("variant", name, _VARIANT_DIR)
 

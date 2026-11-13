@@ -35,6 +35,7 @@ from tests.fixtures.fake_campaign import LADDER_PARAMS
 from tests.fixtures.fake_manifests import fake_manifest
 from tests.test_gate_report import losses_of
 from tests.test_lr_sweep import with_skips
+from tests.fixtures.commitments import analyse_committed, committed, tables_main, write_commitments
 
 PREREG = config.load_prereg()
 BASE_SEEDS = tuple(PREREG["seed_count"]["base_seeds"])
@@ -50,7 +51,7 @@ def campaign() -> list[dict]:
 
 @pytest.fixture(scope="module")
 def analysis(campaign) -> mt.Analysis:
-    return mt.analyse(campaign)
+    return analyse_committed(campaign)
 
 
 def parsed(manifest):
@@ -116,7 +117,7 @@ def test_a_run_trained_under_another_setting_is_refused_and_named(campaign, labe
     target = next(m for m in campaign if is_run("mqa", 3)(parsed(m)))
     mixed = replace(campaign, is_run("mqa", 3), lambda m: edited(m, _set(path, value)))
     with pytest.raises(mt.TableError) as caught:
-        mt.analyse(mixed)
+        analyse_committed(mixed)
     message = str(caught.value)
     assert label in message, message
     assert target["name"] in message, message
@@ -129,7 +130,7 @@ def test_a_whole_variant_under_another_recipe_is_refused(campaign):
 
     mixed = replace(campaign, lambda p: p.variant == "mqa", other, expect=None)
     with pytest.raises(mt.TableError, match="recipe"):
-        mt.analyse(mixed)
+        analyse_committed(mixed)
 
 
 def test_a_run_nothing_reads_is_still_held_to_the_recipe(campaign):
@@ -137,7 +138,7 @@ def test_a_run_nothing_reads_is_still_held_to_the_recipe(campaign):
     sweep = fake_manifest("mha", budget="100M", branches=[], init_seed=SWEEP_SEED, peak_lr=4.8e-3, val_loss=3.4)
     odd = edited(sweep, _set("recipe.optimizer.weight_decay", 0.0))
     with pytest.raises(mt.TableError, match="recipe"):
-        mt.analyse(campaign + [odd])
+        analyse_committed(campaign + [odd])
 
 
 def test_a_run_made_with_an_override_is_refused_even_when_the_recipe_agrees(campaign):
@@ -149,7 +150,7 @@ def test_a_run_made_with_an_override_is_refused_even_when_the_recipe_agrees(camp
 
     mixed = replace(campaign, is_run("gqa4", 2), lambda m: edited(m, with_override))
     with pytest.raises(mt.TableError) as caught:
-        mt.analyse(mixed)
+        analyse_committed(mixed)
     message = str(caught.value)
     assert "override" in message, message
     assert target["name"] in message, message
@@ -165,7 +166,7 @@ def test_runs_of_one_variant_must_have_one_model(campaign, variant, seed, path, 
     target = next(m for m in campaign if is_run(variant, seed)(parsed(m)))
     mixed = replace(campaign, is_run(variant, seed), lambda m: edited(m, _set(path, value)))
     with pytest.raises(mt.TableError) as caught:
-        mt.analyse(mixed)
+        analyse_committed(mixed)
     message = str(caught.value)
     assert "model" in message, message
     assert target["name"] in message, message
@@ -177,7 +178,7 @@ def test_the_differences_the_plan_allows_are_not_refused(campaign, analysis):
         fake_manifest("mha", budget="100M", branches=[], init_seed=SWEEP_SEED, peak_lr=4.8e-3, val_loss=3.4),
         fake_manifest("mla192", arm="iso_wallclock", steps=1400, init_seed=1, val_loss=3.5),
     ]
-    with_extra = mt.analyse(campaign + extra)
+    with_extra = analyse_committed(campaign + extra)
     assert with_extra.comparisons == analysis.comparisons
     assert with_extra.decision == analysis.decision
 
@@ -190,7 +191,7 @@ def test_the_static_columns_come_from_the_manifests(campaign):
     n_params = build_model(example["resolved"]).n_params
     assert f"{n_params:,}" != mt.static_columns("gqa4")["params"], "the edit must change the count"
 
-    rows = {row["variant"]: row for row in mt.headline_rows(mt.analyse(mixed))}
+    rows = {row["variant"]: row for row in mt.headline_rows(analyse_committed(mixed))}
     assert rows["gqa4"]["d_ff"] == str(other_d_ff)
     assert rows["gqa4"]["params"] == f"{n_params:,}"
     # A variant whose runs have the configs' model prints the configs' numbers, as before.
@@ -199,7 +200,7 @@ def test_the_static_columns_come_from_the_manifests(campaign):
 
 
 def test_the_blank_table_keeps_the_configs_static_columns():
-    rows = {row["variant"]: row for row in mt.headline_rows(mt.analyse([]))}
+    rows = {row["variant"]: row for row in mt.headline_rows(analyse_committed([]))}
     for variant in mt.HEADLINE_VARIANTS:
         static = mt.static_columns(variant)
         assert rows[variant]["params"] == static["params"] and rows[variant]["d_ff"] == static["d_ff"]
@@ -239,7 +240,7 @@ def test_the_complete_ladder_gives_a_decision(analysis):
 
 @pytest.mark.parametrize("missing", [(1, 2, 3), (3,), (1, 2)], ids=["absent", "one seed short", "one seed only"])
 def test_without_all_of_l10_there_is_no_decision(campaign, missing):
-    a = mt.analyse(without(campaign, ladder_runs("mha_L10", missing)))
+    a = analyse_committed(without(campaign, ladder_runs("mha_L10", missing)))
     assert a.decision is None
     assert f"seed count rule: mha_L10 300M results for seeds {list(missing)} are missing" in a.notes
     assert a.comparisons == {}  # decision 126: no primary verdict without a seed-count decision
@@ -248,14 +249,14 @@ def test_without_all_of_l10_there_is_no_decision(campaign, missing):
 
 @pytest.mark.parametrize("missing", [(4, 5), (1,)], ids=["two short", "one short"])
 def test_without_all_of_l6_there_is_no_decision(campaign, missing):
-    a = mt.analyse(without(campaign, ladder_runs("mha_L6", missing)))
+    a = analyse_committed(without(campaign, ladder_runs("mha_L6", missing)))
     assert a.decision is None
     assert f"seed count rule: mha_L6 300M results for seeds {list(missing)} are missing" in a.notes
 
 
 def test_l10_declared_cut_gives_the_two_point_rule(campaign):
     no_l10 = without(campaign, ladder_runs("mha_L10", (1, 2, 3)))
-    a = mt.analyse(no_l10, l10_cut=True)
+    a = mt.analyse(no_l10, commitments=committed(no_l10, ladder="l6_l8"))
     assert a.decision is not None
     assert a.decision == two_point_decision(no_l10, a)
     assert set(p.name for p in a.rule_fit.points) == {"mha", "mha_L6"}
@@ -264,19 +265,19 @@ def test_l10_declared_cut_gives_the_two_point_rule(campaign):
 
 def test_l10_declared_cut_is_not_read_by_the_rule_when_its_runs_exist(campaign):
     """A declaration made after the runs exist must give what it gives without them."""
-    a = mt.analyse(campaign, l10_cut=True)
+    a = mt.analyse(campaign, commitments=committed(campaign, ladder="l6_l8"))
     assert a.decision == two_point_decision(campaign, a)
     assert set(p.name for p in a.rule_fit.points) == {"mha", "mha_L6"}
 
 
 def test_the_declaration_does_not_rescue_an_incomplete_l6(campaign):
-    a = mt.analyse(without(campaign, ladder_runs("mha_L6", (5,))), l10_cut=True)
+    a = mt.analyse(without(campaign, ladder_runs("mha_L6", (5,))), commitments={"ladder": "l6_l8", "seed_count": None})
     assert a.decision is None
 
 
 def test_an_unregistered_l10_seed_does_not_move_the_rule(campaign, analysis):
     extra = fake_manifest("mha", ladder="mha_L10", init_seed=4, branches=["100M", "200M"], val_loss=2.0)
-    a = mt.analyse(campaign + [extra])
+    a = analyse_committed(campaign + [extra])
     assert a.decision == analysis.decision
     assert a.rule_fit == analysis.rule_fit
 
@@ -286,8 +287,11 @@ def test_the_command_line_declares_the_cut(campaign, tmp_path, capsys):
     for manifest in without(campaign, ladder_runs("mha_L10", (1, 2, 3))):
         mf.write_manifest(manifest, directory)
     waiting, cut = tmp_path / "waiting", tmp_path / "cut"
-    assert mt.main(["--manifests", str(directory), "--out", str(waiting)]) == 0
-    assert mt.main(["--manifests", str(directory), "--out", str(cut), "--l10-cut"]) == 0
+    assert tables_main(["--manifests", str(directory), "--out", str(waiting)]) == 0
+    file = write_commitments(tmp_path / "cut.yaml", {"ladder": "l6_l8", "seed_count": None})
+    assert mt.main(["--manifests", str(directory), "--out", str(cut), "--commitments", str(file)]) == 0
+    with pytest.raises(SystemExit):
+        mt.main(["--manifests", str(directory), "--out", str(cut), "--l10-cut"])  # the flag is gone (decision 220)
     capsys.readouterr()
     assert "mha_L10 300M results for seeds [1, 2, 3] are missing" in (waiting / "gates.md").read_text(encoding="utf-8")
     assert "declared cut" in (cut / "gates.md").read_text(encoding="utf-8")
@@ -336,13 +340,13 @@ def test_the_tables_build_with_a_diverged_run_on_record(campaign, tmp_path, caps
     for manifest in campaign + [diverged]:
         mf.write_manifest(manifest, directory)
     out = tmp_path / "tables"
-    assert mt.main(["--manifests", str(directory), "--out", str(out)]) == 0
+    assert tables_main(["--manifests", str(directory), "--out", str(out)]) == 0
     capsys.readouterr()
     clean = tmp_path / "clean"
     clean_dir = tmp_path / "clean_manifests"
     for manifest in campaign:
         mf.write_manifest(manifest, clean_dir)
-    assert mt.main(["--manifests", str(clean_dir), "--out", str(clean)]) == 0
+    assert tables_main(["--manifests", str(clean_dir), "--out", str(clean)]) == 0
     capsys.readouterr()
     for name in ("headline.md", "gates.md"):
         text = (out / name).read_text(encoding="utf-8")
@@ -359,20 +363,20 @@ def test_the_tables_build_with_a_diverged_run_on_record(campaign, tmp_path, caps
 def test_a_skippy_arm_b_run_is_refused(campaign, variant, seed):
     """B10: Arm B's runs are read by a comparison, so step parity covers them (plan §13.6)."""
     arm_b = fs.arm_b_manifests(campaign)
-    mt.analyse(campaign + arm_b)  # accepted as built
+    analyse_committed(campaign + arm_b)  # accepted as built
     def is_target(p):
         return (p.arm, p.variant, p.init_seed) == ("isobackbone", variant, seed)
     assert sum(is_target(parsed(m)) for m in arm_b) == 1, sorted({parsed(m).arm for m in arm_b})
     skippy = replace(arm_b, is_target, lambda m: with_skips(m, 8))
     with pytest.raises(mt.TableError, match="steps taken"):
-        mt.analyse(campaign + skippy)
+        analyse_committed(campaign + skippy)
 
 
 def test_a_rerun_on_an_unregistered_seed_is_not_a_reproducibility_pair(campaign, analysis):
     """B36: plan §8.1 registers reruns on seeds 1 to 3 only."""
     registered = tuple(PREREG["test_selection"]["reproducibility_pairs"]["init_seeds"])
     extra = fake_manifest("mha", budget="100M", branches=[], init_seed=4, val_loss=9.9)
-    a = mt.analyse(campaign + [extra])
+    a = analyse_committed(campaign + [extra])
     assert tuple(sorted(a.reruns_100m)) == registered
     assert a.selection == analysis.selection
 
