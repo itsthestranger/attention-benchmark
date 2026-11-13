@@ -10,7 +10,7 @@ from a different stream seed.
         --steps N --peak-lr X --out DIR [--data-seed N] [--sequences-per-step N]
         [--eval-sequences N] [--n-layers N] [--mode opt|ref] [--device cpu|cuda]
         [--precision fp32|fp16] [--expected-backend NAME] [--panel NAME]
-        [--difficulty-param NAME] [--force]
+        [--difficulty-param NAME] [--override PATH=VALUE ...] [--force]
 
 The record is one JSON object with schema "probe/1" (see `run_probe`). It is written
 to DIR under a file name that is known before training:
@@ -29,6 +29,7 @@ import hashlib
 import json
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import src.attention.recurrence  # noqa: F401  (registers "recurrence")
@@ -48,6 +49,13 @@ BACKBONE_D_MODEL = 384
 HELD_OUT_OFFSET = 1_000_003
 DEFAULT_EVAL_SEQUENCES = 1024
 _LABEL = re.compile(r"[A-Za-z0-9_-]+")
+# The resolved-config keys probe_resolved sets itself. An extra override of one of them is refused.
+PROBE_OWNED_KEYS = frozenset({
+    "model.n_heads", "model.d_model", "model.head_dim", "model.d_ff", "model.vocab_size",
+    "model.context_length", "model.attention", "model.n_layers",
+    "recipe.batch.sequences_per_step", "recipe.batch.sequence_length",
+    "recipe.batch.tokens_per_step", "recipe.batch.micro_batch",
+})
 
 
 def probe_resolved(
@@ -61,8 +69,13 @@ def probe_resolved(
     sequences_per_step: int = 32,
     micro_batch: int | None = None,
     n_layers: int | None = None,
+    overrides: Mapping | None = None,
 ) -> dict:
-    """The resolved config of one probe run. Raises ValueError for widths the rules cannot shrink."""
+    """The resolved config of one probe run. Raises ValueError for widths the rules cannot shrink.
+
+    `overrides` maps dotted paths to values and is applied after the probe's own settings,
+    as scripts/train.py applies --override. A path the probe sets itself is refused.
+    """
     if isinstance(d_model, bool) or not isinstance(d_model, int) or d_model <= 0 or d_model % 16:
         raise ValueError(f"d_model must be a positive multiple of 16, got {d_model!r}")
     head_dim = d_model // BACKBONE_HEADS
@@ -84,7 +97,7 @@ def probe_resolved(
         raise ValueError(f"unknown variant {variant!r}; known: {config.variant_names() + [RECURRENCE]}")
     base = config.load_variant(base_name)
 
-    overrides: dict = {
+    probe_settings: dict = {
         "model.n_heads": BACKBONE_HEADS,
         "model.d_model": d_model,
         "model.head_dim": head_dim,
@@ -97,7 +110,7 @@ def probe_resolved(
         "recipe.batch.micro_batch": micro,
     }
     if n_layers is not None:
-        overrides["model.n_layers"] = n_layers
+        probe_settings["model.n_layers"] = n_layers
 
     attention = dict(base["attention"])
     if variant == RECURRENCE:
@@ -116,15 +129,19 @@ def probe_resolved(
             "d_c_q": int(base["attention"]["d_c_q"] * d_model / BACKBONE_D_MODEL),
             "rope_dim": rope_dim,
         }
-    overrides["model.attention"] = attention
+    probe_settings["model.attention"] = attention
 
+    extra = dict(overrides or {})
+    clash = sorted(set(extra) & PROBE_OWNED_KEYS)
+    if clash:
+        raise ValueError(f"these keys are set by the probe itself and cannot be overridden: {clash}")
     return config.resolve(
         base_name,
         init_seed=init_seed,
         peak_lr=peak_lr,
         steps=steps,
         branches=[],
-        overrides=overrides,
+        overrides={**probe_settings, **extra},
     )
 
 
@@ -175,6 +192,7 @@ def _plan(
     mode: str = "opt",
     panel: str | None = None,
     difficulty_param: str | None = None,
+    overrides: Mapping | None = None,
 ) -> dict:
     """Everything a run's record and file name depend on, computed before any training.
 
@@ -193,6 +211,7 @@ def _plan(
         peak_lr=peak_lr,
         sequences_per_step=sequences_per_step,
         n_layers=n_layers,
+        overrides=overrides,
     )
     spec_record = {"seq_len": spec.seq_len, "vocab_size": spec.vocab_size, "params": spec.as_dict()}
     task = _label(spec, panel)
@@ -263,8 +282,11 @@ def run_probe(
     expected_backend: str | None = None,
     panel: str | None = None,
     difficulty_param: str | None = None,
+    overrides: Mapping | None = None,
 ) -> dict:
     """Train one probe model, evaluate it on held-out sequences, and return the record (schema probe/1).
+
+    `overrides` are extra resolved-config values (dotted paths), as --override gives them to train.py.
 
     Keys: schema, variant, task (panel label or generator task), generator, difficulty,
     init_seed, accuracy (held-out token accuracy), sequence_accuracy, chance (no-recall
@@ -287,6 +309,7 @@ def run_probe(
         mode=mode,
         panel=panel,
         difficulty_param=difficulty_param,
+        overrides=overrides,
     )
     resolved = plan["resolved"]
     dev = rc.choose_device(device)
@@ -426,9 +449,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--panel", default=None, metavar="NAME", help="task label of the record (default: the task)")
     parser.add_argument("--difficulty-param", dest="difficulty_param", default=None, metavar="NAME",
                         help="the spec parameter that is the record's difficulty (default: the task's difficulty)")
+    parser.add_argument("--override", action="append", default=[], metavar="PATH=VALUE",
+                        help="override one resolved-config value, e.g. recipe.grad_scaler.init_scale=65536.0 "
+                             "(YAML value), repeatable")
     parser.add_argument("--out", type=Path, required=True, metavar="DIR", help="directory for the record file")
     parser.add_argument("--force", action="store_true", help="retrain even if the record file exists")
     return parser
+
+
+def _parse_overrides(items: list[str]) -> dict:
+    """--override items, parsed by scripts/train.py's own parser (rc.build_spec), not a copy of it."""
+    return rc.build_spec(argparse.Namespace(override=list(items)))["overrides"]
 
 
 def _main(args) -> int:
@@ -452,6 +483,7 @@ def _main(args) -> int:
         mode=args.mode,
         panel=args.panel,
         difficulty_param=args.difficulty_param,
+        overrides=_parse_overrides(args.override),
     )
     if trained:
         print(f"wrote {path}")

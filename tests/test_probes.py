@@ -872,9 +872,15 @@ def test_cli_refuses_expected_backend_on_cpu(tmp_path, capsys):
 # --- 14. the held-out 4-pair MQAR run: one helper, a CPU smoke test, and the gpu test -----
 
 
+# The fp16 GradScaler values the recipe leaves unset (configs/recipe.yaml is frozen). These are
+# the values of tests/test_trainer.py::SCALER; passing them as overrides is what that test does.
+SCALER_OVERRIDES = {"recipe.grad_scaler.init_scale": 65536.0, "recipe.grad_scaler.growth_interval": 2000}
+
+
 def mqar4_probe(seed, device, *, steps=GPU_STEPS, eval_sequences=GPU_EVAL):
     """The held-out 4-pair MQAR run of plan §9.2. On CUDA the trainer enforces the math kernel
-    (as the gpu tests in test_trainer.py do); on CPU there is no kernel to enforce."""
+    (as the gpu tests in test_trainer.py do); on CPU there is no kernel to enforce. The scaler
+    overrides are passed on every device, so the CPU smoke test runs the same path."""
     return run_probe(
         "mha",
         make_spec("mqar", n_pairs=4, n_keys=16, n_values=16),
@@ -887,6 +893,7 @@ def mqar4_probe(seed, device, *, steps=GPU_STEPS, eval_sequences=GPU_EVAL):
         eval_sequences=eval_sequences,
         device=device,
         expected_backend="math" if device == "cuda" else None,
+        overrides=SCALER_OVERRIDES,
     )
 
 
@@ -904,4 +911,180 @@ def test_tiny_mha_solves_held_out_four_pair_mqar_on_cuda(seed):
     assert record["accuracy"] == 1.0
     assert record["sequence_accuracy"] == 1.0
     assert record["precision"] == "fp16"
-    assert record["skipped_steps"] == 0
+
+
+# --- 15. review gaps: layout order, data seeds, skipped steps, mode, overrides ----------------
+
+
+def test_multihop_context_pairs_are_shuffled_so_no_position_gives_the_second_pair():
+    spec = make_spec("multihop", n_chains=4)
+    n = spec.param("n_chains")
+    x, _ = _batch(spec, n=256, seed=40)
+    first_slots, second_slots = set(), set()
+    for row in x:
+        pairs = row[: 4 * n].reshape(2 * n, 2).tolist()
+        query = int(row[4 * n + 1])
+        i = next(i for i, (a, _) in enumerate(pairs) if a == query)
+        j = next(j for j, (a, _) in enumerate(pairs) if a == pairs[i][1])
+        first_slots.add(i)
+        second_slots.add(j)
+    assert first_slots == set(range(2 * n))
+    assert second_slots == set(range(2 * n))
+
+
+def test_fuzzy_first_query_refers_to_every_context_slot():
+    spec = make_spec("fuzzy", n_pairs=4, key_len=3, n_noise=1)
+    n, k = spec.param("n_pairs"), spec.param("key_len")
+    noise_lo, noise_hi = syn._ranges(spec)["noise"]
+    x, _ = _batch(spec, n=256, seed=41)
+    s = n * (k + 1)
+    slots = set()
+    for row in x:
+        ctx = row[:s].reshape(n, k + 1)
+        block = row[s + 1 : s + 1 + k + 1]
+        o = next(o for o in range(k) if not noise_lo <= block[o] < noise_hi)
+        slots.add(int(np.flatnonzero(ctx[:, o] == block[o])[0]))
+    assert slots == set(range(n))
+
+
+def test_held_out_counts_come_from_the_held_out_stream(monkeypatch):
+    seen = []
+    real_counts = tp.counts
+
+    def spy(model, x, y, *, mode="opt"):
+        seen.append(x.clone())
+        return real_counts(model, x, y, mode=mode)
+
+    monkeypatch.setattr(tp, "counts", spy)
+    spec = make_spec("mqar", n_pairs=4)
+    run_probe("mha", spec, **_tiny_kwargs(data_seed=5, steps=3, eval_sequences=6, sequences_per_step=4))
+    held = ProbeStream(spec, sequences_per_step=4, seed=5 + HELD_OUT_OFFSET, max_steps=2)
+    expected = [held.batch(0)[0], held.batch(1)[0][:2]]
+    assert len(seen) == 2
+    for got, want in zip(seen, expected):
+        assert torch.equal(got, want)
+    train = ProbeStream(spec, sequences_per_step=4, seed=5, max_steps=3)
+    for t in range(3):
+        for got in seen:
+            assert not torch.equal(got, train.batch(t)[0][: got.shape[0]])
+
+
+def test_training_data_is_the_same_for_every_init_seed_and_variant(monkeypatch):
+    made = []
+    real_trainer = tp.Trainer
+
+    class Recording(real_trainer):
+        def __init__(self, model, resolved, stream, **kwargs):
+            made.append(stream)
+            super().__init__(model, resolved, stream, **kwargs)
+
+    monkeypatch.setattr(tp, "Trainer", Recording)
+    spec = make_spec("mqar", n_pairs=4)
+
+    def first_training_batches(variant, init_seed, data_seed=0):
+        made.clear()
+        run_probe(variant, spec, **_tiny_kwargs(init_seed=init_seed, data_seed=data_seed, steps=2))
+        stream = made[-1]
+        return [stream.batch(i)[0] for i in range(2)]
+
+    base = first_training_batches("mha", 1)
+    for other in (first_training_batches("mha", 2), first_training_batches("mqa", 1)):
+        assert all(torch.equal(a, b) for a, b in zip(base, other))
+    different = first_training_batches("mha", 1, data_seed=1)
+    assert not all(torch.equal(a, b) for a, b in zip(base, different))
+
+
+def test_record_reports_the_trainers_skipped_and_taken_steps(monkeypatch):
+    real_trainer = tp.Trainer
+
+    class Stub(real_trainer):
+        def train(self, until=None):
+            super().train(until)
+            self.steps_taken = 2
+
+        @property
+        def skipped_steps(self):
+            return 1
+
+    monkeypatch.setattr(tp, "Trainer", Stub)
+    record = run_probe("mha", make_spec("mqar", n_pairs=4), **_tiny_kwargs(steps=3))
+    assert record["steps_taken"] == 2 and record["skipped_steps"] == 1
+
+
+@pytest.mark.parametrize("mode", ["ref", "opt"])
+def test_held_out_counts_use_the_run_mode(monkeypatch, mode):
+    modes_seen = []
+    real_counts = tp.counts
+
+    def spy(model, x, y, *, mode="opt"):
+        modes_seen.append(mode)
+        return real_counts(model, x, y, mode=mode)
+
+    monkeypatch.setattr(tp, "counts", spy)
+    run_probe("mha", make_spec("mqar", n_pairs=4), **_tiny_kwargs(mode=mode))
+    assert modes_seen and set(modes_seen) == {mode}
+
+
+def test_an_override_reaches_the_resolved_config_and_changes_hash_and_file_name(tmp_path):
+    spec = make_spec("mqar", n_pairs=4)
+    plain = probe_resolved("mha", spec, d_model=64, init_seed=1, steps=3, peak_lr=1e-3,
+                           sequences_per_step=4, n_layers=1)
+    tuned = probe_resolved("mha", spec, d_model=64, init_seed=1, steps=3, peak_lr=1e-3,
+                           sequences_per_step=4, n_layers=1,
+                           overrides={"recipe.grad_scaler.init_scale": 1024.0})
+    assert tuned["recipe"]["grad_scaler"]["init_scale"] == 1024.0
+    assert plain["recipe"]["grad_scaler"]["init_scale"] is None
+    assert config.config_hash(tuned) != config.config_hash(plain)
+    kwargs = _tiny_kwargs()
+    plain_path = probe_path(tmp_path, "mha", spec, **kwargs)
+    tuned_path = probe_path(tmp_path, "mha", spec, **kwargs, overrides={"recipe.grad_scaler.init_scale": 1024.0})
+    assert plain_path.name != tuned_path.name
+
+
+@pytest.mark.parametrize(
+    "path, value",
+    [
+        ("model.d_model", 32),
+        ("model.n_layers", 2),
+        ("model.attention", {"type": "grouped", "n_kv_heads": 4}),
+        ("recipe.batch.micro_batch", 2),
+        ("recipe.batch.sequences_per_step", 8),
+    ],
+)
+def test_an_override_of_a_key_the_probe_sets_is_refused(path, value):
+    spec = make_spec("mqar", n_pairs=4)
+    with pytest.raises(ValueError, match="set by the probe"):
+        probe_resolved("mha", spec, d_model=64, init_seed=1, steps=3, peak_lr=1e-3,
+                       sequences_per_step=4, n_layers=1, overrides={path: value})
+
+
+def test_cli_override_flag_reaches_the_record_file(tmp_path):
+    argv = [
+        "--variant", "mha", "--task", "mqar", "--param", "n_pairs=4", "--d-model", "64", "--seed", "1",
+        "--steps", "3", "--peak-lr", "0.001", "--sequences-per-step", "4", "--eval-sequences", "6",
+        "--n-layers", "1", "--out", str(tmp_path), "--override", "recipe.grad_scaler.init_scale=1024.0",
+    ]
+    assert main(argv) == 0
+    (path,) = tmp_path.glob("mqar-mha-n4-s1-*.json")
+    written = json.loads(path.read_text(encoding="utf-8"))
+    without = config.config_hash(probe_resolved(
+        "mha", make_spec("mqar", n_pairs=4), d_model=64, init_seed=1, steps=3, peak_lr=0.001,
+        sequences_per_step=4, n_layers=1,
+    ))
+    expected = config.config_hash(probe_resolved(
+        "mha", make_spec("mqar", n_pairs=4), d_model=64, init_seed=1, steps=3, peak_lr=0.001,
+        sequences_per_step=4, n_layers=1, overrides={"recipe.grad_scaler.init_scale": 1024.0},
+    ))
+    assert written["config_hash"] == expected
+    assert written["config_hash"] != without
+
+
+def test_cli_refuses_a_malformed_override(tmp_path, capsys):
+    argv = [
+        "--variant", "mha", "--task", "mqar", "--param", "n_pairs=4", "--d-model", "64", "--seed", "1",
+        "--steps", "3", "--peak-lr", "0.001", "--out", str(tmp_path), "--override", "no-equals-sign",
+    ]
+    assert main(argv) == 2
+    assert "PATH=VALUE" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
+
