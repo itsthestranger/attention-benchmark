@@ -100,7 +100,11 @@ def start_branch(trunk_state: dict, budget: str, stream, *, device="cpu", mode="
 
 
 def start_or_resume_branch(parent_resolved: dict, budget: str, stream, root, **trainer_kwargs):
-    """Resume the branch from its own checkpoints, or start it from the trunk's branch point."""
+    """Resume the branch from its own checkpoints, or start it from the trunk's branch point.
+
+    The trunk's state goes through ``checkpoint.restore``, which refuses a state written under
+    another environment (torch, CUDA, driver or GPU): that refusal propagates as CheckpointError.
+    """
     cfg = branch_resolved(parent_resolved, budget)
     if ck.latest_valid_checkpoint(ck.checkpoint_dir(root, cfg)) is not None:
         trainer = Trainer(build_model(cfg), cfg, stream, **trainer_kwargs)

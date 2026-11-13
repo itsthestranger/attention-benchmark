@@ -53,7 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="required on CUDA: whether another job shares the GPU")
     p.add_argument("--expected-backend", dest="expected_backend", choices=sorted(rc.SDPA_BACKENDS),
                    help="required on CUDA: the fused kernel the trainer enforces inside the loop")
-    p.add_argument("--until", type=int, metavar="STEP", help="stop after this step (for session limits and tests)")
+    p.add_argument("--until", type=int, metavar="STEP",
+                   help="stop after this step, leaving a checkpoint there (for session limits and tests)")
     p.add_argument("--timing-pass-id", dest="timing_pass_id", metavar="ID",
                    help="required for arm iso_wallclock (Arm C), refused for every other arm: the timing pass "
                         "whose step count the run uses (also the run-spec key timing_pass_id)")
