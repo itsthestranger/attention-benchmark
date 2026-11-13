@@ -236,8 +236,11 @@ def probe_records() -> list[dict]:
                     rng = np.random.default_rng([_key("probe"), task_index, variant_index, difficulty, seed])
                     decay = 0.12 if variant == "recurrence" else 0.002
                     accuracy = 1.0 - decay * np.log2(difficulty) + 0.01 * float(rng.standard_normal())
+                    clipped = float(np.clip(accuracy, 0.0, 1.0))
+                    # Synthetic: the sequence accuracy is half the token accuracy, and the chance is 1/n.
                     records.append({"variant": variant, "task": task, "difficulty": difficulty,
-                                    "init_seed": seed, "accuracy": float(np.clip(accuracy, 0.0, 1.0))})
+                                    "init_seed": seed, "accuracy": clipped, "sequence_accuracy": 0.5 * clipped,
+                                    "chance": 1 / difficulty})
     return records
 
 
