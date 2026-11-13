@@ -38,6 +38,10 @@ VARIABLES = {
     "V_LR": "1.2e-3", "V_SRC": "mqa-isoparam-100M-lr1.2e3-s21-d1",
     "S_V": "1400", "TP_ID": "tp-placeholder",
     "v": "mqa", "s": "1", "d": "2", "b": "100M", "l": "mha_L6",
+    # The probes of §2.3: one model, one size, the settings the pilot fixes.
+    "m": "recurrence", "n": "16", "PROBE_D": "64", "PROBE_LR": "3e-3", "PROBE_STEPS": "8000",
+    "STEPS_HOP": "8000", "STEPS_CARD": "8000", "STEPS_FUZZY": "8000", "STEPS_COPY": "8000",
+    "STEPS_INDUCTION": "8000",
 }
 _VARIABLE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 
