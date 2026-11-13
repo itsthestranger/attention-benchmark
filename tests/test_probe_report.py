@@ -86,10 +86,53 @@ def test_a_difficulty_below_one_or_not_an_integer_is_refused(difficulty):
     assert "record 0" in message and "difficulty" in message
 
 
+# Each field is refused alone at its point, so that only the field's own check can refuse it.
+MALFORMED_FIELDS = [
+    ("init_seed", "3"),
+    ("d_model", 2.0),
+    ("n_layers", "2"),
+    ("steps", None),
+    ("steps_taken", "100"),
+    ("skipped_steps", "3"),
+    ("peak_lr", "0.001"),
+]
+
+
+@pytest.mark.parametrize("field, value", MALFORMED_FIELDS)
+def test_a_malformed_numeric_field_is_refused_and_named(field, value):
+    message = refused([record(difficulty=9, **{field: value})])
+    assert "record 0" in message and field in message
+
+
+@pytest.mark.parametrize("field", ["init_seed", "d_model", "n_layers", "steps", "steps_taken", "skipped_steps"])
+@pytest.mark.parametrize("value", [True, -1])
+def test_a_count_field_that_is_a_boolean_or_negative_is_refused(field, value):
+    message = refused([record(difficulty=9, **{field: value})])
+    assert "record 0" in message and field in message and "non-negative integer" in message
+
+
+@pytest.mark.parametrize("value", [0.0, -0.001, float("nan"), float("inf"), True])
+def test_a_peak_lr_that_is_not_a_finite_positive_number_is_refused(value):
+    message = refused([record(difficulty=9, peak_lr=value)])
+    assert "record 0" in message and "peak_lr" in message and "above zero" in message
+
+
+def test_the_command_line_refuses_a_malformed_field_without_a_traceback(tmp_path, capsys):
+    probes = _write(tmp_path / "probes", [record(difficulty=9, skipped_steps="3")])
+    out = tmp_path / "tables"
+    assert pr.main(["--probes", str(probes), "--out", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "record 0" in err and "skipped_steps" in err
+    assert not out.exists()
+
+
 @pytest.mark.parametrize("chance", [0.0, -0.25, 1.5, float("nan")])
 def test_a_chance_outside_zero_to_one_is_refused(chance):
-    message = refused([record(), record(variant="gqa4", chance=chance)])
-    assert "record 1" in message and "chance" in message
+    # Alone at its point, so that only the range check can refuse it.
+    message = refused([record(difficulty=7, chance=chance)])
+    assert "record 0" in message and "chance" in message
+    assert "expected None or a number in (0, 1]" in message
+    assert "differs" not in message
 
 
 def test_a_chance_of_none_and_a_chance_of_one_are_accepted():

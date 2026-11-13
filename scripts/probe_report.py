@@ -41,6 +41,8 @@ SAME_AT_POINT = (
     "eval_sequences", "peak_lr", "mode", "precision",
 )
 SAME_FOR_TASK_ENVIRONMENT = ("torch", "cuda")
+# Integer fields that the report prints or takes a maximum of: non-negative integers only.
+COUNT_FIELDS = ("init_seed", "d_model", "n_layers", "steps", "steps_taken", "skipped_steps")
 PARAGRAPH = (
     "Accuracies are token accuracy on held-out sequences; sequence accuracy is the second column. "
     "\"1/n\" is the level of a model that knows which values are in the context and recalls nothing, "
@@ -75,6 +77,10 @@ def _is_unit(value) -> bool:
     return _is_number(value) and 0 <= value <= 1
 
 
+def _is_count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _record_problems(index: int, record) -> list[str]:
     if not isinstance(record, Mapping):
         return [f"record {index} is not an object: {record!r}"]
@@ -95,6 +101,11 @@ def _record_problems(index: int, record) -> list[str]:
     difficulty = record["difficulty"]
     if not isinstance(difficulty, int) or isinstance(difficulty, bool) or difficulty < 1:
         problems.append(f"{name} has difficulty {difficulty!r}, expected an integer of at least 1")
+    for key in COUNT_FIELDS:
+        if not _is_count(record[key]):
+            problems.append(f"{name} has {key} {record[key]!r}, expected a non-negative integer")
+    if not (_is_number(record["peak_lr"]) and record["peak_lr"] > 0):
+        problems.append(f"{name} has peak_lr {record['peak_lr']!r}, expected a finite number above zero")
     chance = record["chance"]
     if chance is not None and not (_is_number(chance) and 0 < chance <= 1):
         problems.append(f"{name} has chance {chance!r}, expected None or a number in (0, 1]")
