@@ -561,13 +561,15 @@ def test_resume_count_goes_up_with_every_resume(tmp_path):
     assert state["step"] == 30 and state["resume_count"] == 3
 
 
-def test_a_branch_point_alone_is_not_resumed_from(tmp_path):
-    """Branch points are for branches (T-17). A resume uses the regular checkpoints."""
+def test_a_branch_point_alone_is_resumed_from(tmp_path):
+    """A branch point is a complete state of its trunk. A trunk that resumed from behind it would run
+    the steps before it again and no longer be the trunk its branch started from (review S4, G1)."""
     cfg = resolved_for(steps=20)
     first = trainer_for(cfg)
     first.train(until=5)
-    ck.save_checkpoint(first, ck.checkpoint_dir(tmp_path, cfg), branch_point=True)
-    assert ck.resume_or_start(trainer_for(cfg), tmp_path).step == 0
+    trunk = ck.save_checkpoint(first, ck.checkpoint_dir(tmp_path, cfg), branch_point=True)
+    info = ck.resume_or_start(trainer_for(cfg), tmp_path)
+    assert info.step == 5 and info.path == trunk
 
 
 # --- The Checkpointer hook --------------------------------------------------------------------------
