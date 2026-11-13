@@ -227,8 +227,9 @@ def test_an_unfinished_run_loses_nothing(unfinished_trunk, trunk_resolved, tmp_p
     assert prune.main(["--out", str(out), "--apply", "--final"]) == 0
     assert snapshot(out) == before
     trunk = _dir(out, trunk_resolved)
+    # Stopped at step 20: the cadence checkpoint at 16 and the one a stop leaves at 20 (T-40).
     assert _files(out) == {
-        f"{trunk}/step00000008.pt", f"{trunk}/step00000016.pt", f"{trunk}/trunk-step00000019.pt",
+        f"{trunk}/step00000016.pt", f"{trunk}/step00000020.pt", f"{trunk}/trunk-step00000019.pt",
         f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}",
     }
 
