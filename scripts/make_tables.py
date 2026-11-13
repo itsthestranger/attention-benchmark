@@ -50,6 +50,12 @@ DATA_ORDER_INIT_SEED = 1
 DATA_ORDER_EXTRA_SEEDS = (2, 3)
 LEFT_ARM = "left Arm A (seed-count rule)"
 ARM_B = "iso_backbone"
+# Plan §8.4: "L6 runs 5 seeds; L10 runs 3". The seed-count rule reads exactly these (plan §1.4).
+L10_SEEDS = (1, 2, 3)
+# Plan §4.1: the model keys that may differ between runs of the study. The attention block
+# differs between variants, d_ff between variants and between Arm A and Arm B, and the layer
+# count along the ladder. Everything else in `resolved["model"]` is the backbone, which must agree.
+MODEL_VARIES = ("attention", "d_ff", "n_layers")
 # Plan §10.3: the two context-use metrics, (key in the manifest's val block, label).
 CONTEXT_METRICS = (("late_context", "late-context loss"), ("icl", "ICL score"))
 GATE_WAIT = (
@@ -150,6 +156,11 @@ def select_results(
     A trunk checkpoint is never a result, with or without `skip_unfinished`: it
     is still at peak learning rate and its loss is falsely high. An unfinished
     run is refused unless `skip_unfinished` leaves it out, by name.
+
+    A recorded divergence (`diverged_runs`) is never refused (plan §7.4 item 5). It is
+    left out of the results; it is named in the skipped list only when `skip_unfinished`
+    asks for the names of the runs left out (test_divergence pins that), and the
+    tables list it as diverged on record in either case.
     """
     results: list[dict] = []
     skipped: list[str] = []
@@ -165,11 +176,24 @@ def select_results(
             results.append(manifest)
         elif skip_unfinished:
             skipped.append(name)
+        elif _is_diverged(manifest):
+            continue
         else:
             problems.append(f"{name}: unfinished, so it is not a result (skip_unfinished leaves it out)")
     if problems:
         raise TableError(_listing("cannot select results", problems))
     return results, skipped
+
+
+def _is_diverged(manifest: dict) -> bool:
+    """A manifest that is not a result and was recorded as diverged (plan §7.4 item 5)."""
+    metrics = manifest.get("final_metrics")
+    return not mf.is_result(manifest) and isinstance(metrics, dict) and metrics.get("diverged") is True
+
+
+def diverged_runs(manifests: Sequence[dict]) -> list[str]:
+    """The names of the diverged runs on record, in input order. They are not results."""
+    return [manifest["name"] for manifest in manifests if _is_diverged(manifest)]
 
 
 # --- Comparability (plan §7.2, §10.6, §13.6) ----------------------------------
@@ -195,6 +219,58 @@ def _field(*path: str):
         return node
 
     return read
+
+
+_ABSENT = object()  # a dotted key that one run's block does not have
+_LIST_LIMIT = 4  # names listed in full for one value; beyond that, the first three and a count
+
+
+def _leaves(value, prefix: str) -> dict[str, object]:
+    """The dotted leaves of a nested dict, keyed from `prefix` (e.g. "recipe.optimizer.weight_decay")."""
+    if isinstance(value, dict) and value:
+        out: dict[str, object] = {}
+        for key in value:
+            out.update(_leaves(value[key], f"{prefix}.{key}"))
+        return out
+    return {prefix: value}
+
+
+def _show(value: object) -> str:
+    return "absent" if value is _ABSENT else repr(value)
+
+
+def _names(names: Sequence[str]) -> str:
+    if len(names) <= _LIST_LIMIT:
+        return ", ".join(names)
+    return ", ".join(names[:3]) + f" and {len(names) - 3} more"
+
+
+def _block_difference(runs: Sequence[dict], label: str, getter, *, prefix: str | None = None) -> str | None:
+    """One violation line naming the dotted keys of `getter`'s block that differ across `runs`.
+
+    `prefix` is the block's name in the dotted keys (default `label`). Each differing key is given
+    with its value and the runs that have it, so the message says what differs without printing
+    whole blocks. None when every run has the same block.
+    """
+    flat = [(manifest["name"], _leaves(getter(manifest), prefix or label)) for manifest in runs]
+    keys = sorted({key for _, leaves in flat for key in leaves})
+    parts: list[str] = []
+    for key in keys:
+        groups: dict[str, tuple[object, list[str]]] = {}
+        for name, leaves in flat:
+            value = leaves.get(key, _ABSENT)
+            groups.setdefault(repr(value), (value, []))[1].append(name)
+        if len(groups) > 1:
+            described = "; ".join(f"{_show(value)} in {_names(names)}" for value, names in groups.values())
+            parts.append(f"{key} is {described}")
+    if not parts:
+        return None
+    return f"{label} differs across runs: " + "; ".join(parts)
+
+
+def _backbone(manifest: dict) -> dict:
+    """The model block without the keys that may differ (plan §4.1)."""
+    return {key: value for key, value in manifest["resolved"]["model"].items() if key not in MODEL_VARIES}
 
 
 def _steps_problems(runs: Sequence[dict]) -> list[str]:
@@ -237,6 +313,37 @@ def _comparability_problems(results: Sequence[dict]) -> list[str]:
         ("precision", _field("precision")),
     ):
         line = _distinct(results, label, getter)
+        if line is not None:
+            problems.append(line)
+
+    # Review S4, H1: the resolved configuration. Every run is held to one recipe, init rule,
+    # precision setting and backbone (plan §8.7, §4.1); a run made with --override is never a result.
+    for label, getter in (
+        ("recipe", _field("resolved", "recipe")),
+        ("init", _field("resolved", "init")),
+        ("precision", _field("resolved", "precision")),
+        ("backbone", _backbone),
+    ):
+        line = _block_difference(results, label, getter)
+        if line is not None:
+            problems.append(line)
+    for manifest in results:
+        overrides = manifest["resolved"].get("overrides") or {}
+        if overrides:
+            keys = ", ".join(sorted(overrides))
+            problems.append(
+                f"override: {manifest['name']} was made with --override ({keys}); a run made with an "
+                "override is never a result"
+            )
+    # Plan §4.1: the runs of one variant of one arm share one model. d_ff may differ between the
+    # variants and between Arm A and Arm B, and the layer count along the ladder; inside a group
+    # of one name and arm, any change of the model is a refusal.
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for manifest in results:
+        parsed = mf.parse_run_name(manifest["name"])
+        groups.setdefault((parsed.variant, parsed.arm), []).append(manifest)
+    for (variant, arm), runs in sorted(groups.items()):
+        line = _block_difference(runs, f"model of {variant} ({arm})", _field("resolved", "model"), prefix="model")
         if line is not None:
             problems.append(line)
     return problems
@@ -304,8 +411,12 @@ class Analysis:
     arm_b: dict  # {variant: ArmBResult}, every variant of the arm in its order (plan §8.3)
     context_use: dict  # {variant: ContextUse}, headline order, no MHA (plan §10.3)
     # The 300M ladder fit over the REGISTERED seeds only (plan §1.4): what seed_count_rule reads.
-    # None whenever `fit` is None. With five MHA seeds it equals `fit`.
+    # None while any registered seed of its ladder points is missing (see _rule_fit). With the
+    # complete ladder and five MHA seeds it equals `fit`.
     rule_fit: object = None  # ladder_fit.LadderFit or None
+    # {variant: first Arm A manifest of it} (plan §10.1): the parameters, d_ff and cache of a
+    # variant's headline row come from its own runs when it has any (headline_rows).
+    arm_a_examples: Mapping = dataclasses.field(default_factory=dict)
 
 
 class _Collected(NamedTuple):
@@ -487,21 +598,32 @@ def _ladder_fit(by_name: Mapping, examples: Mapping, *, budget: str, prefix: str
         return None
 
 
-def _rule_fit(losses: Mapping, examples: Mapping, prereg: Mapping, notes: list[str]):
+def _rule_fit(losses: Mapping, examples: Mapping, prereg: Mapping, notes: list[str], *, l10_cut: bool):
     """The 300M ladder fit over the registered seeds only (plan §1.4): the input of the seed-count rule.
 
-    MHA on `seed_count.base_seeds`, mha_L6 on `positive_control.init_seeds`, mha_L10 on every seed
-    present (the plan registers no seeds for it). Keeping the rule's input fixed means that adding
-    the seeds the rule asked for cannot change the rule's decision.
+    MHA on `seed_count.base_seeds`, mha_L6 on `positive_control.init_seeds`, and mha_L10 on
+    `L10_SEEDS` (plan §8.4). The rule waits for the complete ladder (plan §1.4, "after Arm N and the
+    ladder"): while any of those seeds is missing there is no fit, and `notes` says which seeds.
+    With `l10_cut` (plan §12.2 item 4) mha_L10 is not read at all, whether its runs exist or not.
+    Keeping the rule's input fixed means that runs on other seeds cannot change the rule's decision.
     """
-    base = set(prereg["seed_count"]["base_seeds"])
-    l6 = set(prereg["positive_control"]["init_seeds"])
-    by_name = {
-        "mha": {s: v for s, v in losses.get("mha", {}).items() if s in base},
-        "mha_L6": {s: v for s, v in losses.get("mha_L6", {}).items() if s in l6},
+    wanted: dict[str, tuple] = {
+        "mha": tuple(prereg["seed_count"]["base_seeds"]),
+        "mha_L6": tuple(prereg["positive_control"]["init_seeds"]),
     }
-    if losses.get("mha_L10"):
-        by_name["mha_L10"] = losses["mha_L10"]
+    if not l10_cut:
+        wanted["mha_L10"] = L10_SEEDS
+    missing = {name: _missing(seeds, losses.get(name, {})) for name, seeds in wanted.items()}
+    if any(missing.values()):
+        # As for Arm B: a campaign with no 300M result yet has no notes (the blank table); once one
+        # exists, every missing registered seed is noted.
+        if losses:
+            for name, seeds in missing.items():
+                if seeds:
+                    label = "MHA" if name == "mha" else name
+                    notes.append(f"seed count rule: {label} 300M results for seeds {seeds} are missing")
+        return None
+    by_name = {name: {s: losses[name][s] for s in seeds} for name, seeds in wanted.items()}
     return _ladder_fit(by_name, examples, budget="300M", prefix="ladder fit on the registered seeds", notes=notes)
 
 
@@ -789,8 +911,12 @@ def _context_use(
     return out
 
 
-def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
-    """Every number of the table, computed in the pre-registered order. Refuses incomparable runs."""
+def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, l10_cut: bool = False) -> Analysis:
+    """Every number of the table, computed in the pre-registered order. Refuses incomparable runs.
+
+    `l10_cut` declares that the ladder is cut to L6 and L8 (plan §12.2 item 4): the seed-count rule
+    then reads MHA and mha_L6 only. Without it the rule waits for the complete ladder (plan §1.4).
+    """
     problems = _comparability_problems(results)
     if problems:
         raise TableError(_listing("the runs are not comparable", problems))
@@ -838,7 +964,12 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
     # 2. Ladder fit at 300M (plan §8.4).
     mha_300 = losses.get("mha", {})
     fit = _ladder_fit(losses, examples, budget="300M", prefix="ladder fit", notes=notes)
-    rule_fit = _rule_fit(losses, examples, prereg, notes) if fit is not None else None
+    rule_fit = _rule_fit(losses, examples, prereg, notes, l10_cut=l10_cut)
+    if l10_cut:
+        notes.append(
+            "seed count rule: mha_L10 is not read, by declared cut (plan §12.2 item 4); the rule's "
+            "ladder is MHA and mha_L6 only"
+        )
 
     # 2b. The positive control (plan §8.4, §9.4): L6 against L8 at 300M.
     positive_control = _positive_control(losses, selection, prereg, notes)
@@ -866,25 +997,21 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
         sigma_data = float(pt.sample_sd([data_order[d] for d in needed_data]))
 
     # 3. Seed count (plan §1.4).
+    # The rule's own notes (missing registered seeds) are written by _rule_fit: while any is missing,
+    # rule_fit is None and there is no decision.
     decision = None
     base = list(prereg["seed_count"]["base_seeds"])
     if selection is None:
         notes.append("seed count rule skipped: no test selection")
     if fit is None:
         notes.append("seed count rule skipped: no ladder fit")
-    elif rule_fit is None:
-        notes.append("seed count rule skipped: no ladder fit on the registered seeds")
     if selection is not None and rule_fit is not None:
-        miss = _missing(base, mha_300)
-        if miss:
-            notes.append(f"seed count rule: MHA 300M results for seeds {miss} are missing")
-        else:
-            try:
-                decision = lf.seed_count_rule(
-                    {s: mha_300[s] for s in base}, rule_fit, test=selection.test, prereg=prereg
-                )
-            except lf.LadderError as exc:
-                notes.append(f"seed count rule: {exc}")
+        try:
+            decision = lf.seed_count_rule(
+                {s: mha_300[s] for s in base}, rule_fit, test=selection.test, prereg=prereg
+            )
+        except lf.LadderError as exc:
+            notes.append(f"seed count rule: {exc}")
 
     # The gate (plan §8.1, §8.4, §9.3, §9.4): no cross-variant number before the controls.
     gate_open = True
@@ -1037,27 +1164,46 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None) -> Analysis:
         arm_b=arm_b,
         context_use=context_use,
         rule_fit=rule_fit,
+        arm_a_examples=dict(examples),
     )
 
 
 # --- The table -------------------------------------------------------------------
 
 
-@functools.lru_cache(maxsize=None)
-def _model_facts(variant: str) -> tuple[int, int, int, int | None]:
-    resolved = config.resolve(variant, init_seed=1, peak_lr=1e-3)
+def _facts_of(resolved: dict) -> tuple[int, int, int, int | None]:
     model = build_model(resolved)
     attn = model.layers[0].attn
     return model.n_params, resolved["model"]["d_ff"], attn.kv_bytes_per_token, attn.kv_cache_max_tokens
 
 
-def static_columns(variant: str) -> dict:
-    """Parameters, d_ff and the decode cache, from the configs. No results needed."""
-    n_params, d_ff, kv_bytes, cap = _model_facts(variant)
+@functools.lru_cache(maxsize=None)
+def _model_facts(variant: str) -> tuple[int, int, int, int | None]:
+    return _facts_of(config.resolve(variant, init_seed=1, peak_lr=1e-3))
+
+
+# Model facts of a run's own configuration, by config hash (building a model is slow).
+_RUN_FACTS: dict[str, tuple[int, int, int, int | None]] = {}
+
+
+def _run_facts(manifest: dict) -> tuple[int, int, int, int | None]:
+    key = manifest["config_hash"]
+    if key not in _RUN_FACTS:
+        _RUN_FACTS[key] = _facts_of(manifest["resolved"])
+    return _RUN_FACTS[key]
+
+
+def _static_text(facts: tuple[int, int, int, int | None]) -> dict:
+    n_params, d_ff, kv_bytes, cap = facts
     kv_text = f"{kv_bytes:,}"
     if cap is not None:
         kv_text += f" (capped at {cap} tokens)"
     return {"params": f"{n_params:,}", "d_ff": str(d_ff), "KV bytes/token/layer": kv_text}
+
+
+def static_columns(variant: str) -> dict:
+    """Parameters, d_ff and the decode cache, from the configs. No results needed."""
+    return _static_text(_model_facts(variant))
 
 
 def _timing(values: Mapping[str, float] | None, variant: str) -> str:
@@ -1098,7 +1244,10 @@ def headline_rows(
     reference_present = bool(analysis.losses.get(reference))
     rows = []
     for variant in HEADLINE_VARIANTS:
-        static = static_columns(variant)
+        # Review S4, H1: a variant's parameters, d_ff and cache are those of its own runs when it has
+        # any; the configs answer only for a variant with no run (the blank table).
+        example = analysis.arm_a_examples.get(variant)
+        static = static_columns(variant) if example is None else _static_text(_run_facts(example))
         # Plan §8.1: while the gate is shut, no cross-variant number is computed or viewed. Only
         # MHA's losses and the static and timing columns are shown; the rest of a variant's row waits.
         withheld = variant != reference and not analysis.comparisons_allowed
@@ -1645,6 +1794,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--blank", action="store_true", help="ignore --manifests; write the tables for no runs"
     )
     parser.add_argument(
+        "--l10-cut", action="store_true",
+        help="declare the ladder cut to L6 and L8 (plan §12.2 item 4): the seed-count rule reads MHA and L6 only",
+    )
+    parser.add_argument(
         "--timing-pass", default=None, metavar="FILE",
         help="a timing_pass/1 document: fills train ms/step and writes the RQ-W estimate",
     )
@@ -1657,7 +1810,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         manifests = [] if args.blank else load_manifests(args.manifests)
         results, skipped = select_results(manifests, skip_unfinished=args.skip_unfinished)
-        analysis = analyse(results)
+        analysis = analyse(results, l10_cut=args.l10_cut)
         timing_doc = tp.read_timing_pass(args.timing_pass) if args.timing_pass else None
         bench_docs = _load_bench_documents(args.bench) if args.bench else []
         check_timing_sources(results, timing_doc, bench_docs)
@@ -1668,6 +1821,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     notes = list(analysis.notes)
+    diverged = diverged_runs(manifests)
+    if diverged:
+        notes.append("diverged runs on record, not results (plan §7.4 item 5): " + ", ".join(diverged))
     if skipped:
         notes.append("unfinished runs left out: " + ", ".join(skipped))
     noted = dataclasses.replace(analysis, notes=tuple(notes))
