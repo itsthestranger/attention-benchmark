@@ -85,6 +85,8 @@ TIMING_CAPTIONS = (
     "Peak memory is torch.cuda.max_memory_allocated; the timing document records no reserved figure.",
 )
 RANGE_SEP = "–"  # en dash: "min–max" in the range columns
+# The SWA comparison under timing.md's table (plan §2.3 item 2): both attention times, no verdict word.
+SWA_COMPARISON = "SWA attention time: {swa} ms/step; MHA: {mha} ms/step (attention share × ms/step, plan §2.3 item 2)."
 PREFILL_COLUMNS = ("context", "batch", "latency, ms", "latency, ms (min–max)", "tokens/s", "peak allocated, MiB")
 DECODE_COLUMNS = ("batch", "cache", "ms/token", "ms/token (min–max)", "tokens/s", "peak allocated, MiB")
 KV_COLUMNS = (
@@ -370,7 +372,11 @@ def _blank_timing_row(track: str) -> dict:
 
 
 def timing_rows(doc: Mapping) -> list[dict]:
-    """One row per track of a timing document, cells as text, keyed by the TIMING_COLUMNS headers."""
+    """One row per track of a timing document, cells as text, keyed by the TIMING_COLUMNS headers.
+
+    When SWA's attention time is not below MHA's, SWA's opt row carries SWA_DENSE_MARK in its
+    ms/step and ratio cells (plan §2.3 item 2, decision 226). No other row is marked.
+    """
     check_timing_document(doc)
     variants = doc["variants"]
     mha = variants.get(MHA)
@@ -390,7 +396,24 @@ def timing_rows(doc: Mapping) -> list[dict]:
             "attention share, %": _fmt(float(entry["attention_share"]) * 100.0, SHARE_DECIMALS),
             "peak allocated, MiB": _mib(entry["peak_bytes"]),
         })
+    if tp.swa_not_faster(tp.swa_check_of(doc)):
+        for row in rows:
+            if row["track"] == tp.SWA_VARIANT:
+                row["ms/step, mean"] += tp.SWA_DENSE_MARK
+                row[RATIO_COLUMN] += tp.SWA_DENSE_MARK
     return rows
+
+
+def _swa_comparison(doc: Mapping | None) -> str | None:
+    """The comparison line under the table: blanks for the blank form, None when either entry is absent."""
+    if doc is None:
+        return SWA_COMPARISON.format(swa=BLANK, mha=BLANK)
+    check = tp.swa_check_of(doc)
+    if check is None:
+        return None
+    return SWA_COMPARISON.format(
+        swa=f"{check.swa_attention_ms:.{MS_DECIMALS}f}", mha=f"{check.mha_attention_ms:.{MS_DECIMALS}f}"
+    )
 
 
 def _timing_source(doc: Mapping | None) -> str:
@@ -413,7 +436,14 @@ def render_timing(doc: Mapping | None) -> str:
         rows = timing_rows(doc)
     lines = [TIMING_TITLE, "", _timing_source(doc), ""]
     lines += _md_table(TIMING_COLUMNS, rows)
-    lines += [""] + list(TIMING_CAPTIONS) + [""]
+    lines += [""]
+    comparison = _swa_comparison(doc)
+    if comparison is not None:
+        lines += [comparison, ""]
+        check = None if doc is None else tp.swa_check_of(doc)
+        if tp.swa_not_faster(check):
+            lines += [f"{tp.SWA_DENSE_MARK} {tp.swa_dense_note(check)}", ""]
+    lines += list(TIMING_CAPTIONS) + [""]
     return "\n".join(lines)
 
 
