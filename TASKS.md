@@ -81,6 +81,14 @@ The plan requires these outputs, and no task above produces them. Added by the o
 | T-36 ✅ | Command-line gaps found while writing the runbook: a standalone short run from flags, plots with unfinished runs left out, the timing-pass id of an Arm C run | W | T-29, T-28 | §7.4, §8.1, §8.5, §10.6 | Each gap has a test that fails without its fix |
 | T-37 ✅ | Fixes for the handover audit: step parity scoped to the runs a comparison reads, the seed-count rule on registered seeds only, losses withheld while the gate is closed, a registered sweep seed refused, the SWA `opt` path as a config key, the disclosures, a null backend for `ref` runs, a backend-enforcement test that can fail | O+W | T-31 audit | §1.4, §2.3, §8.1, §13 | `tests/test_audit_fixes.py` and `tests/test_backend_enforcement.py` pass; every audit finding is fixed or listed in `STATUS.md` |
 
+## M4c — Probe reporting, added in session 4
+
+Phil decided on 2026-11-13 that probe results are reported as token accuracy against the no-recall level 1/n, with sequence accuracy as a second column. No task above generates that report. Added by the orchestrator on 2026-11-13.
+
+| ID | Task | Owner | Depends on | Plan | Done when |
+| --- | --- | --- | --- | --- | --- |
+| T-38 | Probe report for Gate 1 (`probes.md`) from `probe/1` records, and the no-recall line in plot 9 | W | T-21 (record schema), T-28 | §9.2, §10.5 | `probes.md` builds blank and from synthetic records; duplicate and mismatched records are refused; no verdict is computed; plot 9 draws the 1/n line |
+
 ## M5 — Operations and handover
 
 | ID | Task | Owner | Depends on | Plan | Done when |

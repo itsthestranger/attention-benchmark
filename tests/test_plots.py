@@ -1062,3 +1062,68 @@ def test_the_withheld_caption_is_absent_when_no_variant_run_exists():
     blank = m.make_inputs([])
     for builder in (m.plot_primary_gaps, m.plot_inference_frontier, m.plot_memory_frontier):
         assert not _caption_says_withheld(builder(blank)), builder.__name__
+
+
+# --- T-38: plot 9 draws the no-recall level 1/n, labelled as token accuracy -----------------------
+
+CHANCE_GREY = (0.5, 0.5, 0.5)
+CHANCE_CAPTION = "The grey dotted line is the no-recall level 1/n."
+
+
+def probe_panels(figure: Figure) -> list:
+    return [ax for ax in figure.axes if ax.get_title().startswith("probe:")]
+
+
+def chance_lines(ax) -> list:
+    """The grey dotted lines of a panel: the chance level, drawn by plot 9 and nothing else."""
+    return [
+        line for line in ax.lines
+        if line.get_linestyle() == ":" and to_rgb(line.get_color()) == CHANCE_GREY
+    ]
+
+
+def test_every_probe_panel_draws_one_chance_line_at_the_true_difficulties(figures):
+    panels = probe_panels(figures["09_probes.png"])
+    assert len(panels) == len(fpi.PROBE_TASKS)
+    for ax in panels:
+        (line,) = chance_lines(ax)
+        points = [(float(x), float(y)) for x, y in line.get_xydata()]
+        assert points == [(float(d), 1 / d) for d in fpi.PROBE_DIFFICULTIES], ax.get_title()
+
+
+def test_probe_panels_draw_no_chance_line_when_no_record_carries_chance(campaign):
+    records = [{key: value for key, value in r.items() if key != "chance"} for r in fpi.probe_records()]
+    figure = m.plot_probes(m.make_inputs(campaign, fpi.bench_records(), records, fpi.retrieval_records()))
+    panels = probe_panels(figure)
+    assert len(panels) == len(fpi.PROBE_TASKS)
+    for ax in panels:
+        assert chance_lines(ax) == [], ax.get_title()
+
+
+@pytest.mark.parametrize("other", [0.5, None])
+def test_records_at_one_point_that_disagree_on_chance_are_refused(campaign, other):
+    records = fpi.probe_records()
+    records[0] = {**records[0], "chance": other}  # the first mqar record, at difficulty 4
+    inputs_ = m.make_inputs(campaign, fpi.bench_records(), records, fpi.retrieval_records())
+    with pytest.raises(m.PlotError, match="disagree on chance"):
+        m.plot_probes(inputs_)
+
+
+def test_duplicate_probe_records_are_refused_by_make_inputs(campaign):
+    records = fpi.probe_records()
+    records.append(dict(records[0]))  # same variant, task, difficulty and init seed
+    with pytest.raises(m.PlotError, match="two records"):
+        m.make_inputs(campaign, fpi.bench_records(), records, fpi.retrieval_records())
+
+
+def test_plot_9_is_labelled_as_token_accuracy_on_every_panel(figures, blank_figures):
+    panels = probe_panels(figures["09_probes.png"])
+    assert panels
+    for ax in panels:
+        assert ax.get_ylabel() == "token accuracy (held-out)", ax.get_title()
+    assert "token accuracy (held-out)" in [ax.get_ylabel() for ax in blank_figures["09_probes.png"].axes]
+
+
+def test_plot_9_caption_explains_the_grey_dotted_line(figures, blank_figures):
+    assert any(CHANCE_CAPTION in text for text in all_texts(figures["09_probes.png"]))
+    assert any(CHANCE_CAPTION in text for text in all_texts(blank_figures["09_probes.png"]))
