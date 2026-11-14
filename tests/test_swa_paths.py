@@ -208,6 +208,23 @@ def test_a_call_is_a_forward_and_a_backward(track):
     assert any(p.grad is not None for p in attn.parameters())
 
 
+def test_every_call_runs_inside_the_scope_of_the_expected_backend(monkeypatch):
+    import contextlib
+
+    events = []
+
+    @contextlib.contextmanager
+    def scope(name, device):
+        events.append(("enter", name, device))
+        yield
+        events.append(("exit",))
+
+    monkeypatch.setattr(sp, "backend_scope", scope)
+    monkeypatch.setattr(sp, "_step", lambda attn, x, freqs, device: events.append(("call",)))
+    sp.time_repetition(sp.TRACKS[0], setup_for(repeats=2, warmup=1, expected_backend="efficient"))
+    assert events == [("enter", "efficient", CPU), ("call",), ("call",), ("call",), ("exit",)]
+
+
 # --- The opt paths the tracks really run -------------------------------------------------------
 
 
