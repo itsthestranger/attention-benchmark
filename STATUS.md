@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-14, session 6. Phil merged T-52 (pull request #59) and confirmed the five readings of session 5 (decision 245), with two additions: whiskers for the benchmark's range on plots 2 and 8 (T-59), and a record of the attention times of both SWA paths at the verification step (T-60). Both are in progress; a fresh agent re-checks them in T-61, which closes the handover. The `cpu` tier was green on `main` at the merge of T-57 (3,851 tests, about six minutes). No GPU job has run.
+Last updated: 2026-11-14, end of session 6. Every task of `TASKS.md` is merged. Phil merged T-52 (#59) and confirmed the five readings of session 5 (decision 245), with two additions that are built: plots 2 and 8 draw the benchmark's range as whiskers (T-59), and `scripts/swa_paths.py` records the attention times of both SWA paths at the verification step (T-60). A fourth independent review (`docs/review_s6.md`) looked at both; its findings are fixed in T-61 or listed below. One reading waits for Phil's confirmation: decision 250, what "FlexAttention runs on the T4" means. The `cpu` tier is green: 3,968 tests, about six minutes. The harness is ready for Phil's verification step (`RUNBOOK.md` §1). No GPU job has run.
 
 ## Done
 
@@ -21,13 +21,16 @@ Merged, with green CI. Pull request numbers in brackets.
   - T-54 declarations from the committed file only; no test pins a file Phil fills in (#62).
   - T-55 what waits for the committed seed count; plot 6 and the gate; the ladder cut in every fit; the benchmark's range in the headline (#63).
   - T-57 runbook and wording fixes of the review, this file (#64).
+- Session 6:
+  - T-52 the frozen files for the decisions of session 5: merged by Phil (#59).
+  - T-58 Phil's decisions of session 6 (245 to 248) and the tasks that apply them (#65).
+  - T-59 plots 2 and 8 draw the smallest and the largest repetition as whiskers (#66).
+  - T-60 `scripts/swa_paths.py`, its section of `timing.md`, the runbook command (#67).
+  - T-61 the fourth independent review, its fixes, this file; closes T-31.
 
 ## In progress
 
-- T-58: decisions 245 to 248, the tasks of M9, this file.
-- T-59 (worker): whiskers on plots 2 and 8.
-- T-60 (worker): `scripts/swa_paths.py`, the section of `timing.md`, the runbook command.
-- T-61: the re-check of T-59 and T-60 by a fresh agent, the final status. Not started.
+- Nothing. No worker is active.
 
 ## Blocked
 
@@ -36,18 +39,20 @@ Merged, with green CI. Pull request numbers in brackets.
 ## Open questions
 
 - **Kaggle's torch, Python and CUDA versions.** Needed to pin the environment; `RUNBOOK.md` §1.5 has the cell to run. Until then: torch 2.15.0, Python 3.12 in CI.
+- **Decision 250, for Phil to confirm**: in the rule for SWA's path, "FlexAttention runs on the T4" means that the agreement test passes and that the record's flex track has times, not an error; a `[flex]` timing case that fails at its assertion leaves the path at `flex`. See "Session 6" below. To settle before the `t4` session of `RUNBOOK.md` §1.2.
+
 Everything else is answered: decisions 215 to 231 (2026-11-13) and decision 245 (2026-11-14), which confirms decisions 232, 240, 241, 242 and 244.
 
 ## Handover checklist (plan §17.4)
 
 | # | Item | State |
 | --- | --- | --- |
-| 1 | Every task merged, `cpu` tier green in CI | T-52 is merged (#59). Open: T-58 to T-61 of session 6; T-31, the handover itself, closes with T-61. |
-| 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met; listed below (105 collected: 85 `gpu`, 20 `t4`). |
+| 1 | Every task merged, `cpu` tier green in CI | Met. Every task is merged, T-31 with T-61. |
+| 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met; listed below (106 collected: 86 `gpu`, 20 `t4`). |
 | 3 | Headline table and all ten plots generate from fake manifests and blank | Met. `gates.md`, `arm_b.md`, `shared_rate.md`, `context.md`, `rqw.md`, `lr_sweep.md`, `probes.md`, `timing.md` and `inference.md` build blank and from synthetic records too. |
 | 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | Met since T-51. Every command parses with its script's own parser; none has run on a GPU. |
-| 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 244 (rows 235 and 236 arrive with T-52) and plan §18. |
-| 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Three reviews: sessions 3, 4 and 5. The third (`docs/review_s5.md`) reviewed T-39 to T-52: 106 deliberate breaks, 98 caught; its findings are fixed or listed in the next section. The fixes for it (T-54 to T-57) were re-checked by another fresh agent (`docs/review_s5/recheck_s5.md`): they hold, and what it found is applied in T-57 or listed below. |
+| 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 251 and plan §18. Plan §18 does not list decisions 245 to 251: none changes what the plan says is measured. |
+| 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Four reviews: sessions 3, 4, 5 and 6. The third (`docs/review_s5.md`) reviewed T-39 to T-52, and its fixes (T-54 to T-57) were re-checked by another fresh agent (`docs/review_s5/recheck_s5.md`). The fourth (`docs/review_s6.md`) reviewed T-59 and T-60: 86 deliberate breaks, 54 caught; its findings are fixed in T-61 or listed under "Session 6". The fixes of T-61 were checked by the orchestrator's own breaks (40, all caught after one test was strengthened), not by another fresh agent. |
 
 ## Session 5: Phil's decisions
 
@@ -84,7 +89,7 @@ A fresh agent on the full model, which wrote none of the code, reviewed the bran
 | G3 | Plot 6 drew the variants' gaps whatever the gate said. | **Fixed in T-55** (#63). |
 | G4 | The runbook required a `t4` test to pass that decision 226 expects to fail for the chunked path. | **Fixed in T-57**: §1.1 and §1.2 name the three hardware test cases that may fail for a reason the plan gives, and what to record. SWA trains on `flex` if FlexAttention runs on the T4 and agrees with the reference, else on `chunked` (plan §2.3; decision 244). Whether the `chunked` timing case stays an assertion is **for Phil** (decision 242). |
 | G5 | The final checkpoints pass 20 GB in week 3; `prune --final` was all or nothing. | **Fixed in T-56** (#61) and the runbook: `--final-short`. |
-| M1 | The headline's decode cell and plots 2 and 8 showed the median alone and accepted documents `timing_report` refuses. | **Fixed in T-55** (#63): one check for all readers; the headline cell has the range. Plots 2 and 8 draw medians and point to `inference.md` for the ranges. |
+| M1 | The headline's decode cell and plots 2 and 8 showed the median alone and accepted documents `timing_report` refuses. | **Fixed in T-55** (#63): one check for all readers; the headline cell has the range. Plots 2 and 8 draw medians and point to `inference.md` for the ranges; since T-59 they draw the ranges as whiskers. |
 | M2 | A declared ladder cut did not reach the reported fit. | **Fixed in T-55** (#63). |
 | M3 | Plot 1 drew a multiplier axis when no multiplier is reported. | **Fixed in T-55** (#63). |
 | M4 | The runbook said block 2 is 320 runs; it is 400. | **Fixed in T-57**; plan §18 A12 in T-52. |
@@ -103,14 +108,49 @@ What the review did not cover, by its own account: anything on a GPU or Kaggle; 
 Each is implemented as described. Decision 241 gains whiskers on plots 2 and 8 (T-59); decision 244 gains a record of both paths' attention times (T-60).
 
 - **Decision 240**: a variant's 300M results are shown only once the seed count is committed (plan §1.4 says "before any variant result at 300M is read"). Know what still shows without a committed count: `arm_b.md` prints the variants' Arm A 100M branch losses, a ranking and Arm B's gap to MHA, and `shared_rate.md` prints the tuned 100M branch losses, because those two tables are 100M comparisons and do not wait. The branches are the first 1,221 steps of the same 300M trunks, and plot 7 withholds them.
-- **Decision 244**: SWA's `opt` path is `flex` if FlexAttention compiles, runs and agrees with the reference on the T4, else `chunked`, with no timing comparison of the two. The plan states this as an order of preference (§2.3); no script times the two paths side by side.
+- **Decision 244**: SWA's `opt` path is `flex` if FlexAttention compiles, runs and agrees with the reference on the T4, else `chunked`, with no timing comparison of the two. The plan states this as an order of preference (§2.3). Since T-60 `scripts/swa_paths.py` records both paths' attention times; the record selects nothing (decisions 245, 250).
 - **Decision 242**: the `t4` test of SWA's attention time against MHA's stays as written, although decision 226 expects its `chunked` case to fail.
 - **Decision 232**: the probe pilot's level (0.99) and the sizes of probe block 2.
-- **Decision 241**: plots 2 and 8 draw the benchmark's medians without error bars; the ranges are in `inference.md` and in the headline's decode cell.
+- **Decision 241**: plots 2 and 8 draw the benchmark's medians; since T-59 with whiskers from the smallest to the largest repetition (decision 245). The numbers are in `inference.md` and in the headline's decode cell.
 
 ### Re-check of the fixes (2026-11-14)
 
 Because the fixes of each earlier review had defects that only the next review found, another fresh agent re-checked T-54 to T-57 on a branch that combines `main`, T-52 and T-57: `docs/review_s5/recheck_s5.md`. Its result: every finding it could reproduce on CPU is fixed (H1, G1, G2, G3, G5, M1, M2, M3, M7, M9); the `cpu` tier is green under each of the four edits of `docs/review_s5/phil_edits.py` and under every runbook edit applied at once (3,860 passed each time); it searched every table and all ten plots for 474 variant 300M values in six withheld states and found none; 63 deliberate breaks, 55 caught; no test was weakened. What it found is applied in T-57 (the runbook's FlexAttention test ids and the rule for SWA's path, the shim notebook as a template, a test for declarations read from the environment, the script's logs) or listed below.
+
+## Session 6 (2026-11-14)
+
+Phil's decision 245 confirmed decisions 232, 240, 241, 242 and 244 and added two things.
+
+| Addition | What is built | Task |
+| --- | --- | --- |
+| The benchmark's range on the speed plots | Plot 2: one horizontal whisker per variant, from the smallest to the largest repetition of the decode tokens/s, at the height of the seed mean. Plot 8: one vertical whisker at every point. The caption says a whisker shorter than its marker is hidden by it. | T-59 (#66) |
+| A record of both SWA paths | `scripts/swa_paths.py` times one forward and backward of the attention module alone for MHA, SWA `chunked` and SWA `flex`: the measurement of the `t4` test of SWA's attention time. `timing_report --swa-paths` prints the three times as the last section of `timing.md`, with the record's own source line and the sentence that it selected nothing. The runbook makes the record in §1.2 and again in §3.1. | T-60 (#67) |
+
+Found while building T-60: on CPU, torch 2.15.0 has no backward for the uncompiled FlexAttention. A CPU run records the flex track with that error. Whether the compiled backward works on sm75 is for the T4.
+
+### The fourth review (`docs/review_s6.md`)
+
+A fresh agent that wrote none of the code reviewed `main` with T-59 and T-60: the `cpu` tier (3,915 passed), 86 deliberate breaks (54 caught; 27 of the 32 misses were real gaps in the tests), both scripts run on CPU with 35 hand-edited records, plots 2 and 8 looked at as images, the runbook read as Phil would.
+
+| # | Finding | Status |
+| --- | --- | --- |
+| H1 | This file was stale: the count of hardware tests, the sentence "which SWA path is faster there. Then set `opt_path`", two sentences about plots and scripts. | **Fixed** here. |
+| G1 | The runbook's rule for SWA's path and the record could disagree: the agreement test runs the forward only, and a training step needs the backward. A `[flex]` timing case that failed because flex was slower read as "does not run". | **Fixed in T-61** as a reading **for Phil to confirm** (decision 250): flex runs when the agreement test passes and the record's flex track has times; a timing case that fails at its assertion changes nothing about the path. |
+| G2 | The record might not exist when §3.1 and §5.3 read it; `timing_report` then ended in a traceback. | **Fixed in T-61**: §3.1 makes the record again after the timing pass; a missing or unreadable record is refused in one line; a test ties every `timing_report` command to the path the script writes. |
+| G3 | Every flex failure was recorded as "could not run", with no repetition and no traceback. | **Fixed in T-61**: the error names the repetition, the traceback goes to stderr. Still any exception of the flex track is recorded and the script exits 0: listed below. |
+| G4 | `check_document` accepted records that contradict themselves. | **Fixed in T-61**: the median, smallest and largest value must be those of the repetition list; the count, the environment, the header fields, the precision and backend of the device, the error text and the set of tracks are checked. |
+| G5 | Gaps in the tests: a line naming the faster path, the synchronisation and the autocast, the defaults, the model that is timed, what the record says was run, a missing FlexAttention, a refusal test that could not fail, a mirrored or invisible whisker, the runbook's sentences. | **Fixed in T-61**: each has a test, and the orchestrator's break for each is caught. |
+| M1 | The "ratio to MHA" column is a computed comparison nobody asked for by name. | **Kept** (decision 251): it is the column the timing table has, on unrounded medians; a test refuses any word that ranks the paths. Phil may drop it. |
+| M2 | An error of several lines went into `timing.md` raw. | **Fixed in T-61**. |
+| M3 | A `--synthetic` record printed like a real one. | **Fixed in T-61**: the record carries `synthetic` and the source line says the numbers mean nothing. |
+| M4 | The section did not say which path the timing table's `swa256` rows used. | **Fixed in T-61** by a caption; the timing-pass document itself still does not record the path: listed below. |
+| M5 | Differences from the `t4` test: the script enforces the SDPA backend, the test enforces none; the module is rebuilt each repetition; whether flex ran compiled is not recorded. | **Listed, not fixed.** The caption names the enforced backend. |
+| M6 | Plot 2's label was struck through by its whisker. Plot 8's whiskers are hidden at a 2% range, and `opt` and `ref` whiskers look alike. | Plot 2 **fixed in T-61**. Plot 8 **listed**; the caption says a short whisker is hidden. |
+| M7 | The non-JSON message lacked the file name; one runbook sentence about the failure message. | **Fixed in T-61**. |
+
+Found by the orchestrator while fixing: with `opt_path: flex` committed and FlexAttention missing, the script could not build the chunked track either. The SWA modules are now built on the chunked path and then switched (decision 251).
+
+What the review did not cover, by its own account: anything on CUDA (fp16, synchronisation, the enforced backend, compiled FlexAttention); timing of the real model; Kaggle storage; the other eight plots and the other tables.
 
 ## Earlier reviews
 
@@ -121,6 +161,12 @@ The per-finding tables of both are in this file's history at commit `c1ffb78`.
 
 ## Listed, not fixed
 
+- **The fixes of T-61 were not re-checked by a fresh agent.** The orchestrator ran 40 deliberate breaks against them (39 caught; all 40 after one test was strengthened) and the tier under `opt_path: flex`. The earlier reviews each found defects in the fixes of the one before.
+- **Any exception of the flex track is recorded as its result**, a harness bug included; the script exits 0. The traceback is printed and the error names the repetition (review S6, G3).
+- **`scripts/swa_paths.py` enforces the SDPA backend; the `t4` test of the same measurement enforces none.** The record does not say whether FlexAttention ran compiled (review S6, M5).
+- **The timing-pass document does not record SWA's `opt_path`.** The manifests of the runs do (review S6, M4).
+- **Plot 8's whiskers** are hidden by the markers when the range is a few percent, and the `opt` and `ref` whiskers of one variant look alike (review S6, M6).
+- **The fp16 autocast inside a CUDA run of `scripts/swa_paths.py`** is checked on CPU only through the function that builds it; the `gpu` test reads the record's label (review S6, S08).
 - **`arm_b.md` lists the variants' Arm B losses while the comparison gate is closed** (session-3 F5; the headline table, `shared_rate.md` and plots 1, 2, 3, 6 and 7 withhold theirs). It needs Arm B runs before the controls, which the runbook's order prevents.
 - **An uncommitted edit of `configs/commitments.yaml` in the working tree is read like a committed one** (review S5, G1, the rest of it). The runbook says to build the tables from a checkout that has the commit.
 - **The SWA mark in `timing.md`** is on the ms/step and ratio cells, not on the attention share or the `ref` row, and its note says "on this GPU" on CPU too (review S5, M8).
@@ -168,15 +214,16 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 | `test_reference.py` | 7 | | `ref`/`opt` agreement under fp16. |
 | `test_scaffold.py` | 1 | 1 | The tier canaries. |
 | `test_sliding_window.py` | 2 | 2 | Both `opt` paths against `ref`, including compiled FlexAttention; SWA attention time below MHA's. |
+| `test_swa_paths.py` | 1 | | `scripts/swa_paths.py` on CUDA in fp16 with the enforced backend. |
 | `test_timing_pass.py` | 1 | | The timing pass on CUDA. |
 | `test_trainer.py` | 5 | | fp16 training with unscaled gradient norms, a skipped step with scaler back-off, scaler growth, refusals. |
 | `test_wsd_branch.py` | 7 | | Branch fidelity in fp16 with the scaler state carried over. |
 
-**The fp16, GradScaler and backend-enforcement code paths have never executed.** Neither have `scripts/bench.py`, `scripts/timing_pass.py` and the CUDA path of `scripts/train_probe.py` on a GPU, the shim notebook with its `nvidia-smi` log, or anything on the real corpus.
+**The fp16, GradScaler and backend-enforcement code paths have never executed.** Neither have `scripts/bench.py`, `scripts/timing_pass.py`, `scripts/swa_paths.py` and the CUDA path of `scripts/train_probe.py` on a GPU, the shim notebook with its `nvidia-smi` log, or anything on the real corpus.
 
 ## To check on real hardware
 
-- Whether FlexAttention compiles and runs on the T4 (plan §2.3), and which SWA path is faster there. Then set `opt_path` in `configs/variants/swa256.yaml` before any SWA run.
+- Whether FlexAttention compiles and runs on the T4 (plan §2.3): the agreement test passes, and the flex track of the `scripts.swa_paths` record has times, which needs the compiled backward in fp16 that no test has run. Then set `opt_path` in `configs/variants/swa256.yaml` by the rule of `RUNBOOK.md` §1.2 (decisions 244 and 250) before any SWA run. The times of the two paths do not enter the choice.
 - The `t4` test in `test_sliding_window.py` asserts SWA's attention time below MHA's. With the chunked path it may fail for the reason plan §2.3 gives; the timing pass then marks SWA (decision 226). A failure of that one test for that reason is a finding, not a defect.
 - Whether the fused kernel copies K and V when given a slice of the cache storage (plan §2.3). If it does, decode needs an explicit matmul, disclosed.
 - The sliding-window cache allocates up to twice its 256-token cap (decision 77), and MLA's absorbed matrices are a fixed cost per cache outside the KV bytes per token (decision 147). Disclose both with the benchmark.
@@ -191,18 +238,22 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## For Phil
 
+- **Confirm or change decision 250** (the reading of "FlexAttention runs" in `RUNBOOK.md` §1.2) before the `t4` session.
 - Protect `main`: pull requests only, the `cpu` check required, and "Require review from Code Owners" enabled, otherwise CODEOWNERS has no effect. `configs/commitments.yaml` is in CODEOWNERS.
 - Kaggle's torch, Python and CUDA versions (`RUNBOOK.md` §1.5).
 - The shim notebook in the repository stays a template: fill it in on Kaggle, and do not commit a filled-in copy to git (`RUNBOOK.md` §1.4).
 - `recipe.yaml` leaves `micro_batch`, `init_scale` and `growth_interval` unset until the smoke runs (`RUNBOOK.md` §2.2).
 - After tokenizing the corpus, paste the two hashes into `configs/data.yaml` (§2.1). Consider adding that file to CODEOWNERS then.
 - During the campaign you commit two things by pull request: `seed_count` in `configs/commitments.yaml` after §3.4, and `ladder: l6_l8` only if you cut L10.
+- The "ratio to MHA" column of the SWA section in `timing.md` can go if you want only the three times (review S6, M1).
 
 ## Next
 
-1. T-59 and T-60, in parallel (their files do not overlap).
-2. T-61: the re-check by a fresh agent, the final status, T-31 closed.
-3. Phil: the verification step, `RUNBOOK.md` §1. Expect findings: none of the fp16, GradScaler or kernel code has ever run.
+1. Phil: the verification step, `RUNBOOK.md` §1 (the `gpu` tier on the 1070, the `t4` tier in one Kaggle session with the record of SWA's two paths, the cold start of the shim, pinning the environment). Expect findings: none of the fp16, GradScaler or kernel code has ever run.
+2. A build session after the verification step, before week 1: fix what the hardware tests find, pin torch to Kaggle's version, apply Phil's answer on decision 250.
+3. Nothing else. That is still before any result exists.
+
+The build loop stops here (plan §17.4).
 
 ## Notes for the next session
 
@@ -221,3 +272,6 @@ How the loop has been run:
 - `tests/test_runbook.py` parses every runbook command with its script's own parser. Keep it green when a script's flags change.
 - The session's worker process restarted several times in session 5, and one worker stopped at the account's 5-hour usage limit and was resumed with a message hours later. Nothing was lost because every branch was pushed and decisions were logged before the work started. Keep doing that.
 - Never run `git add -A` in a worktree while a check that edits files temporarily runs there. In session 5 a work-in-progress commit on a task branch captured `opt_path: flex` from such a check; it was restored in the next commit and never reached `main`. Stage files by name, or run the check in its own worktree.
+- Session 6: a reviewer's scratch directory must be a new, empty one. The fourth reviewer was given `recheck/`, which still held the session-5 re-check's files, and overwrote a helper script there. Nothing in the repository was affected.
+- Session 6: a brief's premise can be wrong. The brief of T-60 said the uncompiled FlexAttention runs on CPU; its backward does not. The worker reported it instead of bending the test; say in every brief that this is what to do.
+- Session 6: the check under the runbook's edits (`docs/review_s5/phil_edits.py`, case X4) found a real dependency: with `opt_path: flex` committed, new code built SWA on a path that may be missing. Run the new test files under each edit before the pull request, not only when a test touches the three files named above.
