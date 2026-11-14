@@ -25,7 +25,7 @@ from src.eval import synthetic as syn
 from src.eval.synthetic import BLANK, IGNORE, SEP, ProbeStream, accuracy, counts, generate, make_spec, solve
 from src.model import build_model
 from src.training.trainer import Trainer
-from tests.fixtures.unfilled import unfilled_recipe
+from tests.fixtures.unfilled import swa_on_the_chunked_path, unfilled_recipe
 
 SPECS = [
     make_spec("mqar", n_pairs=4),
@@ -509,7 +509,8 @@ ALL_VARIANTS = config.variant_names() + ["recurrence"]
 
 
 @pytest.mark.parametrize("variant", ALL_VARIANTS)
-def test_every_variant_builds_with_eight_layers_and_eight_heads(variant):
+def test_every_variant_builds_with_eight_layers_and_eight_heads(variant, monkeypatch):
+    swa_on_the_chunked_path(monkeypatch)  # a CPU forward; see the fixture
     spec = make_spec("mqar", n_pairs=4)
     resolved = probe_resolved(variant, spec, d_model=96, init_seed=1, steps=5, peak_lr=1e-3, n_layers=None)
     assert resolved["model"]["n_layers"] == 8
@@ -535,11 +536,15 @@ def test_probe_widths_literal():
     assert model_of("mha", 128)["head_dim"] == 16
     assert model_of("mha", 128)["d_ff"] == round(1024 * 128 / 384)
     assert model_of("recurrence", 96)["attention"] == {"type": "recurrence"}
+    # SWA's opt path is whatever its variant file holds, `chunked` or `flex` (RUNBOOK §1.2); the
+    # probe model takes it over unchanged. No test pins which (review S5, H1).
+    swa_opt_path = config.load_variant("swa256")["attention"]["opt_path"]
+    assert swa_opt_path in ("chunked", "flex")
     assert model_of("swa256", 96)["attention"] == {
         "type": "sliding_window",
         "n_kv_heads": 8,
         "window": 256,
-        "opt_path": "chunked",
+        "opt_path": swa_opt_path,
     }
     assert model_of("gqa4", 96)["attention"] == {"type": "grouped", "n_kv_heads": 4}
 

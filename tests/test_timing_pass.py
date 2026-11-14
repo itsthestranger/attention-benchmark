@@ -21,7 +21,7 @@ from src.data.loader import TrainStream
 from src.model import build_model
 from src.training.trainer import Trainer
 from src.utils.reproducibility import synthetic_split
-from tests.fixtures.unfilled import unfilled_recipe
+from tests.fixtures.unfilled import swa_on_the_chunked_path, unfilled_recipe
 from tests.fixtures.fake_campaign import fake_campaign
 from tests.fixtures.commitments import analyse_committed
 
@@ -239,7 +239,8 @@ def test_attention_timer_times_forward_and_backward_and_removes_its_hooks():
 # --- End to end on CPU --------------------------------------------------------------------
 
 
-def test_the_pass_runs_end_to_end_on_cpu_and_writes_the_schema(tmp_path):
+def test_the_pass_runs_end_to_end_on_cpu_and_writes_the_schema(tmp_path, monkeypatch):
+    swa_on_the_chunked_path(monkeypatch)  # SWA trains on CPU here; see the fixture
     out = tmp_path / "timing_pass.json"
     code = tp.main(["--synthetic", "--variants", "mha", "swa256", "mla192", "--with-ref", *SMALL, "--out", str(out)])
     assert code == 0  # on CPU the SWA check is reported, not enforced

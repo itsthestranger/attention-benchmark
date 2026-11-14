@@ -30,13 +30,19 @@ D = 384  # d_model
 H = 8  # query heads
 DH = 48  # head dim
 
+# SWA's opt path is `chunked` until the T4 check, after which Phil may set `flex` in the variant file
+# (RUNBOOK §1.2; plan §2.3). No test pins which of the two the file holds (review S5, H1); the table
+# below takes it from the file, and a test further down checks that it is one of the two.
+SWA_OPT_PATHS = ("chunked", "flex")
+SWA_OPT_PATH = yaml.safe_load((ROOT / "configs" / "variants" / "swa256.yaml").read_text())["attention"]["opt_path"]
+
 VARIANT_TABLE = {
     # name: (attention dict, d_ff), plan §3.2
     "mha": ({"type": "grouped", "n_kv_heads": 8}, 1024),
     "gqa4": ({"type": "grouped", "n_kv_heads": 4}, 1152),
     "gqa2": ({"type": "grouped", "n_kv_heads": 2}, 1216),
     "mqa": ({"type": "grouped", "n_kv_heads": 1}, 1248),
-    "swa256": ({"type": "sliding_window", "n_kv_heads": 8, "window": 256, "opt_path": "chunked"}, 1024),
+    "swa256": ({"type": "sliding_window", "n_kv_heads": 8, "window": 256, "opt_path": SWA_OPT_PATH}, 1024),
     "mla192": ({"type": "mla", "d_c": 192, "d_c_q": 192, "rope_dim": 24}, 1048),
     "mla96": ({"type": "mla", "d_c": 96, "d_c_q": 96, "rope_dim": 24}, 1224),
     "null": ({"type": "grouped", "n_kv_heads": 8}, 1024),
@@ -101,9 +107,13 @@ def _reverse_keys(node):
 
 def test_every_yaml_file_loads_to_a_dict():
     paths = sorted(CONFIGS.rglob("*.yaml"))
-    # 6 top-level (ops.yaml is the fifth, T-29; commitments.yaml the sixth, T-47), 8 variants, 2 ladder,
-    # 3 arms, 1 example run spec
-    assert len(paths) == 20
+    # 6 top-level (ops.yaml is the fifth, T-29; commitments.yaml the sixth, T-47), 8 variants, 2 ladder
+    # and 3 arms. The run specs under configs/runs/ are not counted: Phil adds one for each job the
+    # shim notebook starts (RUNBOOK §1.4), and a test that pinned their number would turn red at the
+    # first of them (review S5, H1). The example must be there.
+    fixed = [path for path in paths if path.parent != CONFIGS / "runs"]
+    assert len(fixed) == 19
+    assert CONFIGS / "runs" / "example_mha_s1.yaml" in paths
     for path in paths:
         assert isinstance(yaml.safe_load(path.read_text()), dict), path
 
@@ -778,8 +788,9 @@ def test_hash_stable_across_processes_with_different_hash_seeds():
 # --- F3 (T-37): the sliding-window opt path is a config key, and only SWA has it ----------------
 
 
-def test_swa256_resolves_with_the_chunked_opt_path():
-    assert res("swa256")["model"]["attention"]["opt_path"] == "chunked"
+def test_swa256_resolves_with_the_opt_path_of_its_variant_file_which_is_one_of_the_two():
+    assert SWA_OPT_PATH in SWA_OPT_PATHS
+    assert res("swa256")["model"]["attention"]["opt_path"] == SWA_OPT_PATH
 
 
 def test_only_swa256_has_an_opt_path_key_in_its_resolved_attention_block():
@@ -789,7 +800,8 @@ def test_only_swa256_has_an_opt_path_key_in_its_resolved_attention_block():
 
 
 def test_the_opt_path_is_part_of_the_config_hash():
-    chunked = res("swa256")
+    chunked = res("swa256", overrides={"model.attention.opt_path": "chunked"})
     flex = res("swa256", overrides={"model.attention.opt_path": "flex"})
+    assert chunked["model"]["attention"]["opt_path"] == "chunked"
     assert flex["model"]["attention"]["opt_path"] == "flex"
     assert config.config_hash(chunked) != config.config_hash(flex)
