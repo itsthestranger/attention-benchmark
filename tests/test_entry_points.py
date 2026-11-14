@@ -41,6 +41,7 @@ from src.model import build_model
 from src.training import branch as br
 from src.training import checkpoint as ck
 from src.utils import manifest as mf
+from tests.fixtures.unfilled import unfilled_recipe, unpinned_data_config
 from tests.tolerances import BRANCH_FIDELITY_FP32, FLOAT64_IDENTITY, RESUME_FIDELITY_FP32, scale_relative_error
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -475,7 +476,8 @@ def test_an_expected_hash_that_differs_is_refused_and_the_matching_one_accepted(
     assert run_train(specs.trunk, tmp_path / "right", synthetic.root, extra=("--until", "1")) == 0
 
 
-def test_an_incomplete_recipe_is_refused_before_any_work(specs, synthetic, tmp_path, capsys):
+def test_an_incomplete_recipe_is_refused_before_any_work(specs, synthetic, tmp_path, capsys, monkeypatch):
+    unfilled_recipe(monkeypatch)  # the recipe before the smoke runs, whatever the repository's file holds
     doc = yaml.safe_load(specs.trunk.read_text(encoding="utf-8"))
     for key in ("recipe.batch.micro_batch", "recipe.grad_scaler.init_scale", "recipe.grad_scaler.growth_interval"):
         del doc["overrides"][key]
@@ -632,10 +634,14 @@ def test_the_module_entry_runs_in_a_subprocess(specs, synthetic, trunk_resolved,
 
 
 def test_the_repository_data_config_refuses_train_branch_and_evaluate_and_writes_nothing(
-    synthetic, specs, branch_source, reference, tmp_path, capsys
+    synthetic, specs, branch_source, reference, tmp_path, capsys, monkeypatch
 ):
-    """configs/data.yaml has null hashes until Phil pins them: no entry point may run against it."""
+    """configs/data.yaml has null hashes until Phil pins them: no entry point may run against it.
+
+    The unpinned file is built here (review S5, H1): the repository's own file is pinned from
+    RUNBOOK §2.1 on. It is put in the place of the default, so no flag is involved."""
     assert (config.CONFIG_DIR / "data.yaml").exists()
+    monkeypatch.setattr(rc, "DATA_CONFIG", unpinned_data_config(tmp_path / "configs"))
     out = tmp_path / "unpinned"
     assert train_script.main([str(specs.trunk), "--data", str(synthetic.root), "--out", str(out),
                               "--device", "cpu"]) == 2

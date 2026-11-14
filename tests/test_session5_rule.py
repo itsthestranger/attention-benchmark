@@ -47,6 +47,7 @@ CONTROL_SECTION = "Positive control: L6 against L8 at 300M"
 SEED_SECTION = "Seed count and detectable effect"
 DECLARATIONS = "Declarations (configs/commitments.yaml)"
 FULL, CUT = "full", "l6_l8"
+REAL_LOAD_COMMITMENTS = config.load_commitments  # the loader itself, before any test replaces it
 
 
 def control_losses(shift: float, *, noise: float = 0.002):
@@ -247,10 +248,16 @@ def test_with_a_positive_slope_the_multipliers_are_still_reported():
 # --- 220: configs/commitments.yaml ----------------------------------------------------------------
 
 
-def test_the_committed_file_declares_nothing_yet():
-    """Before the campaign the file holds the full ladder and no seed count, like the template in README.md."""
-    assert config.load_commitments() == {"ladder": FULL, "seed_count": None}
+def test_the_repositorys_file_is_a_valid_declaration_whatever_it_holds():
+    """Phil fills this file in during the campaign (RUNBOOK §3.4), so no test pins what it holds
+    (review S5, H1): it must load. What a campaign that has declared nothing holds is `uncommitted()`,
+    and that is what the blank tables and plots are built with."""
+    held = config.load_commitments()
+    assert set(held) == {"ladder", "seed_count"}
+    assert held["ladder"] in (FULL, CUT) and held["seed_count"] in (None, 5, 8)
     assert (config.CONFIG_DIR / "commitments.yaml").is_file()
+    assert config.uncommitted() == {"ladder": FULL, "seed_count": None}
+    assert config.uncommitted() is not config.uncommitted()  # a fresh mapping each time
 
 
 def test_the_file_is_protected_like_the_frozen_files():
@@ -428,9 +435,18 @@ def test_without_an_argument_the_analysis_reads_the_committed_file(campaign, mon
     a = mt.analyse(campaign)
     assert calls == [None]
     assert a.committed_seed_count == 5 and set(a.comparisons) == set(PRIMARIES) | set(EXPLORATORY)
-    # With the repository's own file, which declares no seed count, nothing is compared.
-    monkeypatch.undo()
+    # With a file that declares no seed count, nothing is compared.
+    monkeypatch.setattr(config, "load_commitments", lambda path=None: config.uncommitted())
     assert mt.analyse(campaign).comparisons == {}
+
+
+def test_the_rules_inputs_and_output_are_shown_before_anything_is_committed(campaign):
+    """Break B23 of review S5: Phil commits the seed count from this section, so every row of it is
+    filled as soon as the rule can be computed, committed or not."""
+    uncommitted = mt.gate_values(mt.analyse(campaign, commitments={"ladder": FULL, "seed_count": None}))
+    done = mt.gate_values(mt.analyse(campaign, commitments={"ladder": FULL, "seed_count": 5}))
+    assert all(value is not None for value in uncommitted[SEED_SECTION].values())
+    assert uncommitted[SEED_SECTION] == done[SEED_SECTION]
 
 
 def test_the_gate_report_shows_the_declarations_beside_the_rule(campaign):
@@ -453,6 +469,31 @@ def test_the_blank_gate_report_is_the_committed_one(tmp_path, capsys):
     assert DECLARATIONS in blank.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("held", [{"ladder": FULL, "seed_count": 5}, {"ladder": CUT, "seed_count": 8}])
+def test_the_blank_tables_and_plots_do_not_depend_on_what_the_file_holds(tmp_path, monkeypatch, capsys, held):
+    """Review S5, H1: after Phil's commit of §3.4 the committed blank forms must still be the generated ones."""
+    assert mt.main(["--blank", "--out", str(tmp_path / "before")]) == 0
+    monkeypatch.setattr(config, "load_commitments", lambda path=None: dict(held))
+    assert mt.main(["--blank", "--out", str(tmp_path / "after")]) == 0
+    before = sorted(p.name for p in (tmp_path / "before").iterdir())
+    assert before and before == sorted(p.name for p in (tmp_path / "after").iterdir())
+    for name in before:
+        assert (tmp_path / "after" / name).read_bytes() == (tmp_path / "before" / name).read_bytes(), name
+        committed_blank = ROOT / "results" / "tables" / "blank" / name
+        assert (tmp_path / "after" / name).read_bytes() == committed_blank.read_bytes(), name
+    seen = []
+    real = mt.analyse
+
+    def spy(results, prereg=None, **kwargs):
+        seen.append(kwargs.get("commitments"))
+        return real(results, prereg, **kwargs)
+
+    monkeypatch.setattr(mt, "analyse", spy)
+    assert mp.main(["--blank", "--out", str(tmp_path / "plots")]) == 0
+    capsys.readouterr()
+    assert seen == [config.uncommitted()]
+
+
 # --- 220: the command lines ------------------------------------------------------------------------
 
 
@@ -469,40 +510,66 @@ def headline_verdicts(path: Path) -> list[str]:
     return [word for word in (pt.VERDICT_DETECTED, pt.VERDICT_NOT_DETECTED) if f"| {word} |" in text or f" {word} " in text]
 
 
-def test_make_tables_reads_the_commitments_file(manifest_dir, tmp_path, capsys):
-    done = write_commitments(tmp_path / "done.yaml", {"ladder": FULL, "seed_count": 5})
-    wrong = write_commitments(tmp_path / "wrong.yaml", {"ladder": FULL, "seed_count": 8})
+def file_holds(monkeypatch, tmp_path, held) -> None:
+    """Make `config.load_commitments()` read a file that holds `held`, through the real loader and its checks."""
+    path = write_commitments(tmp_path / f"held_{len(list(tmp_path.glob('held_*')))}.yaml", held)
+    monkeypatch.setattr(config, "load_commitments", lambda _=None: REAL_LOAD_COMMITMENTS(path))
+
+
+def test_make_tables_reads_the_repositorys_commitments_file(manifest_dir, tmp_path, monkeypatch, capsys):
     common = ["--manifests", str(manifest_dir)]
-    assert mt.main([*common, "--out", str(tmp_path / "default")]) == 0  # the repository's file: nothing committed
-    assert mt.main([*common, "--out", str(tmp_path / "done"), "--commitments", str(done)]) == 0
-    assert mt.main([*common, "--out", str(tmp_path / "wrong"), "--commitments", str(wrong)]) == 0
+    for name, held in (
+        ("none", {"ladder": FULL, "seed_count": None}),
+        ("done", {"ladder": FULL, "seed_count": 5}),
+        ("wrong", {"ladder": FULL, "seed_count": 8}),
+    ):
+        file_holds(monkeypatch, tmp_path, held)
+        assert mt.main([*common, "--out", str(tmp_path / name)]) == 0
     capsys.readouterr()
     assert headline_verdicts(tmp_path / "done" / "headline.md")
-    assert not headline_verdicts(tmp_path / "default" / "headline.md")
+    assert not headline_verdicts(tmp_path / "none" / "headline.md")
     assert not headline_verdicts(tmp_path / "wrong" / "headline.md")
-    assert "not committed" in (tmp_path / "default" / "headline.md").read_text(encoding="utf-8")
+    assert "not committed" in (tmp_path / "none" / "headline.md").read_text(encoding="utf-8")
     assert "disagrees" in (tmp_path / "wrong" / "headline.md").read_text(encoding="utf-8")
 
 
-def test_make_tables_refuses_a_malformed_commitments_file(manifest_dir, tmp_path, capsys):
-    bad = write_commitments(tmp_path / "bad.yaml", {"ladder": FULL, "seed_count": 6})
-    assert mt.main(["--manifests", str(manifest_dir), "--out", str(tmp_path / "out"), "--commitments", str(bad)]) == 1
+def test_a_mapping_given_in_python_takes_the_place_of_the_file(manifest_dir, tmp_path, monkeypatch, capsys):
+    """`main(argv, commitments=...)` is how the tests of other files declare; it does not read the file."""
+    def must_not_be_read(path=None):
+        raise AssertionError("the repository's file was read although a mapping was given")
+
+    monkeypatch.setattr(config, "load_commitments", must_not_be_read)
+    done = {"ladder": FULL, "seed_count": 5}
+    assert mt.main(["--manifests", str(manifest_dir), "--out", str(tmp_path / "t")], commitments=done) == 0
+    none = tmp_path / "none"
+    assert mp.main(["--manifests", str(manifest_dir), "--bench", str(none), "--probes", str(none / "p.json"),
+                    "--retrieval", str(none / "r.json"), "--out", str(tmp_path / "p")], commitments=done) == 0
+    capsys.readouterr()
+    assert headline_verdicts(tmp_path / "t" / "headline.md")
+
+
+def test_make_tables_refuses_a_malformed_commitments_file(manifest_dir, tmp_path, monkeypatch, capsys):
+    file_holds(monkeypatch, tmp_path, {"ladder": FULL, "seed_count": 6})
+    assert mt.main(["--manifests", str(manifest_dir), "--out", str(tmp_path / "out")]) == 1
     assert "seed_count" in capsys.readouterr().err
     assert not (tmp_path / "out" / "headline.md").exists()
 
 
-def test_make_plots_refuses_a_malformed_commitments_file(manifest_dir, tmp_path, capsys):
-    bad = write_commitments(tmp_path / "bad.yaml", {"ladder": "cut", "seed_count": None})
+def test_make_plots_refuses_a_malformed_commitments_file(manifest_dir, tmp_path, monkeypatch, capsys):
+    file_holds(monkeypatch, tmp_path, {"ladder": "cut", "seed_count": None})
     none = tmp_path / "none"
     code = mp.main(["--manifests", str(manifest_dir), "--bench", str(none), "--probes", str(none / "p.json"),
-                    "--retrieval", str(none / "r.json"), "--out", str(tmp_path / "out"), "--commitments", str(bad)])
+                    "--retrieval", str(none / "r.json"), "--out", str(tmp_path / "out")])
     assert code == 1
     assert "ladder" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("module", [mt, mp])
-def test_neither_command_line_has_the_old_flag(module, tmp_path, capsys):
+@pytest.mark.parametrize("flag", [["--l10-cut"], ["--commitments", "some.yaml"], ["--seed-count", "5"]])
+def test_no_command_line_flag_declares_anything(module, flag, tmp_path, capsys):
+    """Decision 220; review S5, G1: a flag can be set after the results exist, and so can a flag that
+    names a file. The declarations are what the repository's committed file holds."""
     with pytest.raises(SystemExit) as exit_:
-        module.main(["--blank", "--out", str(tmp_path), "--l10-cut"])
+        module.main(["--blank", "--out", str(tmp_path), *flag])
     assert exit_.value.code == 2
     capsys.readouterr()

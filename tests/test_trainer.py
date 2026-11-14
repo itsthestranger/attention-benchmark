@@ -89,6 +89,7 @@ from src.model import build_model
 from src.training.schedule import lr_at
 from src.training.trainer import StepRecord, Trainer
 from tests.fixtures.synthetic_tokens import rule_split
+from tests.fixtures.unfilled import unfilled_recipe
 from tests.tolerances import GRAD_ACCUMULATION_FP32, REF_OPT_FP16, REF_OPT_FP32, scale_relative_error
 
 VOCAB, T, B = 64, 32, 8
@@ -442,8 +443,9 @@ def test_train_until_is_bounded():
         trainer.train_step()  # the run is over
 
 
-def test_the_recipe_as_frozen_cannot_start_a_run():
+def test_the_recipe_before_the_smoke_runs_cannot_start_a_run(monkeypatch):
     """micro_batch is unset in recipe.yaml until the smoke runs (plan §7.3)."""
+    unfilled_recipe(monkeypatch)
     cfg = config.resolve("mha", init_seed=1, peak_lr=1e-3, steps=2, branches=[], overrides={
         "model.d_model": 64, "model.n_heads": 8, "model.head_dim": 8, "model.n_layers": 1,
         "model.d_ff": 96, "model.vocab_size": VOCAB, "model.context_length": T,

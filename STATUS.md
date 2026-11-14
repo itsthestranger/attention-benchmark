@@ -1,6 +1,28 @@
 # STATUS
 
-Last updated: 2026-11-13, session 5. Phil answered every open question except Kaggle's versions (decisions 215 to 231). The answers are being applied as tasks T-46 to T-53 (`TASKS.md`, M7); nothing below that line of work is built yet unless "Done" lists it. The `cpu` tier is green on `main` at `538a730`: 3,622 tests. The sections below the session-5 table still describe the state at the end of session 4 and are rewritten when T-53 closes.
+Last updated: 2026-11-14, session 5, after the third independent review. T-46 to T-51 are merged. T-52 (the frozen files) is pull request #59 and waits for Phil. T-53, the review of T-39 to T-52 by a fresh agent, is done: `docs/review_s5.md`. Its verdict: the changes do what the decisions say (98 of 106 deliberate breaks caught, the end-to-end runs on CPU behaved as documented), but the handover is blocked by one finding, H1: the `cpu` tier pins the unfilled state of the files Phil fills in during the campaign, so each commit the runbook asks for would turn CI red. The fixes are tasks T-54 to T-57 (`TASKS.md`, M8); none is merged yet unless "Done" lists it. The `cpu` tier is green on `main` at `c1ffb78`: 3,785 tests. The sections below "Session 5" still describe the end of session 4 except where a session-5 row says otherwise; the rewrite is drafted and lands with T-57.
+
+## Session-5 review (2026-11-14): findings and where each goes
+
+| # | Finding | Goes to |
+| --- | --- | --- |
+| H1 | Tests assert that `configs/commitments.yaml`, `configs/recipe.yaml` and the data hashes are unfilled; filling them, as the runbook asks, fails 5 to 11 tests | T-54 |
+| G1 | `--commitments FILE` gives verdicts from any file, the flag decision 220 set out to remove | T-54 |
+| G2 | Without a committed seed count only the tests wait; the variants' 300M losses are still printed and drawn | T-55, as a reading for Phil to confirm |
+| G3 | Plot 6 draws the variants' gaps whatever the gate says | T-55 |
+| G4 | The runbook requires a `t4` test to pass that decision 226 expects to fail for the chunked path | T-57 |
+| G5 | The final checkpoints pass 20 GB in week 3 and `prune --final` is all or nothing | T-56, T-57 |
+| M1 | The headline's decode cell and plots 2 and 8 show the median without its range and accept documents `timing_report` refuses | T-55 |
+| M2 | A declared ladder cut does not reach the reported fit when L10 runs exist | T-55 |
+| M3 | Plot 1 draws a multiplier axis when no multiplier is reported | T-55 |
+| M4 | The runbook says block 2 is 320 runs; its loop trains 400 | T-57 |
+| M5 | "By seed" holds for the shared-rate interval only under the paired test | T-57 (wording) |
+| M6 | Literal tolerances in two new test files | T-54, T-57 |
+| M7 | A run without a git checkout trains to the end and then refuses to write its manifest | T-56 |
+| M8 | The SWA mark is on two cells of `timing.md`, not on the attention share or the `ref` row | listed |
+| M9 | The shim and the runbook write to different directories | T-56, T-57 |
+| M10 | This file was stale below its first table | T-57 |
+| M11 | Test gaps B11, B23, B64, B77 | T-54 (B11 is listed: it differs only at p exactly equal to alpha) |
 
 ## Session 5 (2026-11-13): Phil's decisions and what follows from them
 
@@ -75,11 +97,17 @@ How session 5 is run: the task flow of `CLAUDE.md` (a task branch and a pull req
 - T-42 `timing.md` and `inference.md` (#49).
 - T-41 the bucketed loss at every validation point and peak memory (#50).
 - T-44 runbook corrections, `make_plots --l10-cut`, CODEOWNERS (#51).
+- T-46 the decisions of session 5 and the tasks that apply them (#52).
+- T-47 the positive control's direction, a slope that is not positive, `configs/commitments.yaml` (#53).
+- T-50 tuned against shared learning rate, `shared_rate.md` (#54).
+- T-49 the inference benchmark in three round-robin repetitions, `bench/2` (#55).
+- T-48 SWA not below MHA in the timing pass is recorded and marked, not refused (#56).
+- T-51 the runbook for the decisions of session 5, with the probe commands of §2.3 (#57).
 
 ## In progress
 
-- Nothing is running. Every worker has stopped and every branch is pushed.
-- `RUNBOOK.md` §2.3 (probe commands): waits for the probe grid from Phil. It is the one part of the handover that is not written.
+- T-52, pull request #59, labelled `needs-phil`: waits for Phil. T-57 adds the review's wording fixes to it.
+- T-54 to T-57: the fixes for the session-5 review. See the table above and `TASKS.md`, M8.
 
 ## Handover checklist (plan §17.4)
 
@@ -88,11 +116,11 @@ How session 5 is run: the task flow of `CLAUDE.md` (a task branch and a pull req
 | 1 | Every task merged, `cpu` tier green in CI | Met except T-31, the handover itself, which closes when item 4 does. |
 | 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met; listed below (105 collected). |
 | 3 | Headline table and all ten plots generate from fake manifests and blank | Met. `probes.md`, `timing.md` and `inference.md` build blank and from synthetic records too. |
-| 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | **Not met in one place**: §2.3 (probes, Gate 1) has no commands, because the plan does not fix the probe grid. Everything else is written, and every command parses with its script's own parser. |
+| 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | Met since T-51 (#57): §2.3 has the pilot, block 1 and block 2. Every command parses with its script's own parser; none has run on a GPU. |
 | 5 | `STATUS.md` lists every decision, open question and deviation | This file, with `docs/decisions.md` rows 1 to 214. |
 | 6 | A fresh agent reviewed the harness against plan §5 and §13; findings fixed or listed | Two reviews done (sessions 3 and 4); the second one's findings are below with their status. The fixes for it (T-39 to T-45) were reviewed by the orchestrator with deliberate breaks, not by a fresh agent. The session-3 fixes had the same status, and the second review found defects in them, so a short fresh pass over T-39 to T-45 is recommended before the first GPU hour. |
 
-The harness is ready for Phil's verification step (`RUNBOOK.md` §1) and for week 1 except the probes. It is not "done" by the checklist until §2.3 is written.
+Items 1 and 6 are open: T-52 waits for Phil, and the findings of the session-5 review are being fixed (T-54 to T-57).
 
 ## Session-4 review (2026-11-13)
 

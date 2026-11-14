@@ -67,6 +67,7 @@ def _train(args) -> int:
     resolved = rc.resolve_spec(spec)
     timing_pass_id = rc.check_timing_pass(resolved, spec["timing_pass_id"])
     config.require_complete(resolved)
+    rc.require_git_checkout()  # before any work: no step is taken without a commit hash (review M7)
     ops = rc.load_ops(args)
     device = rc.choose_device(args.device)
     rc.reset_peak_memory(device)  # this session's peak starts here, before the model exists (T-41)

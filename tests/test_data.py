@@ -716,5 +716,9 @@ def test_data_config_holds_plan_values():
     assert cfg["context_length"] == 1024
     assert cfg["splits"] == {"train": 400_000_000, "val": 4_000_000, "test": 4_000_000}
     assert cfg["smoke_tokens"] == 5_000_000
-    assert cfg["tokenizer"]["sha256"] is None
-    assert cfg["dataset_sha256"] is None
+    # The two hashes are unset until the corpus is tokenized, then Phil pastes them in (RUNBOOK §2.1).
+    # No test pins them as unset (review S5, H1): each is unset or a SHA-256, and both or neither.
+    hashes = (cfg["tokenizer"]["sha256"], cfg["dataset_sha256"])
+    for value in hashes:
+        assert value is None or re.fullmatch(r"[0-9a-f]{64}", value), value
+    assert len({value is None for value in hashes}) == 1
