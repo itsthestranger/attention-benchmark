@@ -74,7 +74,7 @@ def test_the_sweep_report_lists_a_skippy_run_as_diverged(campaign, tmp_path):
     for manifest in campaign + mha_sweep(skipped_at_top=8):
         mf.write_manifest(manifest, directory)
     out = tmp_path / "tables"
-    assert select_lr.main(["--manifests", str(directory), "--sweep-seed", str(SWEEP_SEED), "--out", str(out)]) == 0
+    assert select_lr.main(["--manifests", str(directory), "--out", str(out)]) == 0
     text = (out / "lr_sweep.md").read_text(encoding="utf-8")
     top = mf.format_lr(GRID[-1])
     line = next(l for l in text.splitlines() if l.startswith(f"| {top} |"))
@@ -213,11 +213,16 @@ def test_a_seed_no_arm_uses_is_accepted(seed):
     assert sw.check_sweep_seed(seed, PREREG) == seed
 
 
-def test_the_sweep_report_refuses_a_registered_seed(campaign, tmp_path, capsys):
+def test_the_sweep_report_refuses_a_registered_seed(campaign, tmp_path, capsys, monkeypatch):
     directory = tmp_path / "manifests"
     for manifest in campaign:
         mf.write_manifest(manifest, directory)
     out = tmp_path / "tables"
-    assert select_lr.main(["--manifests", str(directory), "--sweep-seed", "1", "--out", str(out)]) != 0
+    # The sweep seed is `lr_sweep.init_seed` of prereg.yaml (decision 219); a file that names an
+    # arm's seed there is refused as the flag was.
+    prereg = config.load_prereg()
+    prereg["lr_sweep"]["init_seed"] = 1
+    monkeypatch.setattr(config, "load_prereg", lambda: prereg)
+    assert select_lr.main(["--manifests", str(directory), "--out", str(out)]) != 0
     assert "sweep seed" in capsys.readouterr().err
     assert not (out / "lr_sweep.md").exists()

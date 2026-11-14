@@ -1,7 +1,7 @@
 # Pre-registered decision rule (plan §1.2, §1.4, §8.4, §10.3).
 # FROZEN (plan §17.3): changes only through a pull request that Phil approves.
-# Two thresholds are PROPOSALS (plan §0, decisions 20 and 21). Phil confirms or
-# changes them before the pre-registration commit. They are marked below.
+# The two thresholds of plan §0 (its decisions 20 and 21) were confirmed by
+# Phil on 2026-11-13 (docs/decisions.md, row 221).
 
 primary:
   reference: mha
@@ -23,7 +23,7 @@ test_selection:
     variant: mha
     init_seeds: [1, 2, 3]
     budget: 100M
-  # PROPOSED (decision 20): paired test if s_rep < 0.6 * sigma_init.
+  # Plan decision 20, confirmed: paired test if s_rep < 0.6 * sigma_init.
   paired_if_s_rep_ratio_below: 0.6
   otherwise: welch
 
@@ -32,8 +32,9 @@ seed_count:
   base_seeds: [1, 2, 3, 4, 5]
   added_seeds: [6, 7, 8]
   power: 0.80
-  # PROPOSED (decision 21): with m = exp(-gap / b) for the 5-seed detectable
-  # gap, run 8 seeds if 1 - m exceeds this value.
+  # Plan decision 21, confirmed: with m = exp(-gap / b) for the 5-seed detectable
+  # gap, run 8 seeds if 1 - m exceeds this value. A slope b that is not positive
+  # also gives 8 seeds (docs/decisions.md, row 223).
   max_undetectable_param_fraction: 0.05
   leave_arm_a_if_extended: [mla96, swa256]
 
@@ -42,12 +43,19 @@ exploratory:
   init_seeds: [1, 2, 3]
 
 positive_control:
-  # L6 against L8, a single test with the test chosen above.
+  # L6 against L8, a single test with the test chosen above. Detected only when
+  # L6 is worse; a significant gap the other way fails the control
+  # (docs/decisions.md, row 216).
   small: mha_L6
   reference: mha
   init_seeds: [1, 2, 3, 4, 5]
   budget: 300M
   alpha: 0.05
+
+lr_sweep:
+  # Every learning-rate sweep (plan §7.4) runs on this init seed, which no arm
+  # uses (docs/decisions.md, row 219).
+  init_seed: 21
 
 null_control:
   variant: "null"
@@ -58,7 +66,8 @@ null_control:
 
 context_use:
   # c = tokens of the same document that precede a token inside the window.
-  # Buckets are half-open: [low, high).
+  # Buckets are half-open, [low, high), except the last, which includes its upper
+  # end: c = 1,024 counts in [512, 1024] (docs/decisions.md, rows 95 and 228).
   buckets: [[0, 64], [64, 256], [256, 512], [512, 1024]]
   late_context_min: 512
   # In-context-learning score: mean loss at c in `late` minus mean loss at c

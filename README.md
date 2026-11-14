@@ -39,7 +39,8 @@ python -m scripts.make_plots --blank --out results/plots           # the ten plo
 This section is frozen once committed (plan §17.3). It is committed with a timestamp before any variant run (plan §11). Until then it is a template: every line marked **TO FILL** is empty on purpose, and nothing below has been decided by a result.
 
 - Pre-registration commit: **TO FILL** (commit hash and date)
-- Thresholds confirmed in `configs/prereg.yaml`: **TO FILL** (`paired_if_s_rep_ratio_below`, `max_undetectable_param_fraction`)
+- Thresholds in `configs/prereg.yaml`, confirmed by Phil on 2026-11-13: `paired_if_s_rep_ratio_below` 0.6, `max_undetectable_param_fraction` 0.05
+- Amendments to the plan made before the first GPU run: `docs/plan_v5.md` §18
 
 ### The rule (plan §1.2)
 
@@ -68,13 +69,27 @@ Applied once, after Arm N and the ladder, from MHA runs only:
 1. Take the 5-seed detectable gap for the chosen test, in nats, using σ_init at 300M.
 2. Convert it with the ladder slope b at 300M: m = exp(−gap / b).
 3. If 1 − m > 0.05, run 8 seeds on MHA and the three primaries and drop MLA-96 and SWA-256 from Arm A. Otherwise run 5.
+4. If the slope b is not positive, run 8 seeds as in step 3 and report no effective-parameter multiplier (plan §18, A4).
 
-The detectable gap uses the exact power of the test that is run (decision 79 in `docs/decisions.md`; a deviation from the plan's §1.3 table, listed in `STATUS.md`).
+The detectable gap uses the exact power of the test that is run: 2.63 × σ_init for Welch's test at 5 seeds and 1.83 at 8, not the 2.5 and 1.8 of the plan's §1.3 table. If the paired test is chosen, step 1 uses the worst case σ_d = √2 × σ_init (plan §18, A3).
+
+The rule reads MHA seeds 1–5, L6 seeds 1–5 and L10 seeds 1–3 at 300M and nothing else. It gives no seed count while any of them is missing.
+
+**Declared in `configs/commitments.yaml`, by pull request, each before the results it governs are read** (plan §18, A5):
+
+- `ladder`: `full`, or `l6_l8` if L10 is cut (plan §12.2 item 4). The rule then uses the two-point slope.
+- `seed_count`: the number the rule gives, committed before the first primary run of week 3. The analysis tests no primary and no exploratory comparison while it is missing or differs from what the rule computes.
 
 ### Controls
 
 - **Null control** (plan §8.1): MHA under the name `null`, init seeds 11–15, at 100M, tested against MHA's 100M branches exactly like a variant. A detected null control means the pipeline is broken; nothing downstream is valid until it passes.
-- **Positive control** (plan §8.4): L6 against L8, a single test on seeds 1–5 at the 300M result, α = 0.05, with the test chosen above. If it is not detected, every not-detected verdict is reported as uninformative.
+- **Positive control** (plan §8.4): L6 against L8, a single two-sided test on seeds 1–5 at the 300M result, α = 0.05, with the test chosen above. It counts as detected only when L6 is worse than L8. If it is not detected, or detected in the wrong direction, the control has failed and every not-detected verdict is reported as uninformative (plan §18, A6).
+
+### Learning rates (plan §7.4)
+
+- Every sweep runs on init seed 21, which no arm uses (`lr_sweep.init_seed` in `configs/prereg.yaml`).
+- Arm A runs each variant at one rate: its own if the tie rule lets it differ from MHA's, otherwise MHA's.
+- For each Arm A variant whose rate differs from MHA's, three more runs are made: seeds 1–3, 100M, at MHA's rate. The variant's 100M branches at its own rate minus these runs, on the same three seeds, are reported with an interval computed with the test chosen at Gate 2: paired by seed under the paired test, two groups of three under Welch's test. No detection claim is made on that difference (plan §18, A7).
 
 ### Context-use metrics (plan §10.3)
 
@@ -88,5 +103,5 @@ Secondary; no detection claim is made on them.
 ### Committed later, each before the results it governs are read
 
 - Test chosen at Gate 2 (paired or Welch), with σ_init, σ_data and s_rep at 100M: **TO FILL**
-- Detectable-effect bound in nats and the seed count, when MHA's 300M runs and the ladder exist, before any variant result at 300M is read: **TO FILL**
+- Detectable-effect bound in nats and the seed count, when MHA's 300M runs and the ladder exist, before any variant result at 300M is read: **TO FILL** (the seed count also goes into `configs/commitments.yaml`)
 - Publication date of the noise-floor post: **TO FILL**

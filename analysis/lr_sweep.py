@@ -287,3 +287,12 @@ def check_sweep_seed(seed: int, prereg: Mapping) -> int:
                 "so a sweep run on it would also be an arm's run: choose an unregistered seed"
             )
     return seed
+
+
+def registered_sweep_seed(prereg: Mapping) -> int:
+    """`lr_sweep.init_seed` of prereg.yaml (decision 219), checked by `check_sweep_seed`."""
+    try:
+        seed = prereg["lr_sweep"]["init_seed"]
+    except (KeyError, TypeError) as exc:
+        raise SweepError("prereg.yaml has no lr_sweep.init_seed: the sweep seed is registered there") from exc
+    return check_sweep_seed(seed, prereg)

@@ -959,3 +959,65 @@ The loop is done when all of the following hold:
 4. `RUNBOOK.md` gives the exact commands for the verification step and for each GPU week of §15, in order, with the gate that follows each block and what to check there.
 5. `STATUS.md` lists every decision the loop made (mirrored in `docs/decisions.md`), every open question, and every deviation from this plan.
 6. A fresh agent that did not write the code has reviewed the harness against §5 and §13 and its findings are resolved or listed.
+
+## 18. Amendments before the first GPU run
+
+Dated 2026-11-13. Decided by Phil in the build sessions, before any GPU job and before the pre-registration commit. The text of §0 to §17 is unchanged; where it disagrees with this section, this section holds. Each row names the row of `docs/decisions.md` that records the decision. No amendment was made with a result in hand: no result exists.
+
+### 18.1 The decision rule
+
+| # | Plan | What the plan says | What holds | Reason | Decision |
+| --- | --- | --- | --- | --- | --- |
+| A1 | §0, §1.2, §1.4 | The pairing threshold 0.6 and the 5% parameter threshold are proposals. | Both are confirmed. | Phil confirmed them. | 221 |
+| A2 | §5 | `ref` and `opt` agree to 1e-6 in fp32. | 1e-5 in fp32, and the same tests also run in float64 at 1e-12. | 1e-6 is at the fp32 rounding floor; correct implementations measured up to 1.8e-6. | Approved 2026-11-12 |
+| A3 | §1.3, §1.4 | The 5-seed detectable gap is 2.5 × σ\_init for Welch's test, 1.8 at 8 seeds. | 2.63 and 1.83, the exact power of Welch's test. If the paired test is chosen, the seed-count rule uses the worst case σ\_d = √2 × σ\_init. The table of §1.3 is unchanged. | The table's Welch rows are pooled-variance values, at which the test that is run has 76% power, not 80%. σ\_d is unknown until a variant is read. | 79, 80 |
+| A4 | §1.4 | m = exp(−gap / b); 8 seeds if 1 − m > 0.05. | The same, and a slope b that is not positive gives 8 seeds and no effective-parameter multiplier. | As b falls toward zero the rule gives 8; for a negative b the formula read literally gives 5. | 223 |
+| A5 | §1.4, §12.2 item 4 | The seed count is committed before any variant result at 300M is read; the ladder may be cut to L6 and L8. | Both are declared in `configs/commitments.yaml`, by pull request, each before the results it governs. The analysis tests no primary and no exploratory comparison while the seed count is missing or differs from the rule's. The rule waits for the complete ladder unless the cut is declared. | A declaration needs a timestamp before the runs; `configs/prereg.yaml` stays as committed. | 203, 220 |
+| A6 | §8.4, §9.4 | L6 against L8 is a single test at α = 0.05. | The test stays two-sided with the thresholds of §8.4. It counts as detected only when L6 is worse than L8; a significant gap the other way is a failed control. | A 6-layer model that beats the 8-layer one contradicts the ladder's premise. | 216 |
+| A7 | §7.4 | Sweeps use "one seed". "Report shared-recipe and tuned results side by side." | Every sweep runs on init seed 21, which no arm uses. Arm A runs each variant at one rate, its own after the tie rule. For each Arm A variant whose rate differs from MHA's, three more runs (seeds 1 to 3, 100M, MHA's rate) are made, and its 100M branches minus these runs are reported with an interval and no detection claim. | A sweep on seed 1, 2 or 3 would be an arm's run. The sweep's own gap between two rates was selected on; fresh seeds measure it. | 127, 219, 224 |
+| A8 | §8.1, §1.2, §8.3, §10.3 | The null control is judged "exactly like a variant"; exploratory comparisons are reported with intervals. | Under the paired test the null control's seeds 11 to 15 are paired with MHA seeds 1 to 5 in list order. Exploratory, Arm B, shared-rate (A7) and context-use intervals use the test chosen at Gate 2: the variant's own seeds against the same reference seeds when paired, against every registered reference run under Welch. They carry no p-value. | Confirmed readings. | 41, 42, 177, 178, 222 |
+| A9 | §8.4 | "Fit across the three points." | Least squares over every run, so a size with more seeds weighs more. The seed-count rule reads the fit over the registered seeds; the reported fit and the multipliers use every MHA run at 300M. | Confirmed readings. With seeds 6 to 8 added the two fits differ slightly, and the gate report says so. | 86, 185, 222 |
+| A10 | §13.6 | Steps taken agree within 0.5% across any compared runs. | The check covers the runs some comparison reads. A run nothing reads, such as a sweep point, cannot stop the tables. | Confirmed reading. | 184, 222 |
+| A11 | §10.3 | Buckets [0, 64), [64, 256), [256, 512), [512, 1024). | The last bucket includes c = 1,024. | Otherwise the bucket-weighted loss cannot equal the aggregate. | 95, 228 |
+
+### 18.2 What is run
+
+| # | Plan | What the plan says | What holds | Reason | Decision |
+| --- | --- | --- | --- | --- | --- |
+| A12 | §9.2, §12.1 | Five probes, 10+ seeds per point, about 250 runs in 3 GPU-h. | Block 1, which decides Gate 1: MQAR at 4, 16 and 64 pairs, the seven variants and the anchor, 10 seeds, 240 runs. Block 2, only if quota allows: probes 2 to 5 at one size each, 400 runs (probe 5 is two tasks, selective copy and induction). Width, steps and learning rate per point come from a pilot on MHA and the anchor. Recall probes are scored as token accuracy against the no-recall level 1/n. | The plan's grid is about 880 runs. Gate 1 needs MQAR and the anchor. | 189, 215 |
+| A13 | §7.3, §15 | The scaler settings are frozen from the smoke runs. | The smoke runs are the first 100 steps of real 300M runs, at both ends of MHA's sweep grid (3e-4 and 4.8e-3), all seven variants at each. The settings must hold at both. | Skips during the warmup depend on the peak rate, which is not known at the freeze. | 183, 227 |
+| A14 | §8.5, §12.1 | Timing pass: 7 variants × 220 steps × 3, 1.5 GPU-h. | With the `ref` track of §2.3 and the instrumented runs for attention's share it is about 8,800 steps, about 3 GPU-h. | Both are asked for by §2.3 and §8.5. | 218 |
+| A15 | §2.3 item 2 | Assert SWA's attention time is below MHA's in the timing pass. | The comparison is made and recorded. When it fails, SWA's timings are kept and marked "not faster than a dense kernel on this GPU"; the pass stays valid for every variant. | §2.3 itself predicts savings near zero for the chunked path at context 1,024. The concern of §13.8 is disclosure. | 150, 226 |
+| A16 | §10.4 | Prefill and decode ranges, no repetition count. | Every point is measured in three round-robin repetitions; the median is reported with the smallest and largest value. Prefill at batch 1. | A speed number needs a spread like any other number here. | 145, 225 |
+| A17 | §10.2 | Per run: GPU utilisation and time-to-loss-X. | GPU utilisation is a raw `nvidia-smi` log per session, started beside the run. Time-to-loss-X is not computed. | Neither is defined, and neither appears in a table or plot of §10. The estimate of §8.5 answers the wall-clock question. | 217 |
+| A18 | §8.5 step 3, §12.2 item 1 | Arm C is optional and first on the cut list. | Arm C is cut. | Its hours go to the runs of A7. | 230 |
+| A19 | §9.7 | Phase 6 runs if Gate 4 opens. | No run script is built now. If Gate 4 opens, Phase 6 is its own build with its own review, and settles open decision 5 then. | The plan defers the RoPE decision to Gate 4. | 230 |
+
+### 18.3 Readings confirmed as implemented
+
+None changes a comparison between mechanisms. Each is described in `docs/decisions.md` under its number (confirmed in rows 222 and 228).
+
+- **§6, data order (28):** the data seed gives a shuffled order of the 1,024-token windows, also for data seed 1; a run reads a prefix of it.
+- **§6, EOS (31):** the EOS after a document belongs to that document, so the next document's first token has c = 0.
+- **§10.3, windows (20):** the in-context-learning windows include their end points.
+- **§7.2, first step (53):** the first update runs at learning rate 0.
+- **§5, logit scale (118):** attention-logit std is pooled over layers, heads and causal pairs.
+- **§5, `opt` reproducibility (99):** measured and recorded by a runbook step; no threshold is applied.
+- **§8.4, multiplier interval (87, 88, 92):** the set of gap / slope ratios the data do not reject. Its simulated coverage is tested (231).
+- **§8.5, estimate below 100M (123):** a variant slower than MHA is read off the same line in ln(tokens), flagged as extrapolated.
+- **§8.7, comparability (125):** runs that differ in dataset hash, tokenizer hash, GPU, mode or precision are refused too.
+- **§3.3, MLA cache (142):** one tensor of 216 values per token per layer.
+- **§8.1, order (170):** no cross-variant number is computed before the null control exists and is not detected and the positive control exists.
+- **§7.4, sweep rules (173, 174):** the edge rule before the tie rule; a diverged point cannot win; "less than σ\_init" is strict.
+- **§8.3, Arm B (179):** Arm B runs at each variant's Arm A rate.
+- **§12.3, cadence (155):** a checkpoint every 600 s, two kept, a validation point every 250 steps.
+- **Lower weight (25, 32, 122, 140):** the RMSNorm epsilon, the split fill order, the seeds of the wall-clock gap, the Phase 6 grid.
+
+### 18.4 Statements of the plan known to be inexact, and unchanged
+
+- **§10.6, "selected SDPA backend":** PyTorch does not report the kernel it selected. The manifest records the kernel the harness enforced.
+- **§12.3, "20 GB holds about 100 checkpoints":** week 1 writes about 20 GB. `scripts/prune.py` removes the checkpoints of finished runs.
+
+### 18.5 Effect on the budget of §12.1
+
+Probes: unchanged for block 1. Timing pass: +1.5 GPU-h. Shared-rate runs: about 1.3 GPU-h for each Arm A variant on its own rate, at most about 8. Arm C: −4.0. Smoke runs: 14 runs of 100 steps, within the 0.5 GPU-h of the plan.

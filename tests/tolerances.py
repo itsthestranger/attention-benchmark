@@ -108,6 +108,22 @@ FWER_N_SIMULATIONS: Final = 20_000
 FWER_SIMULATION_SEED: Final = 20261112
 FWER_STANDARD_ERRORS: Final = 3.0
 
+# Coverage of the effective-parameter multiplier's interval on simulated ladders
+# (plan §8.4; docs/decisions.md row 231, Phil 2026-11-13): a fixed seed, this
+# many simulated campaigns per scenario, and a failure when the share of
+# intervals that hold the true value falls below the interval's own confidence
+# by more than this many standard errors of a binomial proportion at that
+# confidence. The convention of the family-wise error check above.
+MULTIPLIER_COVERAGE_N_SIMULATIONS: Final = 2_500
+MULTIPLIER_COVERAGE_SIMULATION_SEED: Final = 20261113
+MULTIPLIER_COVERAGE_STANDARD_ERRORS: Final = 3.0
+# In the same check: the largest share of simulated campaigns whose ladder slope is not positive
+# (they have no multiplier and are counted apart), and the band, in units of the width the
+# interval would have without any slope uncertainty, that the median width must lie in. The
+# second guards against an interval that covers because it is too wide.
+MULTIPLIER_COVERAGE_MAX_NO_SLOPE_SHARE: Final = 0.01
+MULTIPLIER_WIDTH_BAND: Final = (0.8, 3.0)
+
 # The detectable-effect multipliers of plan §1.3 are reproduced within this
 # absolute amount (TASKS.md T-24).
 DETECTABLE_EFFECT_TABLE_ABS: Final = 0.05
