@@ -32,6 +32,7 @@ from matplotlib.transforms import blended_transform_factory
 from matplotlib.ticker import MaxNLocator, NullLocator
 
 from analysis import primary_test as pt
+from scripts import bench as bd
 from scripts import make_tables as mt
 from src import config
 from src.model import build_model
@@ -65,8 +66,13 @@ KERNEL_DISCLOSURE = (
     "MLA's and SWA's opt paths are newer or hand-written kernels, not architecture; ref and "
     "opt are both drawn so readers can separate the implementation share (plan §13.3)."
 )
+# Decision 225: the speed values are medians; their ranges are in inference.md.
+SPEED_MEDIAN_CAPTION = (
+    "Speed values are medians of the inference benchmark's repetitions; the range of each is in inference.md (decision 225)."
+)
 WITHHELD_CAPTION = (
-    "Variant runs are withheld until the controls pass (plan §8.1): only MHA's runs are drawn."
+    "Variant runs are withheld until the controls pass and the seed count is committed (plan §1.4, "
+    "§8.1): only MHA's runs are drawn."
 )
 
 DISPLAY = {
@@ -140,6 +146,12 @@ def _checked_bench(records) -> tuple:
             raise PlotError(f"bench: two records for variant {key[0]!r} in mode {key[1]!r}")
         seen.add(key)
         out.append(record)
+    # The same refusals as the table's bench documents (bench.check_documents): a document the report
+    # refuses draws no point.
+    try:
+        bd.check_documents(out)
+    except bd.BenchError as exc:
+        raise PlotError(str(exc)) from exc
     return tuple(out)
 
 
@@ -308,17 +320,22 @@ def _left_out_part(skipped: Sequence[str]) -> str | None:
 
 
 def _ladder_fit_usable(analysis: mt.Analysis) -> bool:
+    """A multiplier axis may be drawn: the 300M fit exists with a positive b, and the rule's ladder
+    slope is positive. Decision 223: with a slope that is not positive no multiplier is reported."""
+    if analysis.decision is not None and analysis.decision.slope_not_positive:
+        return False
     return analysis.fit is not None and analysis.fit.b > 0.0
 
 
 def _withheld(analysis: mt.Analysis, variant: str) -> bool:
-    """Plan §8.1: with the gate shut, no variant's loss is drawn. MHA's loss is the reference, so it is."""
-    return variant != "mha" and not analysis.comparisons_allowed
+    """Plan §8.1, §1.4: while the gate is shut or the seed count is not committed, no variant's loss is
+    drawn. MHA's loss is the reference, so it is always drawn."""
+    return variant != "mha" and not mt.variant_results_shown(analysis)
 
 
 def _withheld_part(analysis: mt.Analysis) -> str | None:
     """The caption line saying variant runs are withheld, when there is a variant run to withhold."""
-    if analysis.comparisons_allowed:
+    if mt.variant_results_shown(analysis):
         return None
     if any(analysis.losses.get(v) for v in mt.HEADLINE_VARIANTS if v != "mha"):
         return WITHHELD_CAPTION
@@ -408,12 +425,18 @@ def plot_primary_gaps(inp: PlotInputs) -> Figure:
             f"Shaded band: the detectable gap, ±{band:.4f} nats for {decision.n_seeds} seeds with the "
             f"{decision.test} test at 80% power and Holm's strictest step (plan §1.3). Drawn on the top row only."
         )
-    axis_text = (
-        f"Top axis: effective-parameter multiplier exp(−gap / b), b = {a.fit.b:.4f} nats per e-fold of "
-        "parameters, from the 300M ladder fit (plan §8.4)."
-        if _ladder_fit_usable(a)
-        else "No top axis: the ladder fit does not exist yet, so a gap has no parameter equivalent."
-    )
+    if _ladder_fit_usable(a):
+        axis_text = (
+            f"Top axis: effective-parameter multiplier exp(−gap / b), b = {a.fit.b:.4f} nats per e-fold of "
+            "parameters, from the 300M ladder fit (plan §8.4)."
+        )
+    elif a.decision is not None and a.decision.slope_not_positive:
+        axis_text = (
+            "No top axis: the ladder slope is not positive, so no multiplier is reported and 8 seeds are "
+            "run (decision 223)."
+        )
+    else:
+        axis_text = "No top axis: the ladder fit does not exist yet, so a gap has no parameter equivalent."
     cols = max(len(primary), len(exploratory), 1)
     fig, panels = _figure(
         (4.3 * cols, 7.6),
@@ -491,6 +514,7 @@ def plot_inference_frontier(inp: PlotInputs) -> Figure:
         caption=[
             f"Decode throughput from the opt path at batch {FRONTIER_BATCH} and cache {FRONTIER_CACHE} tokens. "
             "Every seed is a dot; the diamond is the seed mean. Right is faster; lower is better on loss.",
+            SPEED_MEDIAN_CAPTION,
             SWA_CAVEAT,
             ("Missing: " + "; ".join(missing) + ".") if missing else None,
             _withheld_part(a),
@@ -666,7 +690,10 @@ def _fit_text(a: mt.Analysis, budget: str) -> str | None:
 
 def plot_ladder(inp: PlotInputs) -> Figure:
     prereg, a = inp.prereg, inp.analysis
-    xs = {name: math.log(_non_embedding(name)) for name in LADDER}
+    # Plan §12.2 item 4: a declared cut ("l6_l8") leaves L10 out of the ladder: no point, no tick, and
+    # no part of the fit line (the fits of analyse() do not read mha_L10 under the cut).
+    points = tuple(v for v in LADDER if not (a.ladder == "l6_l8" and v == "mha_L10"))
+    xs = {name: math.log(_non_embedding(name)) for name in points}
     by_budget = {"100M": a.losses_100m, "200M": a.losses_200m, "300M": a.losses}
     fig, panels = _figure(
         (12.0, 6.0),
@@ -675,11 +702,13 @@ def plot_ladder(inp: PlotInputs) -> Figure:
         handles=[
             Line2D([], [], color=_colour(v), marker="o", linestyle="None", markersize=MEAN_MARKER_SIZE,
                    label=DISPLAY[v])
-            for v in LADDER
+            for v in points
         ],
         caption=[
             "Every dot is one seed's final validation loss at that panel's budget, at x = ln of its "
             "non-embedding parameter count (ticks show the counts). Each panel has its own y-limits.",
+            "The ladder is cut to L6 and L8 by declaration (configs/commitments.yaml, plan §12.2 item 4): "
+            "no L10 point is drawn or fitted." if a.ladder == "l6_l8" else None,
             "Dashed line: the fit of analyse() at that panel's budget, a − b ln N, drawn from the fit object; "
             "b is in the panel title. The 300M fit is the primary one; the 100M and 200M fits are the same "
             "conversion along the token axis (plan §8.4). Nothing is refitted here.",
@@ -696,12 +725,12 @@ def plot_ladder(inp: PlotInputs) -> Figure:
         ax.set_title(title, fontsize=9)
         ax.set_xlabel("ln(non-embedding parameters); ticks show the count", fontsize=8)
         ax.set_ylabel("validation loss, nats", fontsize=8)
-        ax.set_xticks([xs[v] for v in LADDER])
-        ax.set_xticklabels([f"{_non_embedding(v) / 1e6:.2f}M" for v in LADDER], fontsize=7)
+        ax.set_xticks([xs[v] for v in points])
+        ax.set_xticklabels([f"{_non_embedding(v) / 1e6:.2f}M" for v in points], fontsize=7)
         # The same x range in every panel, with or without runs: the ladder points, and room either side.
         ax.set_xlim(min(xs.values()) - 0.1, max(xs.values()) + 0.1)
         drawn = 0
-        for variant in LADDER:
+        for variant in points:
             at_budget = losses.get(variant, {})
             if not at_budget:
                 continue
@@ -763,6 +792,7 @@ def plot_context_gap(inp: PlotInputs) -> Figure:
             "Context c is the number of tokens of the same document before a token in the window (plan §10.3). "
             "Each dot is one seed's gap to MHA of the same seed in that bucket; bars are the means. "
             "Positive means worse than MHA. Secondary metrics: no detection claim.",
+            _withheld_part(a),
             SWA_CAVEAT,
             _notes_part(a.notes),
             _left_out_part(inp.skipped),
@@ -781,7 +811,13 @@ def plot_context_gap(inp: PlotInputs) -> Figure:
         return fig
     width = 0.7
     drawn = 0
+    withheld = [v for v in compared if _withheld(a, v)]
+    if len(withheld) == len(compared):
+        _no_data(ax, "variant runs are withheld until the controls pass and the seed count is committed (plan §1.4, §8.1)")
+        return fig
     for vi, variant in enumerate(compared):
+        if variant in withheld:
+            continue  # plan §8.1, §1.4: no gap of a withheld variant is drawn
         offset = (vi - (len(compared) - 1) / 2) * (width / len(compared))
         seeds = sorted(s for (v, s) in runs if v == variant and (("mha", s) in runs))
         for bi in range(len(buckets)):
@@ -901,6 +937,7 @@ def plot_latency(inp: PlotInputs) -> Figure:
             "Prefill: batch 1, the smallest batch in the records, against context length. Decode: ms per token "
             "against cache length, one panel per batch. Log axes.",
             "Latency is a benchmark on one fixed device; it measures speed, never quality.",
+            SPEED_MEDIAN_CAPTION,
             SWA_CAVEAT,
             _notes_part(a.notes),
         ],
