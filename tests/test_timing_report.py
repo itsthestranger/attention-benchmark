@@ -526,6 +526,8 @@ def test_one_repetition_documents_render_their_range_as_one_value():
 def test_no_judgement_word_appears_in_the_filled_or_blank_files(tmp_path):
     texts = [
         report.render_timing(hand_timing_doc()),
+        report.render_timing(hand_timing_doc(), swa_paths=hand_swa_paths_doc()),
+        report.render_timing(hand_timing_doc(), swa_paths=hand_swa_paths_doc(flex_error="RuntimeError: boom")),
         report.render_inference([hand_bench_doc(), hand_bench_doc("mla192", "ref")]),
         report.render_timing(None),
         report.render_inference(None),
@@ -533,6 +535,138 @@ def test_no_judgement_word_appears_in_the_filled_or_blank_files(tmp_path):
     for text in texts:
         found = JUDGEMENT_WORDS.search(judged(text))
         assert found is None, found.group(0) if found else None
+
+
+# --- timing.md: the SWA two-paths section (plan §2.3; decisions 244, 245, 247) -------------------
+
+SWA_SECTION_TITLE = "## SWA's two opt paths (plan §2.3)"
+SWA_RECORD_ENVIRONMENT = {
+    "python": "3.11.9", "torch": "2.15.0", "cuda": "13.2", "driver": "999.0",
+    "gpu_name": "Synthetic T4", "compute_capability": [7, 5],
+}
+
+
+def hand_swa_paths_doc(flex_error: str | None = None) -> dict:
+    """A swa_paths/1 record whose medians and ratios are worked by hand.
+
+    MHA: repetitions 3.5, 4.0, 4.5, median 4.0. Chunked: 2.5, 3.0, 3.5, median 3.0, ratio 3.0 / 4.0 = 0.75.
+    Flex: 1.0, 2.0, 3.0, median 2.0, ratio 2.0 / 4.0 = 0.5, or unavailable with `flex_error`.
+    """
+    flex = {
+        "attention_ms": 2.0, "attention_ms_by_repetition": [1.0, 2.0, 3.0],
+        "attention_ms_min": 1.0, "attention_ms_max": 3.0, "error": None,
+    }
+    if flex_error is not None:
+        flex = {
+            "attention_ms": None, "attention_ms_by_repetition": None,
+            "attention_ms_min": None, "attention_ms_max": None, "error": flex_error,
+        }
+    return {
+        "schema": "swa_paths/1",
+        "environment": dict(SWA_RECORD_ENVIRONMENT),
+        "gpu_shared": False,
+        "backend": "efficient",
+        "device": "cuda",
+        "precision": "fp16",
+        "batch": 16,
+        "context": 1024,
+        "repetitions": 3,
+        "repeats": 30,
+        "warmup": 10,
+        "order": ["mha", "swa256/chunked", "swa256/flex"],
+        "tracks": {
+            "mha": {
+                "attention_ms": 4.0, "attention_ms_by_repetition": [3.5, 4.0, 4.5],
+                "attention_ms_min": 3.5, "attention_ms_max": 4.5, "error": None,
+            },
+            "swa256/chunked": {
+                "attention_ms": 3.0, "attention_ms_by_repetition": [2.5, 3.0, 3.5],
+                "attention_ms_min": 2.5, "attention_ms_max": 3.5, "error": None,
+            },
+            "swa256/flex": flex,
+        },
+    }
+
+
+def swa_section(text: str) -> str:
+    """The SWA two-paths section of a timing.md text: from its heading to the end."""
+    return text.split(SWA_SECTION_TITLE, 1)[1]
+
+
+def test_the_swa_rows_have_the_median_the_range_and_the_ratio_to_mha_worked_by_hand():
+    text = report.render_timing(hand_timing_doc(), swa_paths=hand_swa_paths_doc())
+    rows = table_rows(swa_section(text), "track")
+    assert rows == [
+        ["mha", "4.000", "3.500–4.500", "1.000"],
+        ["swa256/chunked", "3.000", "2.500–3.500", "0.750"],
+        ["swa256/flex", "2.000", "1.000–3.000", "0.500"],
+    ]
+
+
+def test_the_swa_source_line_shows_the_records_own_environment():
+    section = swa_section(report.render_timing(hand_timing_doc(), swa_paths=hand_swa_paths_doc()))
+    source = next(line for line in section.splitlines() if line.startswith("Source: "))
+    assert source == (
+        "Source: GPU Synthetic T4; backend efficient; torch 2.15.0; CUDA 13.2; driver 999.0; fp16; "
+        "batch 16, context 1024; 3 repetitions of 30 calls after 10 warm-up calls."
+    )
+
+
+def test_an_unavailable_flex_track_has_blank_cells_and_says_it_could_not_run():
+    text = report.render_timing(hand_timing_doc(), swa_paths=hand_swa_paths_doc(flex_error="RuntimeError: boom"))
+    section = swa_section(text)
+    rows = table_rows(section, "track")
+    assert rows[2] == ["swa256/flex", report.BLANK, report.BLANK, report.BLANK]
+    assert rows[1] == ["swa256/chunked", "3.000", "2.500–3.500", "0.750"]
+    assert "swa256/flex could not run here: RuntimeError: boom" in section.splitlines()
+
+
+def test_without_a_record_the_section_is_blank_and_comes_last():
+    for text in (report.render_timing(hand_timing_doc()), report.render_timing(None)):
+        section = swa_section(text)
+        rows = table_rows(section, "track")
+        assert rows == [
+            ["mha", report.BLANK, report.BLANK, report.BLANK],
+            ["swa256/chunked", report.BLANK, report.BLANK, report.BLANK],
+            ["swa256/flex", report.BLANK, report.BLANK, report.BLANK],
+        ]
+        assert "Source: GPU —; backend —;" in section
+        assert text.rstrip("\n").endswith(report.SWA_PATHS_CAPTIONS[-1])
+        assert text.index(SWA_SECTION_TITLE) > text.index(report.TIMING_CAPTIONS[-1])
+
+
+def test_the_record_is_not_cross_checked_against_the_timing_pass_environment():
+    record = hand_swa_paths_doc()
+    record["environment"]["gpu_name"] = "Another GPU"  # decision 247: a record may come from another session
+    text = report.render_timing(hand_timing_doc(), swa_paths=record)
+    assert "Source: GPU Another GPU;" in swa_section(text)
+
+
+@pytest.mark.parametrize(
+    "edit, reason",
+    [
+        (lambda doc: doc.update(gpu_shared=True), "gpu_shared"),
+        (lambda doc: doc.update(schema="swa_paths/0"), "swa_paths/0"),
+    ],
+    ids=["shared-gpu", "other-schema"],
+)
+def test_the_command_line_refuses_a_bad_record_with_the_reason(tmp_path, capsys, edit, reason):
+    timing_path = tmp_path / "timing_pass.json"
+    write_timing_document(timing_path, hand_timing_doc())
+    record = hand_swa_paths_doc()
+    edit(record)
+    record_path = tmp_path / "swa_paths.json"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    message = assert_refused(tmp_path, capsys, "--timing-pass", str(timing_path), "--swa-paths", str(record_path))
+    assert reason in message
+
+
+def test_the_section_captions_say_nothing_was_selected_and_name_the_decisions():
+    section = swa_section(report.render_timing(None))
+    assert "This table selected nothing" in section
+    assert "decision 244" in section and "decision 245" in section
+    assert "not a training step" in section
+    assert "its own source line" in section
 
 
 # --- Module surface -------------------------------------------------------------------------------

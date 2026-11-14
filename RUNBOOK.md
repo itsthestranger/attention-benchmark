@@ -95,7 +95,15 @@ Check: every test passes on the T4, with three exceptions that are results, not 
 - `tests/test_sliding_window.py::test_opt_paths_match_ref_on_cuda[flex]` and `tests/test_sliding_window.py::test_swa_attention_time_at_ctx_1024_is_below_mha[flex]` fail if FlexAttention does not compile or run on sm75. Then the chunked path is SWA's `opt` path: leave `opt_path: chunked` in `configs/variants/swa256.yaml` and record it.
 - `tests/test_sliding_window.py::test_swa_attention_time_at_ctx_1024_is_below_mha[chunked]` fails if the chunked path is not faster than MHA at context 1,024, which plan §2.3 itself expects ("treat the fallback's speedup as near zero"). Record both attention times from the failure message. The timing pass of §3.1 will then mark SWA's timings (plan §18, A15).
 
-Which path SWA trains with follows plan §2.3, where FlexAttention is the first choice and the chunked path the fallback, and needs no timing comparison: if `test_opt_paths_match_ref_on_cuda[flex]` passes on the T4 (FlexAttention compiles, runs and agrees with the reference), set `opt_path: flex` by pull request before any SWA run; otherwise leave `chunked`. The value is part of the configuration hash, so it does not change afterwards. No script times the two paths side by side; a passing timing case prints nothing. Any other failure is a finding about the harness: stop and fix it. In particular the backend selection and GQA/MQA decode time below MHA's at cache 8k must pass. Record whether the fused kernel copies K and V in decode (plan §2.3); if it does, decode needs the explicit matmul, disclosed.
+Which path SWA trains with follows plan §2.3, where FlexAttention is the first choice and the chunked path the fallback, and needs no timing comparison: if `test_opt_paths_match_ref_on_cuda[flex]` passes on the T4 (FlexAttention compiles, runs and agrees with the reference), set `opt_path: flex` by pull request before any SWA run; otherwise leave `chunked`. The value is part of the configuration hash, so it does not change afterwards. The choice is not made by a timing comparison: `scripts.swa_paths` (below) records the attention times of both paths and selects nothing. Any other failure is a finding about the harness: stop and fix it. In particular the backend selection and GQA/MQA decode time below MHA's at cache 8k must pass. Record whether the fused kernel copies K and V in decode (plan §2.3); if it does, decode needs the explicit matmul, disclosed.
+
+Record the attention times of both paths in the same session, alone on the box, after the tier (decision 245):
+
+```bash
+python -m scripts.swa_paths --device cuda --gpu-shared false --expected-backend $BACKEND --out $OUT/timing/swa_paths.json
+```
+
+Check: the script exits 0 and prints one line per track: MHA, SWA `chunked`, SWA `flex`. It selects nothing; the path follows the rule above. If FlexAttention cannot run, the document records the error for `swa256/flex` and the script still exits 0. If the image is pinned to another version afterwards (§1.5), run the command again in the session of §3.1, so that the record's source line names the campaign's environment. `timing_report` prints the record as the last section of `timing.md`.
 
 ### 1.3 Quota
 
@@ -371,7 +379,7 @@ python -m scripts.timing_pass --peak-lr $MHA_LR --data-dir $DATA --device cuda -
 With `--with-ref` and the attention-share runs the pass is about 8,800 steps, not the 4,620 behind the 1.5 GPU-h of plan §12.1; budget about 3 GPU-h (plan §18, A14). It reads the dataset, so it runs after §2.1.
 
 ```bash
-python -m scripts.timing_report --timing-pass $OUT/timing/timing_pass.json --out $OUT/tables
+python -m scripts.timing_report --timing-pass $OUT/timing/timing_pass.json --swa-paths $OUT/timing/swa_paths.json --out $OUT/tables
 ```
 
 Check: `timing_pass` exits 0. It prints SWA's attention time per step beside MHA's (plan §2.3 item 2). If SWA's is not below MHA's, the pass is still valid for every variant: SWA's timings are kept and carry the mark † with the note "not faster than a dense kernel on this GPU" in `timing.md`, `headline.md` and `rqw.md` (plan §18, A15). With SWA's chunked path the plan itself expects savings near zero at context 1,024, so this is a likely outcome and a finding to report. In `$OUT/tables/timing.md`, read the ms/step and ratio columns of MHA, GQA-4, GQA-2 and MQA against the plan's prediction that they are within ±3% of each other; the table prints numbers and no verdict. Note the `timing_pass_id` in its source line.
@@ -514,7 +522,7 @@ python -m scripts.bench --device cuda --gpu-shared false --expected-backend $BAC
 ```
 
 ```bash
-python -m scripts.timing_report --timing-pass $OUT/timing/timing_pass.json --bench $OUT/bench --out $OUT/tables
+python -m scripts.timing_report --timing-pass $OUT/timing/timing_pass.json --bench $OUT/bench --swa-paths $OUT/timing/swa_paths.json --out $OUT/tables
 ```
 
 The benchmark measures every point three times, round-robin over the variants, and reports the median with the smallest and largest value (plan §18, A16); allow three times the time of a single pass.
