@@ -70,7 +70,8 @@ KERNEL_DISCLOSURE = (
 # smallest and the largest repetition. The numbers are in inference.md and the headline table.
 SPEED_MEDIAN_CAPTION = (
     "Speed values are medians of the inference benchmark's repetitions; the whiskers span the smallest and the "
-    "largest repetition. The numbers are in inference.md and the headline table (decisions 225 and 245)."
+    "largest repetition, and a whisker shorter than its marker is hidden by it. The numbers are in inference.md "
+    "and the headline table (decisions 225 and 245)."
 )
 WHISKER_WIDTH = 1.2
 WITHHELD_CAPTION = (

@@ -1476,3 +1476,29 @@ def test_plots_2_and_8_captions_carry_the_range_sentence(figures):
     assert "medians" in caption and "inference.md" in caption and "headline table" in caption
     for name in ("02_inference_frontier.png", "08_latency.png"):
         assert _caption_has(figures[name], caption), name
+
+
+def test_every_whisker_has_its_variants_colour(figures):
+    from matplotlib.colors import to_rgba
+
+    def colours(artist):
+        return {tuple(np.round(c, 6)) for c in artist.get_colors()}
+
+    found = 0
+    for ax in figures["02_inference_frontier.png"].axes:
+        for whisker in _whisker_artists(ax):
+            variant = whisker.get_gid().split(":")[-1]
+            assert colours(whisker) == {tuple(np.round(to_rgba(m.COLOURS[variant]), 6))}, whisker.get_gid()
+            found += 1
+    assert found == len(mt.HEADLINE_VARIANTS)
+    found = 0
+    for ax in figures["08_latency.png"].axes:
+        for whisker in _whisker_artists(ax):
+            variant = whisker.get_gid().split(":")[-1]
+            assert colours(whisker) == {tuple(np.round(to_rgba(m.COLOURS[variant]), 6))}, whisker.get_gid()
+            found += 1
+    assert found > 0
+
+
+def test_the_caption_says_a_short_whisker_is_hidden_by_its_marker():
+    assert "shorter than its marker is hidden" in " ".join(m.SPEED_MEDIAN_CAPTION.split())
