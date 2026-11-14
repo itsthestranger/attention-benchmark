@@ -135,10 +135,10 @@ Phil merged T-52 and confirmed the five readings of session 5 on 2026-11-14, wit
 
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
-| T-58 | Record the decisions of session 6 (245 to 248), this task list and the status | O | T-52 | §17 | Decisions 245 to 248 are in `docs/decisions.md` |
-| T-59 | Plots 2 and 8 draw the smallest and the largest repetition of every benchmark value as whiskers; the caption says so (245, 246) | W | T-58 | §10.4, §10.5 | Each whisker has a test that fails without it; a blank plot draws none |
-| T-60 | `scripts/swa_paths.py` records the attention times of MHA and of both SWA `opt` paths; `timing_report --swa-paths` prints them in `timing.md` with the sentence that they selected nothing; the runbook command in §1.2 (245, 247) | W | T-58 | §2.3, §13.3 | The script runs end to end on CPU with a tiny model; a path that cannot run is recorded, not raised; the blank `timing.md` is regenerated; `tests/test_runbook.py` parses the new command |
-| T-61 | A fresh agent re-checks T-59 and T-60; its findings are fixed or listed; final `STATUS.md`; closes T-31 (248) | O | T-59, T-60 | §17.4 | Handover items 1 and 6 |
+| T-58 ✅ | Record the decisions of session 6 (245 to 248), this task list and the status | O | T-52 | §17 | Decisions 245 to 248 are in `docs/decisions.md` |
+| T-59 ✅ | Plots 2 and 8 draw the smallest and the largest repetition of every benchmark value as whiskers; the caption says so (245, 246) | W | T-58 | §10.4, §10.5 | Each whisker has a test that fails without it; a blank plot draws none |
+| T-60 ✅ | `scripts/swa_paths.py` records the attention times of MHA and of both SWA `opt` paths; `timing_report --swa-paths` prints them in `timing.md` with the sentence that they selected nothing; the runbook command in §1.2 (245, 247) | W | T-58 | §2.3, §13.3 | The script runs end to end on CPU with a tiny model; a path that cannot run is recorded, not raised; the blank `timing.md` is regenerated; `tests/test_runbook.py` parses the new command |
+| T-61 ✅ | A fresh agent re-checks T-59 and T-60; its findings are fixed or listed; final `STATUS.md`; closes T-31 (248) | O | T-59, T-60 | §17.4 | Handover items 1 and 6 |
 
 ## M5 — Operations and handover
 
@@ -146,4 +146,4 @@ Phil merged T-52 and confirmed the five readings of session 5 on 2026-11-14, wit
 | --- | --- | --- | --- | --- | --- |
 | T-29 ✅ | Kaggle shim notebook and the `train.py` / `evaluate.py` entry points | W | T-17, T-20 | §12.3 | A cold start runs on CPU against a synthetic dataset and resumes without human input |
 | T-30 ✅ | `RUNBOOK.md` | O | T-00 to T-35 | §15 | Exact commands for the verification step and each GPU week, in order, with the gate after each block and what Phil checks |
-| T-31 | Handover: audit by a fresh agent against §5 and §13, final `STATUS.md`, `README.md` with an unfilled pre-registration template | O | T-30 ✅, T-39 to T-45 ✅, T-46 to T-57 ✅, T-58 to T-61 | §17.4 | The handover checklist in `CLAUDE.md` is complete |
+| T-31 ✅ | Handover: audit by a fresh agent against §5 and §13, final `STATUS.md`, `README.md` with an unfilled pre-registration template | O | T-30 ✅, T-39 to T-45 ✅, T-46 to T-57 ✅, T-58 to T-61 | §17.4 | The handover checklist in `CLAUDE.md` is complete |

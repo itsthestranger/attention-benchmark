@@ -6,9 +6,11 @@ in repetition 0, then every track once in repetition 1, and so on. A repetition 
 untimed calls and then `--repeats` timed calls, and its value is the median of the timed calls.
 The document holds the median of the repetitions and their smallest and largest values.
 
-Only the flex track may be unavailable: FlexAttention may be missing, or fail to compile on this GPU.
-Its error is recorded and the script still exits 0. A failure of MHA or of the chunked path is an
-error and stops the script.
+Only the flex track may be unavailable: FlexAttention may be missing, or fail to compile or to run on
+this GPU. Its error is recorded with the repetition it happened in, the traceback goes to stderr, and
+the script still exits 0. A failure of MHA or of the chunked path is an error and stops the script.
+The backend named by `--expected-backend` is enforced, as in training; the `t4` test of the same
+measurement enforces none (decision 250).
 
 Nothing here selects a path. SWA trains with `flex` if FlexAttention runs and agrees with the
 reference on the T4, and with `chunked` otherwise (plan §2.3, decision 244). This script records
@@ -31,6 +33,7 @@ import math
 import statistics
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -58,6 +61,8 @@ REPEATS = 30
 WARMUP = 10
 REPETITIONS = 3
 DEFAULT_CLOCK = time.perf_counter
+OPT_PATH_KEY = "model.attention.opt_path"
+ALWAYS_AVAILABLE_PATH = "chunked"  # plan §2.3: the fallback
 NUMERIC_KEYS = ("attention_ms", "attention_ms_by_repetition", "attention_ms_min", "attention_ms_max")
 
 
@@ -113,7 +118,12 @@ def _sync(device: torch.device) -> None:
 
 def _build(track: Track, setup: PathsSetup):
     """The attention module of `track` on the device, its input and its RoPE table. Seeded, so identical every repetition."""
-    resolved = config.resolve(track.variant, init_seed=INIT_SEED, peak_lr=PEAK_LR, overrides=dict(setup.overrides))
+    overrides = dict(setup.overrides)
+    if track.opt_path is not None:
+        # Built on the path that always exists, then switched: the record does not depend on the path
+        # configs/variants/swa256.yaml names, and a missing FlexAttention fails in the flex track only.
+        overrides[OPT_PATH_KEY] = ALWAYS_AVAILABLE_PATH
+    resolved = config.resolve(track.variant, init_seed=INIT_SEED, peak_lr=PEAK_LR, overrides=overrides)
     attn = build_attention(AttnConfig.from_resolved(resolved)).to(setup.device)
     if track.opt_path is not None:
         attn.set_opt_path(track.opt_path)
@@ -179,7 +189,7 @@ def run_tracks(setup: PathsSetup, *, time_fn: Callable[[Track, PathsSetup], list
     """
     collected: dict[str, list[list[float]]] = {track.key: [] for track in TRACKS}
     errors: dict[str, str] = {}
-    for track, _ in round_robin(TRACKS, setup.repetitions):
+    for track, repetition in round_robin(TRACKS, setup.repetitions):
         if track.key in errors:
             continue
         if not track.optional:
@@ -188,18 +198,25 @@ def run_tracks(setup: PathsSetup, *, time_fn: Callable[[Track, PathsSetup], list
         try:
             collected[track.key].append(time_fn(track, setup))
         except Exception as exc:  # the flex track only (plan §2.3): recorded as its result
-            errors[track.key] = f"{type(exc).__name__}: {exc}"
+            # Whatever failed, the track has no result: the values of its earlier repetitions are dropped,
+            # and the error says in which repetition it happened. The traceback is for the person reading.
+            errors[track.key] = f"{type(exc).__name__}: {exc} (repetition {repetition + 1} of {setup.repetitions})"
+            print(f"{track.key}: failed in repetition {repetition + 1} of {setup.repetitions}", file=sys.stderr)
+            traceback.print_exception(exc, file=sys.stderr)
     return {track.key: _entry(collected[track.key], errors.get(track.key)) for track in TRACKS}
 
 
-def build_document(tracks: dict, setup: PathsSetup, *, context: int, environment: dict) -> dict:
+def build_document(
+    tracks: dict, setup: PathsSetup, *, context: int, environment: dict, synthetic: bool = False
+) -> dict:
     return {
         "schema": SCHEMA,
         "environment": environment,
+        "synthetic": bool(synthetic),  # True: the tiny test model; the numbers mean nothing
         "gpu_shared": False,
         "backend": setup.expected_backend,
         "device": setup.device.type,
-        "precision": "fp16" if setup.device.type == "cuda" else "fp32",
+        "precision": PRECISIONS[setup.device.type],
         "batch": setup.batch,
         "context": context,
         "repetitions": setup.repetitions,
@@ -210,6 +227,11 @@ def build_document(tracks: dict, setup: PathsSetup, *, context: int, environment
     }
 
 
+def one_line(text: str) -> str:
+    """`text` with every run of whitespace, line breaks included, as one space: an error on one line."""
+    return " ".join(str(text).split())
+
+
 def write_swa_paths(path: str | Path, document: dict) -> Path:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -218,19 +240,62 @@ def write_swa_paths(path: str | Path, document: dict) -> Path:
 
 
 def read_swa_paths(path: str | Path) -> dict:
-    """The document at `path`; SwaPathsError when its schema is not swa_paths/1."""
-    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    """The document at `path`; SwaPathsError when the file is missing, is not JSON, or its schema is not swa_paths/1."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SwaPathsError(
+            f"{path}: the record of SWA's two paths cannot be read ({type(exc).__name__}); "
+            "write it with scripts.swa_paths (RUNBOOK §1.2)"
+        ) from exc
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SwaPathsError(f"{path}: not JSON ({exc})") from exc
     schema = doc.get("schema") if isinstance(doc, dict) else None
     if schema != SCHEMA:
         raise SwaPathsError(f"{path}: schema {schema!r}, expected {SCHEMA!r}")
     return doc
 
 
+def _is_count(value, minimum: int = 1) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+
+
+HEADER_COUNTS = (("batch", 1), ("context", 1), ("repetitions", 1), ("repeats", 1), ("warmup", 0))
+PRECISIONS = {"cuda": "fp16", "cpu": "fp32"}  # the precision each device type runs in
+
+
+def _header_problems(doc: Mapping) -> list[str]:
+    """Problems of the fields the source line of timing.md prints."""
+    problems = []
+    if not isinstance(doc.get("environment"), Mapping):
+        problems.append("no environment object")
+    if not isinstance(doc.get("synthetic"), bool):
+        problems.append(f"synthetic is {doc.get('synthetic')!r}, must be true or false")
+    for name, minimum in HEADER_COUNTS:
+        if not _is_count(doc.get(name), minimum):
+            problems.append(f"{name} is {doc.get(name)!r}, must be a whole number of at least {minimum}")
+    device = doc.get("device")
+    if device not in PRECISIONS:
+        problems.append(f"device is {device!r}, must be one of {sorted(PRECISIONS)}")
+    elif doc.get("precision") != PRECISIONS[device]:
+        problems.append(f"precision is {doc.get('precision')!r} on {device}, must be {PRECISIONS[device]!r}")
+    backend = doc.get("backend")
+    if device == "cuda" and (not isinstance(backend, str) or not backend):
+        problems.append(f"backend is {backend!r} on cuda, must name the enforced SDPA backend (plan §2.3 item 1)")
+    if device == "cpu" and backend is not None:
+        problems.append(f"backend is {backend!r} on cpu, must be null")
+    if doc.get("order") != list(ORDER):
+        problems.append(f"order is {doc.get('order')!r}, must be {list(ORDER)!r}")
+    return problems
+
+
 def _is_time(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 
 
-def _track_problems(track: Track, entry) -> list[str]:
+def _track_problems(track: Track, entry, repetitions=None) -> list[str]:
     key = track.key
     if not isinstance(entry, Mapping):
         return [f"{key}: the track is not an object"]
@@ -238,7 +303,7 @@ def _track_problems(track: Track, entry) -> list[str]:
     if missing:
         return [f"{key}: missing {', '.join(missing)}"]
     error = entry["error"]
-    if error is not None and not isinstance(error, str):
+    if error is not None and (not isinstance(error, str) or not error.strip()):
         return [f"{key}: error must be text or null, got {error!r}"]
     if error is not None:
         if not track.optional:
@@ -252,6 +317,16 @@ def _track_problems(track: Track, entry) -> list[str]:
     reps = entry["attention_ms_by_repetition"]
     if not isinstance(reps, list) or not reps or not all(_is_time(v) for v in reps):
         problems.append(f"{key}: attention_ms_by_repetition must be a non-empty list of positive numbers, got {reps!r}")
+    if problems:
+        return problems
+    # The three statistics are those of the list: a record that contradicts itself is not reported.
+    if _is_count(repetitions) and len(reps) != repetitions:
+        problems.append(f"{key}: {len(reps)} repetition values, the document says {repetitions} repetitions")
+    for name, value in (
+        ("attention_ms", statistics.median(reps)), ("attention_ms_min", min(reps)), ("attention_ms_max", max(reps)),
+    ):
+        if entry[name] != value:
+            problems.append(f"{key}: {name} is {entry[name]!r}, its repetitions give {value!r}")
     return problems
 
 
@@ -264,6 +339,7 @@ def check_document(doc) -> None:
         problems.append(f"schema {doc.get('schema')!r}, expected {SCHEMA!r}")
     if doc.get("gpu_shared") is not False:
         problems.append(f"gpu_shared is {doc.get('gpu_shared')!r}, must be false: the paths run alone (plan §2.2)")
+    problems.extend(_header_problems(doc))
     tracks = doc.get("tracks")
     if not isinstance(tracks, Mapping):
         problems.append("no tracks object")
@@ -272,7 +348,10 @@ def check_document(doc) -> None:
             if track.key not in tracks:
                 problems.append(f"track {track.key!r} is missing")
             else:
-                problems.extend(_track_problems(track, tracks[track.key]))
+                problems.extend(_track_problems(track, tracks[track.key], doc.get("repetitions")))
+        extra = sorted(set(tracks) - set(ORDER))
+        if extra:
+            problems.append(f"unknown tracks: {', '.join(map(repr, extra))}")
     if problems:
         raise SwaPathsError("the swa_paths document cannot be reported:\n  " + "\n  ".join(problems))
 
@@ -340,7 +419,9 @@ def main(argv=None) -> int:
         expected_backend=expected_backend,
     )
     tracks = run_tracks(setup)
-    document = build_document(tracks, setup, context=context, environment=collect_environment())
+    document = build_document(
+        tracks, setup, context=context, environment=collect_environment(), synthetic=args.synthetic
+    )
     check_document(document)
     path = write_swa_paths(args.out, document)
     print(f"wrote {path}")
@@ -352,7 +433,7 @@ def main(argv=None) -> int:
                 f"range {entry['attention_ms_min']:.3f} to {entry['attention_ms_max']:.3f} ms"
             )
         else:
-            print(f"{track.key}: not available: {entry['error']}")
+            print(f"{track.key}: not available: {one_line(entry['error'])}")
     return 0
 
 

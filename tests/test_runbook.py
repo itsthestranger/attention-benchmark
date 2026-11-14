@@ -321,3 +321,62 @@ def test_the_declarations_are_in_the_commitments_file_and_not_on_a_command_line(
         if shlex.split(command)[2] in ("scripts.make_tables", "scripts.make_plots"):
             assert "--commitments" not in command, command  # both read the committed file
 
+
+
+# --- Review S6 (docs/review_s6.md, G1, G2, G5): the record of SWA's two paths in the runbook --------
+
+
+def _commands_of(script: str) -> list[str]:
+    return [c for c in COMMANDS if shlex.split(c)[2] == script]
+
+
+def _section(start: str, end: str) -> str:
+    return RUNBOOK[RUNBOOK.index(start):RUNBOOK.index(end)]
+
+
+def test_the_record_is_made_at_verification_and_again_with_the_timing_pass(monkeypatch):
+    commands = _commands_of("scripts.swa_paths")
+    assert len(commands) == 2
+    assert "python -m scripts.swa_paths" in _section("### 1.2 ", "### 1.3 ")
+    timing = _section("### 3.1 ", "### 3.2 ")
+    assert timing.index("python -m scripts.timing_pass") < timing.index("python -m scripts.swa_paths")
+    assert timing.index("python -m scripts.swa_paths") < timing.index("python -m scripts.timing_report")
+    from scripts import swa_paths as sp
+
+    for command in commands:
+        args = parse(command, monkeypatch)
+        # The measurement of the t4 test, on the real model: no flag of the runbook changes it (decision 247).
+        assert (args.batch, args.repeats, args.warmup, args.repetitions) == (sp.BATCH, sp.REPEATS, sp.WARMUP, sp.REPETITIONS)
+        assert args.synthetic is False and args.device == "cuda" and args.gpu_shared is False
+        assert args.out == "/out/timing/swa_paths.json"
+
+
+def test_every_timing_report_command_reads_the_record_the_script_writes(monkeypatch):
+    written = {parse(c, monkeypatch).out for c in _commands_of("scripts.swa_paths")}
+    assert len(written) == 1
+    reports = _commands_of("scripts.timing_report")
+    assert len(reports) == 2
+    for command in reports:
+        assert parse(command, monkeypatch).swa_paths in written, command
+
+
+def test_the_rule_for_swas_path_names_both_conditions_and_no_timing():
+    rule = " ".join(_section("### 1.2 ", "### 1.3 ").split())
+    assert "`test_opt_paths_match_ref_on_cuda[flex]` passes" in rule
+    assert "The record's `swa256/flex` track has times, not an error" in rule
+    assert "If both hold, set `opt_path: flex`" in rule and "otherwise leave `chunked`" in rule
+    assert (
+        "The record selects nothing beyond item 2: its times, their order, and a timing case that fails at its "
+        "last `assert` do not enter the choice."
+    ) in rule
+    assert "decisions 244 and 250" in rule
+    # No sentence tells Phil to pick the quicker path.
+    for word in ("faster path", "the faster one", "whichever is faster", "quicker"):
+        assert word not in rule, word
+
+
+def test_the_timing_week_says_what_to_do_when_the_record_changed():
+    timing = " ".join(_section("### 3.1 ", "### 3.2 ").split())
+    assert "this run replaces it" in timing
+    assert "If it was an error then and has times now, or the reverse, stop" in timing
+    assert "it selects nothing" in timing

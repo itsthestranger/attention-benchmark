@@ -564,6 +564,7 @@ def hand_swa_paths_doc(flex_error: str | None = None) -> dict:
     return {
         "schema": "swa_paths/1",
         "environment": dict(SWA_RECORD_ENVIRONMENT),
+        "synthetic": False,
         "gpu_shared": False,
         "backend": "efficient",
         "device": "cuda",
@@ -667,6 +668,85 @@ def test_the_section_captions_say_nothing_was_selected_and_name_the_decisions():
     assert "decision 244" in section and "decision 245" in section
     assert "not a training step" in section
     assert "its own source line" in section
+
+
+# --- Review S6 (docs/review_s6.md): the section compares nothing in words, and refuses what it cannot read ---
+
+# The words that would say which path is the quicker one. The section gives three times and a ratio.
+SWA_COMPARISON_WORDS = re.compile(
+    r"\b(faster|fastest|slower|slowest|quicker|quickest|better|best|worse|worst|wins|beats|preferred|choose|chosen)\b",
+    re.IGNORECASE,
+)
+
+
+@pytest.mark.parametrize("flex_error", [None, "RuntimeError: boom"], ids=["three-times", "flex-unavailable"])
+def test_the_swa_section_has_no_word_that_ranks_the_paths(flex_error):
+    for record in (None, hand_swa_paths_doc(flex_error=flex_error)):
+        section = swa_section(report.render_timing(hand_timing_doc(), swa_paths=record))
+        assert SWA_COMPARISON_WORDS.search(section) is None, SWA_COMPARISON_WORDS.search(section)
+        assert JUDGEMENT_WORDS.search(judged(section)) is None
+
+
+def test_the_swa_section_has_exactly_its_title_source_table_notes_and_captions():
+    # Nothing else is printed under the table: a line that names a quicker path would be an extra line (X01).
+    record = hand_swa_paths_doc(flex_error="RuntimeError: boom")
+    lines = [line for line in swa_section(report.render_timing(hand_timing_doc(), swa_paths=record)).splitlines() if line]
+    table = [line for line in lines if line.startswith("|")]
+    rest = [line for line in lines if not line.startswith("|")]
+    assert len(table) == 2 + 3
+    assert rest[0].startswith("Source: ")  # swa_section starts after the section's title
+    assert rest[1:] == ["swa256/flex could not run here: RuntimeError: boom", *report.SWA_PATHS_CAPTIONS]
+    filled = [line for line in swa_section(report.render_timing(None, swa_paths=hand_swa_paths_doc())).splitlines() if line]
+    assert [line for line in filled if not line.startswith("|")][1:] == list(report.SWA_PATHS_CAPTIONS)
+
+
+def test_the_ratio_to_mha_uses_the_unrounded_medians():
+    record = hand_swa_paths_doc()
+    for key, values in (("mha", [0.0014, 0.0014, 0.0014]), ("swa256/chunked", [0.0006, 0.0006, 0.0006])):
+        record["tracks"][key].update(
+            attention_ms=values[1], attention_ms_by_repetition=values, attention_ms_min=min(values), attention_ms_max=max(values)
+        )
+    rows = table_rows(swa_section(report.render_timing(None, swa_paths=record)), "track")
+    # 0.0006 / 0.0014 = 0.429; from the printed cells 0.001 / 0.001 it would be 1.000.
+    assert rows[1] == ["swa256/chunked", "0.001", "0.001–0.001", "0.429"]
+
+
+def test_an_error_of_several_lines_is_printed_on_one_line():
+    record = hand_swa_paths_doc(flex_error="RuntimeError: first line\n| swa256/flex | 0.001 | 0.001–0.001 | 0.001 |\n  last")
+    section = swa_section(report.render_timing(None, swa_paths=record))
+    assert (
+        "swa256/flex could not run here: RuntimeError: first line | swa256/flex | 0.001 | 0.001–0.001 | 0.001 | last"
+        in section.splitlines()
+    )
+    assert len(table_rows(section, "track")) == 3  # the error added no row to the table
+
+
+def test_a_synthetic_record_says_so_in_its_source_line():
+    record = hand_swa_paths_doc()
+    source = lambda text: next(line for line in swa_section(text).splitlines() if line.startswith("Source: "))
+    assert not source(report.render_timing(None, swa_paths=record)).endswith(report.SWA_PATHS_SYNTHETIC)
+    record["synthetic"] = True
+    assert source(report.render_timing(None, swa_paths=record)).endswith(report.SWA_PATHS_SYNTHETIC)
+    assert "mean nothing" in report.SWA_PATHS_SYNTHETIC
+
+
+def test_a_missing_or_unreadable_record_is_one_line_and_no_table_is_written(tmp_path, capsys):
+    timing_path = tmp_path / "timing_pass.json"
+    write_timing_document(timing_path, hand_timing_doc())
+    missing = tmp_path / "no_such_record.json"
+    message = assert_refused(tmp_path, capsys, "--timing-pass", str(timing_path), "--swa-paths", str(missing))
+    assert "no_such_record.json" in message and "scripts.swa_paths" in message and "Traceback" not in message
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    message = assert_refused(tmp_path, capsys, "--timing-pass", str(timing_path), "--swa-paths", str(broken))
+    assert "broken.json" in message and "not JSON" in message
+
+
+def test_the_captions_say_what_the_timing_tables_swa_rows_used_and_which_backend_ran():
+    section = swa_section(report.render_timing(None))
+    assert "opt_path in configs/variants/swa256.yaml" in section
+    assert "SDPA backend of the source line enforced" in section
+    assert "Ratio is each track's median over MHA's median" in section
 
 
 # --- Module surface -------------------------------------------------------------------------------
