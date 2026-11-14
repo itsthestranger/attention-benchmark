@@ -1372,3 +1372,133 @@ def test_the_command_line_passes_the_declarations_to_the_analysis(campaign, tmp_
     with pytest.raises(SystemExit):
         m.main([*common, "--out", str(tmp_path / "c"), "--l10-cut"])  # the flag is gone (decision 220)
     capsys.readouterr()
+
+
+# --- T-59 (decision 245): range whiskers on plots 2 and 8 -----------------------------------------
+
+
+def _whisker_artists(ax, prefix: str = "range:") -> list:
+    """The range whiskers of an axes: the collections whose gid starts with `prefix`."""
+    return [c for c in ax.collections if str(c.get_gid() or "").startswith(prefix)]
+
+
+def _whisker_segments(artist) -> np.ndarray:
+    """One row per whisker: ((x0, y0), (x1, y1)) as read back from the figure."""
+    return np.asarray(artist.get_segments(), dtype=float).reshape(-1, 2, 2)
+
+
+def _caption_has(figure, text: str) -> bool:
+    return any(text in t for t in all_texts(figure))
+
+
+def _headline_decode_row(record) -> dict:
+    return next(r for r in record["decode"] if r["batch"] == 32 and r["cache"] == 4096)
+
+
+def test_plot_2_draws_one_whisker_per_drawn_variant_from_smallest_to_largest_repetition(figures, inputs):
+    ax = figures["02_inference_frontier.png"].axes[0]
+    bench = {(r["variant"], r["mode"]): r for r in inputs.bench}
+    expected = {}
+    for variant in mt.HEADLINE_VARIANTS:
+        losses = inputs.analysis.losses.get(variant, {})
+        if not losses or (variant, "opt") not in bench:
+            continue
+        row = _headline_decode_row(bench[(variant, "opt")])
+        assert row["tok_per_s_min"] < row["tok_per_s"] < row["tok_per_s_max"]  # the median is not an end
+        expected[variant] = (row, float(np.mean([losses[s] for s in sorted(losses)])))
+    whiskers = _whisker_artists(ax)
+    assert sorted(w.get_gid() for w in whiskers) == sorted(f"range:{v}" for v in expected)
+    for variant, (row, mean) in expected.items():
+        (segment,) = _whisker_segments(_whisker_artists(ax, f"range:{variant}")[0])
+        np.testing.assert_allclose(segment[:, 0], [row["tok_per_s_min"], row["tok_per_s_max"]],
+                                   rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+        np.testing.assert_allclose(segment[:, 1], [mean, mean], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+
+
+def test_plot_8_draws_one_whisker_per_point_from_smallest_to_largest_repetition(figures, inputs):
+    panels = figures["08_latency.png"].axes  # prefill, then one decode panel per batch
+    bench = {(r["variant"], r["mode"]): r for r in inputs.bench}
+    for variant in mt.HEADLINE_VARIANTS:
+        for mode in ("opt", "ref"):
+            record = bench.get((variant, mode))
+            if record is None:
+                continue
+            gid = f"range:{mode}:{variant}"
+            prefill = sorted((r["context"], r["latency_ms_min"], r["latency_ms_max"])
+                             for r in record["prefill"] if r["batch"] == 1)
+            assert _whisker_artists(panels[0], gid)[0].get_gid() == gid and len(_whisker_artists(panels[0], gid)) == 1
+            segments = _whisker_segments(_whisker_artists(panels[0], gid)[0])
+            assert len(segments) == len(prefill) > 0
+            np.testing.assert_allclose(segments[:, 0, 0], [x for x, _, _ in prefill], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+            np.testing.assert_allclose(segments[:, 0, 1], [lo for _, lo, _ in prefill], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+            np.testing.assert_allclose(segments[:, 1, 1], [hi for _, _, hi in prefill], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+            for ax, batch in zip(panels[1:], (1, 8, 32)):
+                decode = sorted((r["cache"], r["ms_per_token_min"], r["ms_per_token_max"])
+                                for r in record["decode"] if r["batch"] == batch)
+                found = _whisker_artists(ax, gid)
+                if not decode:
+                    assert not found
+                    continue
+                assert len(found) == 1
+                segments = _whisker_segments(found[0])
+                assert len(segments) == len(decode)
+                np.testing.assert_allclose(segments[:, 0, 0], [x for x, _, _ in decode], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+                np.testing.assert_allclose(segments[:, 0, 1], [lo for _, lo, _ in decode], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+                np.testing.assert_allclose(segments[:, 1, 1], [hi for _, _, hi in decode], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+
+
+def test_blank_plots_2_and_8_draw_no_whisker(blank_figures):
+    for name in ("02_inference_frontier.png", "08_latency.png"):
+        assert not [w for ax in blank_figures[name].axes for w in _whisker_artists(ax)], name
+
+
+def test_with_the_gate_shut_plot_2_draws_a_whisker_for_mha_only(shut):
+    ax = m.plot_inference_frontier(shut).axes[0]
+    assert [w.get_gid() for w in _whisker_artists(ax)] == ["range:mha"]
+
+
+def test_a_variant_without_an_opt_record_has_no_whisker_in_plots_2_and_8(campaign):
+    bench = [r for r in fpi.bench_records() if r["variant"] != "mqa"]
+    inputs_ = make_inputs_committed(campaign, bench, fpi.probe_records(), fpi.retrieval_records())
+    assert "mqa" in inputs_.analysis.losses
+    figure = m.plot_inference_frontier(inputs_)
+    assert "range:mqa" not in [w.get_gid() for ax in figure.axes for w in _whisker_artists(ax)]
+    drawn = sorted(w.get_gid() for w in _whisker_artists(figure.axes[0]))
+    assert drawn == sorted(f"range:{v}" for v in mt.HEADLINE_VARIANTS if v != "mqa")
+    latency = m.plot_latency(inputs_)
+    assert not [w for ax in latency.axes for w in _whisker_artists(ax, "range:opt:mqa")]
+    assert not [w for ax in latency.axes for w in _whisker_artists(ax, "range:ref:mqa")]
+
+
+def test_plots_2_and_8_captions_carry_the_range_sentence(figures):
+    caption = " ".join(m.SPEED_MEDIAN_CAPTION.split())
+    assert "whiskers" in caption and "smallest" in caption and "largest" in caption
+    assert "medians" in caption and "inference.md" in caption and "headline table" in caption
+    for name in ("02_inference_frontier.png", "08_latency.png"):
+        assert _caption_has(figures[name], caption), name
+
+
+def test_every_whisker_has_its_variants_colour(figures):
+    from matplotlib.colors import to_rgba
+
+    def colours(artist):
+        return {tuple(np.round(c, 6)) for c in artist.get_colors()}
+
+    found = 0
+    for ax in figures["02_inference_frontier.png"].axes:
+        for whisker in _whisker_artists(ax):
+            variant = whisker.get_gid().split(":")[-1]
+            assert colours(whisker) == {tuple(np.round(to_rgba(m.COLOURS[variant]), 6))}, whisker.get_gid()
+            found += 1
+    assert found == len(mt.HEADLINE_VARIANTS)
+    found = 0
+    for ax in figures["08_latency.png"].axes:
+        for whisker in _whisker_artists(ax):
+            variant = whisker.get_gid().split(":")[-1]
+            assert colours(whisker) == {tuple(np.round(to_rgba(m.COLOURS[variant]), 6))}, whisker.get_gid()
+            found += 1
+    assert found > 0
+
+
+def test_the_caption_says_a_short_whisker_is_hidden_by_its_marker():
+    assert "shorter than its marker is hidden" in " ".join(m.SPEED_MEDIAN_CAPTION.split())

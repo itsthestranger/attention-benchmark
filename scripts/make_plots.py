@@ -66,11 +66,14 @@ KERNEL_DISCLOSURE = (
     "MLA's and SWA's opt paths are newer or hand-written kernels, not architecture; ref and "
     "opt are both drawn so readers can separate the implementation share (plan §13.3)."
 )
-# Decision 225: the speed values are medians; their ranges are in inference.md.
+# Decisions 225 and 245: the speed values are medians; the whiskers on plots 2 and 8 span the
+# smallest and the largest repetition. The numbers are in inference.md and the headline table.
 SPEED_MEDIAN_CAPTION = (
-    "Speed values are medians of the inference benchmark's repetitions. The ranges of latency and of ms per token are "
-    "in inference.md; the range of the decode tokens/s is in the headline table (decision 225)."
+    "Speed values are medians of the inference benchmark's repetitions; the whiskers span the smallest and the "
+    "largest repetition, and a whisker shorter than its marker is hidden by it. The numbers are in inference.md "
+    "and the headline table (decisions 225 and 245)."
 )
+WHISKER_WIDTH = 1.2
 WITHHELD_CAPTION = (
     "Variant runs are withheld until the controls pass and the seed count is committed (plan §1.4, "
     "§8.1): only MHA's runs are drawn."
@@ -488,11 +491,12 @@ def plot_primary_gaps(inp: PlotInputs) -> Figure:
 # --- Plot 2: inference frontier --------------------------------------------------------
 
 
-def _decode_tok_s(record) -> float | None:
+def _decode_row(record):
+    """The decode row of a bench record at the headline point (FRONTIER_BATCH, FRONTIER_CACHE), or None."""
     if record is None:
         return None
     rows = [r for r in record["decode"] if r["batch"] == FRONTIER_BATCH and r["cache"] == FRONTIER_CACHE]
-    return float(rows[0]["tok_per_s"]) if rows else None
+    return rows[0] if rows else None
 
 
 def plot_inference_frontier(inp: PlotInputs) -> Figure:
@@ -503,11 +507,11 @@ def plot_inference_frontier(inp: PlotInputs) -> Figure:
         losses = a.losses.get(variant, {})
         if not losses or _withheld(a, variant):
             continue
-        x = _decode_tok_s(bench.get((variant, "opt")))
-        if x is None:
+        row = _decode_row(bench.get((variant, "opt")))
+        if row is None:
             missing.append(f"{variant} has no opt benchmark record at this point")
             continue
-        rows.append((variant, x, losses))
+        rows.append((variant, row, losses))
     fig, panels = _figure(
         (9.0, 6.4),
         title="Inference frontier: 300M validation loss against decode throughput (plan §8.6, plot 2)",
@@ -526,12 +530,17 @@ def plot_inference_frontier(inp: PlotInputs) -> Figure:
     ax = panels[0][0]
     ax.set_xlabel(f"decode tok/s, opt, batch {FRONTIER_BATCH}, cache {FRONTIER_CACHE}")
     ax.set_ylabel("300M validation loss, nats")
-    for variant, x, losses in rows:
+    for variant, row, losses in rows:
+        x = float(row["tok_per_s"])
         seeds = sorted(losses)
         ys = [losses[s] for s in seeds]
+        mean = float(np.mean(ys))
+        # The range of the repetitions (decision 245): one horizontal whisker at the seed mean's height.
+        ax.hlines(mean, float(row["tok_per_s_min"]), float(row["tok_per_s_max"]), colors=_colour(variant),
+                  linewidth=WHISKER_WIDTH, zorder=2).set_gid(f"range:{variant}")
         _dots(ax, [x] * len(ys), ys, _colour(variant))
-        _mean_mark(ax, x, float(np.mean(ys)), _colour(variant))
-        ax.annotate(DISPLAY[variant], (x, float(np.mean(ys))), xytext=(7, 0), textcoords="offset points",
+        _mean_mark(ax, x, mean, _colour(variant))
+        ax.annotate(DISPLAY[variant], (x, mean), xytext=(7, 0), textcoords="offset points",
                     fontsize=8, va="center")
     ax.margins(x=0.1)
     if not rows:
@@ -922,6 +931,13 @@ def plot_training_curves(inp: PlotInputs) -> Figure:
 # --- Plot 8: latency ---------------------------------------------------------------------
 
 
+def _ranges(ax, xs, lows, highs, colour: str, tag: str) -> None:
+    """Plot 8's range whiskers (decision 245): one vertical whisker per point, from the smallest to the
+    largest repetition, as one artist with gid "range:<tag>" (tag is "<mode>:<variant>")."""
+    ax.vlines(list(xs), list(lows), list(highs), colors=colour, linewidth=WHISKER_WIDTH,
+              zorder=2).set_gid(f"range:{tag}")
+
+
 def plot_latency(inp: PlotInputs) -> Figure:
     prereg, a = inp.prereg, inp.analysis
     bench = _bench_index(inp.bench)
@@ -959,18 +975,24 @@ def plot_latency(inp: PlotInputs) -> Figure:
             if record is None:
                 continue
             tag = f"{mode}:{variant}"
-            prefill = sorted((r["context"], r["latency_ms"]) for r in record["prefill"] if r["batch"] == 1)
+            prefill = sorted((r["context"], r["latency_ms"], r["latency_ms_min"], r["latency_ms_max"])
+                             for r in record["prefill"] if r["batch"] == 1)
             if prefill:
-                for line in row[0].plot([x for x, _ in prefill], [y for _, y in prefill], color=_colour(variant),
+                for line in row[0].plot([p[0] for p in prefill], [p[1] for p in prefill], color=_colour(variant),
                                         ls=style, lw=LINE_WIDTH, marker="o", markersize=3):
                     line.set_gid(tag)
+                _ranges(row[0], [p[0] for p in prefill], [p[2] for p in prefill], [p[3] for p in prefill],
+                        _colour(variant), tag)
                 has_any = True
             for ax, batch in zip(row[1:], batches):
-                decode = sorted((r["cache"], r["ms_per_token"]) for r in record["decode"] if r["batch"] == batch)
+                decode = sorted((r["cache"], r["ms_per_token"], r["ms_per_token_min"], r["ms_per_token_max"])
+                                for r in record["decode"] if r["batch"] == batch)
                 if decode:
-                    for line in ax.plot([x for x, _ in decode], [y for _, y in decode], color=_colour(variant),
+                    for line in ax.plot([p[0] for p in decode], [p[1] for p in decode], color=_colour(variant),
                                         ls=style, lw=LINE_WIDTH, marker="o", markersize=3):
                         line.set_gid(tag)
+                    _ranges(ax, [p[0] for p in decode], [p[2] for p in decode], [p[3] for p in decode],
+                            _colour(variant), tag)
                     has_any = True
     if not has_any:
         for ax in row:
