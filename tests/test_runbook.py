@@ -261,10 +261,14 @@ def test_the_gate_report_rows_the_runbook_names_exist():
 def test_pruning_is_shown_as_a_dry_run_before_it_is_applied():
     """T-43: the runbook never shows --apply without the dry run of the same command before it."""
     prune = [c for c in COMMANDS if shlex.split(c)[2] == "scripts.prune"]
-    assert len(prune) >= 2
-    assert "--apply" not in prune[0] and "--apply" in prune[1]
-    assert prune[1].replace(" --apply", "") == prune[0]
-    assert all("--final" not in c for c in prune)
+    assert len(prune) == 4
+    for dry, applied in (prune[0:2], prune[2:4]):
+        assert "--apply" not in dry and "--apply" in applied
+        assert applied.replace(" --apply", "") == dry
+    # Review S5, G5: the final checkpoints of branches and short runs go with --final-short. The bare
+    # --final, which also removes the final checkpoints of the 300M runs, is named in the text only.
+    assert "--final-short" not in prune[0] and "--final-short" in prune[2]
+    assert all("--final" not in shlex.split(c) for c in prune)
 
 
 def test_one_smoke_loop_reaches_an_in_run_evaluation():
