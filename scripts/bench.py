@@ -35,10 +35,11 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import math
 import statistics
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import torch
 
@@ -350,14 +351,11 @@ def write_bench_file(out_dir: Path, document: dict) -> Path:
     return path
 
 
-def read_decode_tok_per_s(directory: str | Path) -> dict[str, float]:
-    """{variant: decode tok/s at batch 32, cache 4,096, opt mode}, the headline column of make_tables.
+def _headline_decode_rows(directory: str | Path):
+    """(variant, decode row) of the headline point, opt mode, of every document in `directory`.
 
-    The value is the median over the file's repetitions. Variants whose file lacks that point are
-    omitted, and make_tables shows a blank cell. A bench/1 file, or one recorded with gpu_shared
-    true, is refused.
+    A bench/1 file, or one recorded with gpu_shared true, is refused.
     """
-    result: dict[str, float] = {}
     for path in sorted(Path(directory).glob("bench_*.json")):
         doc = json.loads(path.read_text(encoding="utf-8"))
         if doc.get("schema") != SCHEMA:
@@ -368,8 +366,139 @@ def read_decode_tok_per_s(directory: str | Path) -> dict[str, float]:
             continue
         for row in doc["decode"]:
             if row["batch"] == HEADLINE_BATCH and row["cache"] == HEADLINE_CACHE:
-                result[doc["variant"]] = row["tok_per_s"]
-    return result
+                yield doc["variant"], row
+
+
+def read_decode_tok_per_s(directory: str | Path) -> dict[str, float]:
+    """{variant: decode tok/s at batch 32, cache 4,096, opt mode}, the headline column of make_tables.
+
+    The value is the median over the file's repetitions. Variants whose file lacks that point are
+    omitted, and make_tables shows a blank cell. A bench/1 file, or one recorded with gpu_shared
+    true, is refused.
+    """
+    return {variant: row["tok_per_s"] for variant, row in _headline_decode_rows(directory)}
+
+
+def read_decode_range(directory: str | Path) -> dict[str, tuple[float, float]]:
+    """{variant: (smallest, largest) decode tok/s at batch 32, cache 4,096, opt mode} (decision 225).
+
+    The same point and refusals as read_decode_tok_per_s; the median is that function's value.
+    """
+    return {variant: (row["tok_per_s_min"], row["tok_per_s_max"]) for variant, row in _headline_decode_rows(directory)}
+
+
+def is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def is_positive(value) -> bool:
+    return is_number(value) and value > 0
+
+
+NULL_VARIANT = "null"
+
+
+def known_variant(variant) -> bool:
+    """A variant the project knows, other than the "null" placeholder of the timing documents."""
+    return isinstance(variant, str) and variant != NULL_VARIANT and variant in config.variant_names()
+
+
+def _listing(head: str, problems: Sequence[str]) -> str:
+    return "\n".join([f"{head}; {len(problems)} problem(s):"] + [f"  - {p}" for p in problems])
+
+
+# --- bench/2 document checks (plan §10.4, decision 225): shared by make_tables, make_plots and timing_report
+
+_BENCH_KEYS = ("repetitions", "kv_bytes_per_token", "prefill", "decode", "max_batch_at_8k")
+_PREFILL_IDENTITY = ("context", "batch")
+_DECODE_IDENTITY = ("batch", "cache")
+_PREFILL_TIMED = ("latency_ms", "tok_per_s")
+_DECODE_TIMED = ("ms_per_token", "tok_per_s")
+_KV_KEYS = ("analytic", "measured", "measured_tokens")
+
+
+def _timed_keys(identity: tuple, timed: tuple) -> list[str]:
+    """The keys of a bench/2 point: identity, then for each timed field its median, its repetitions, min and max, then peak_bytes."""
+    keys = list(identity)
+    for field in timed:
+        keys += [field, f"{field}_by_repetition", f"{field}_min", f"{field}_max"]
+    return keys + ["peak_bytes"]
+
+
+_PREFILL_KEYS = tuple(_timed_keys(_PREFILL_IDENTITY, _PREFILL_TIMED))
+_DECODE_KEYS = tuple(_timed_keys(_DECODE_IDENTITY, _DECODE_TIMED))
+
+
+def _point_problems(label: str, row, repetitions, timed: tuple) -> list[str]:
+    """Problems with the timed fields of one point: lists of `repetitions` positive numbers, and
+    median, min and max that are the statistics of that list with min <= median <= max."""
+    problems = []
+    for field in timed:
+        name = f"{label}: {field}"
+        values = row.get(f"{field}_by_repetition")
+        if not isinstance(values, list) or len(values) != repetitions or not all(is_positive(v) for v in values):
+            problems.append(f"{name}_by_repetition {values!r}, expected {repetitions} positive numbers")
+            continue
+        lo, median, hi = row.get(f"{field}_min"), row.get(field), row.get(f"{field}_max")
+        if not all(is_positive(v) for v in (lo, median, hi)):
+            problems.append(f"{name}: median, min and max {median!r}, {lo!r}, {hi!r}, expected positive numbers")
+        elif not lo <= median <= hi:
+            problems.append(f"{name}: min {lo}, median {median}, max {hi}; expected min <= median <= max")
+        elif lo != min(values) or hi != max(values) or median != statistics.median(values):
+            problems.append(f"{name}: median, min and max are not the statistics of {name}_by_repetition")
+    return problems
+
+
+def check_documents(docs: Sequence) -> None:
+    """Refuse bench documents no report can read: another schema, an unknown variant or mode,
+    a missing field, or a second document for one (variant, mode)."""
+    problems = []
+    seen: set[tuple] = set()
+    counts = set()
+    for index, doc in enumerate(docs):
+        label = f"bench document {index}"
+        if not isinstance(doc, Mapping):
+            problems.append(f"{label} is not an object")
+            continue
+        variant, mode = doc.get("variant"), doc.get("mode")
+        label = f"bench {variant!r}/{mode!r}"
+        if doc.get("schema") != SCHEMA:
+            problems.append(f"{label}: schema {doc.get('schema')!r}, expected {SCHEMA!r}")
+        if not known_variant(variant):
+            problems.append(f"{label}: variant {variant!r} is not one the project knows")
+        if mode not in MODES:
+            problems.append(f"{label}: mode {mode!r}, expected one of {list(MODES)}")
+        missing = [key for key in _BENCH_KEYS if key not in doc]
+        if missing:
+            problems.append(f"{label} lacks {missing}")
+            continue
+        repetitions = doc["repetitions"]
+        counts.add(repetitions)
+        valid = isinstance(repetitions, int) and not isinstance(repetitions, bool) and repetitions >= 1
+        if not valid:
+            problems.append(f"{label}: repetitions {repetitions!r}, expected an integer of at least 1")
+        for row in doc["prefill"]:
+            if not all(key in row for key in _PREFILL_KEYS):
+                problems.append(f"{label}: a prefill row lacks one of {list(_PREFILL_KEYS)}")
+            elif valid:
+                problems += _point_problems(f"{label}, prefill context {row['context']}", row, repetitions, _PREFILL_TIMED)
+        for row in doc["decode"]:
+            if not all(key in row for key in _DECODE_KEYS):
+                problems.append(f"{label}: a decode row lacks one of {list(_DECODE_KEYS)}")
+            elif valid:
+                problems += _point_problems(
+                    f"{label}, decode batch {row['batch']} cache {row['cache']}", row, repetitions, _DECODE_TIMED
+                )
+        if not all(key in doc["kv_bytes_per_token"] for key in _KV_KEYS):
+            problems.append(f"{label}: kv_bytes_per_token lacks one of {list(_KV_KEYS)}")
+        key = (variant, mode)
+        if key in seen:
+            problems.append(f"two bench documents for {variant}/{mode}: each (variant, mode) must appear once")
+        seen.add(key)
+    if len(counts) > 1:
+        problems.append(f"the bench documents disagree on the number of repetitions: {sorted(map(str, counts))}")
+    if problems:
+        raise BenchError(_listing("the bench documents cannot be reported", problems))
 
 
 def _parser() -> argparse.ArgumentParser:

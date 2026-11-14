@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import dataclasses
 import inspect
 import math
 import os
@@ -679,9 +680,21 @@ def _constructed_300m_and_100m(order: str) -> list[dict]:
     return manifests if order == "forward" else list(reversed(manifests))
 
 
+def _shown(inp):
+    """The inputs with the variants shown: the gate open and the rule's seed count committed (plan §1.4,
+    §8.1). The constructed runs have no null control, so their analysis is given the flags that a
+    campaign that passed the controls carries; the decision is the rule's, from a synthetic campaign."""
+    decision = analyse_committed(fake_campaign()).decision
+    analysis = dataclasses.replace(
+        inp.analysis, comparisons_allowed=True, decision=decision, committed_seed_count=decision.n_seeds
+    )
+    assert mt.variant_results_shown(analysis)
+    return dataclasses.replace(inp, analysis=analysis)
+
+
 @pytest.mark.parametrize("order", ["forward", "reversed"])
 def test_plot_6_uses_the_300m_runs_only_whatever_the_order(order):
-    figure = m.plot_context_gap(make_inputs_committed(_constructed_300m_and_100m(order)))
+    figure = m.plot_context_gap(_shown(make_inputs_committed(_constructed_300m_and_100m(order))))
     expected = []
     for seed in (1, 2):
         mha = fpi.CONSTRUCTED_BUCKETS[("mha", seed)]
@@ -847,7 +860,7 @@ def test_without_per_bucket_fields_plot_6_says_no_data_and_plot_7_says_no_curves
 
 
 def test_plot_6_gaps_are_per_seed_against_mha_of_the_same_seed():
-    figure = m.plot_context_gap(make_inputs_committed(fpi.bucket_manifests()))
+    figure = m.plot_context_gap(_shown(make_inputs_committed(fpi.bucket_manifests())))
     expected = []
     for seed in (1, 2):
         mha = fpi.CONSTRUCTED_BUCKETS[("mha", seed)]
