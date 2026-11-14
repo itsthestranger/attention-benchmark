@@ -108,7 +108,7 @@ def test_the_runbook_has_commands_for_every_script_it_should():
         "scripts.prepare_data", "scripts.train", "scripts.branch", "scripts.select_lr",
         "scripts.make_tables", "scripts.make_plots", "scripts.timing_pass", "scripts.bench",
         "scripts.solve_config", "scripts.graph_diff",
-        "scripts.prune", "scripts.timing_report", "scripts.measure_reproducibility",
+        "scripts.prune", "scripts.timing_report", "scripts.measure_reproducibility", "scripts.swa_paths",
     }
     assert len(COMMANDS) >= 30
 
@@ -128,7 +128,7 @@ def test_training_commands_state_the_gpu_facts_the_manifest_records():
     for command in COMMANDS:
         if shlex.split(command)[2] in ("scripts.train", "scripts.branch"):
             assert "--gpu-shared" in command and "--expected-backend" in command, command
-        if shlex.split(command)[2] in ("scripts.timing_pass", "scripts.bench"):
+        if shlex.split(command)[2] in ("scripts.timing_pass", "scripts.bench", "scripts.swa_paths"):
             assert "--gpu-shared false" in command and "--expected-backend" in command, command
 
 

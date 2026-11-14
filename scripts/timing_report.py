@@ -1,12 +1,15 @@
 """The timing and inference tables (plan §8.5, §8.6, §10.4), built from timing_pass/1 and bench/2 documents.
 
     python -m scripts.timing_report --timing-pass results/timing/timing_pass.json \
-        --bench results/bench --out results/tables
+        --swa-paths results/timing/swa_paths.json --bench results/bench --out results/tables
     python -m scripts.timing_report --blank --out results/tables/blank
 
 Writes timing.md and inference.md into --out. Every number is read from a document, or computed
 from one here. A blank form (no source for a table, or --blank) has the title, the column headers,
-the captions and one row per expected track or variant, with every measured cell blank.
+the captions and one row per expected track or variant, with every measured cell blank. timing.md
+ends with the SWA two-paths section, built from the swa_paths/1 record of --swa-paths (plan §2.3,
+decisions 244 and 245): blank when no record is given. The record is not cross-checked against the
+timing pass (decision 247).
 
 Thresholds of the plan appear only in captions and headers, as the plan states them. This report
 decides no verdict: the words that would judge a row are never written, and no code outside
@@ -28,6 +31,7 @@ from typing import Mapping, Sequence
 
 from scripts import bench as bd
 from scripts import make_tables as mt
+from scripts import swa_paths as sp
 from scripts import timing_pass as tp
 from src import config
 
@@ -85,6 +89,17 @@ TIMING_CAPTIONS = (
     "Peak memory is torch.cuda.max_memory_allocated; the timing document records no reserved figure.",
 )
 RANGE_SEP = "–"  # en dash: "min–max" in the range columns
+SWA_PATHS_TITLE = "## SWA's two opt paths (plan §2.3)"
+SWA_PATHS_COLUMNS = ("track", "attention, ms (median)", f"attention, ms (min{RANGE_SEP}max)", "ratio to MHA")
+SWA_PATHS_CAPTIONS = (
+    "Timed: one forward and one backward of the attention module alone, in opt mode, at the batch and "
+    "context of the source line. It is not a training step, so these numbers are not the ms/step of the timing table.",
+    "This table selected nothing: SWA trains on flex if FlexAttention runs on the T4 and agrees with the "
+    "reference, else on chunked (plan §2.3, decision 244). The times are recorded so that the other path's "
+    "time is known (decision 245).",
+    "The record has its own source line because it is made at the verification step and may come from "
+    "another session than the timing pass.",
+)
 # The SWA comparison under timing.md's table (plan §2.3 item 2): both attention times, no verdict word.
 SWA_COMPARISON = "SWA attention time: {swa} ms/step; MHA: {mha} ms/step (attention share × ms/step, plan §2.3 item 2)."
 PREFILL_COLUMNS = ("context", "batch", "latency, ms", "latency, ms (min–max)", "tokens/s", "peak allocated, MiB")
@@ -342,8 +357,11 @@ def _timing_source(doc: Mapping | None) -> str:
     )
 
 
-def render_timing(doc: Mapping | None) -> str:
-    """timing.md. `doc` is a timing_pass/1 document, or None for the blank form."""
+def render_timing(doc: Mapping | None, swa_paths: Mapping | None = None) -> str:
+    """timing.md. `doc` is a timing_pass/1 document, or None for the blank form.
+
+    `swa_paths` is a swa_paths/1 record for the last section; without one that section is blank.
+    """
     if doc is None:
         rows = [_blank_timing_row(track) for track in expected_timing_tracks()]
     else:
@@ -358,7 +376,60 @@ def render_timing(doc: Mapping | None) -> str:
         if tp.swa_not_faster(check):
             lines += [f"{tp.SWA_DENSE_MARK} {tp.swa_dense_note(check)}", ""]
     lines += list(TIMING_CAPTIONS) + [""]
+    lines += _swa_paths_section(swa_paths)
     return "\n".join(lines)
+
+
+# --- the SWA two-paths section of timing.md (plan §2.3; decisions 244, 245) -----------------------
+
+
+def _swa_paths_source(record: Mapping | None) -> str:
+    env = _environment(record)
+
+    def field(name: str) -> str:
+        return _text(None if record is None else record.get(name))
+
+    return (
+        f"Source: GPU {_text(env.get('gpu_name'))}; backend {field('backend')}; torch {_text(env.get('torch'))}; "
+        f"CUDA {_text(env.get('cuda'))}; driver {_text(env.get('driver'))}; {field('precision')}; "
+        f"batch {field('batch')}, context {field('context')}; {field('repetitions')} repetitions of "
+        f"{field('repeats')} calls after {field('warmup')} warm-up calls."
+    )
+
+
+def _swa_paths_rows(record: Mapping | None) -> tuple[list[dict], list[str]]:
+    """The rows of the SWA section, and the lines that say which tracks could not run. Blank for no record."""
+    if record is None:
+        blank = {column: BLANK for column in SWA_PATHS_COLUMNS}
+        return [{**blank, "track": key} for key in sp.ORDER], []
+    sp.check_document(record)
+    tracks = record["tracks"]
+    mha_ms = float(tracks[sp.MHA_KEY]["attention_ms"])
+    rows, notes = [], []
+    for key in sp.ORDER:
+        entry = tracks[key]
+        if entry["error"] is not None:
+            rows.append({"track": key, SWA_PATHS_COLUMNS[1]: BLANK, SWA_PATHS_COLUMNS[2]: BLANK, SWA_PATHS_COLUMNS[3]: BLANK})
+            notes.append(f"{key} could not run here: {entry['error']}")
+            continue
+        ms = float(entry["attention_ms"])
+        rows.append({
+            "track": key,
+            SWA_PATHS_COLUMNS[1]: _fmt(ms, MS_DECIMALS),
+            SWA_PATHS_COLUMNS[2]: _span(entry["attention_ms_min"], entry["attention_ms_max"], MS_DECIMALS),
+            SWA_PATHS_COLUMNS[3]: _fmt(ms / mha_ms, RATIO_DECIMALS),
+        })
+    return rows, notes
+
+
+def _swa_paths_section(record: Mapping | None) -> list[str]:
+    rows, notes = _swa_paths_rows(record)
+    lines = [SWA_PATHS_TITLE, "", _swa_paths_source(record), ""]
+    lines += _md_table(SWA_PATHS_COLUMNS, rows) + [""]
+    for note in notes:
+        lines += [note, ""]
+    lines += list(SWA_PATHS_CAPTIONS) + [""]
+    return lines
 
 
 # --- inference.md ------------------------------------------------------------------------------
@@ -476,25 +547,30 @@ def render_inference(docs: Sequence[Mapping] | None) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Write timing.md and inference.md from timing and bench documents.")
     parser.add_argument("--timing-pass", default=None, metavar="FILE", help="a timing_pass/1 document")
+    parser.add_argument("--swa-paths", default=None, metavar="FILE", help="a swa_paths/1 record (scripts.swa_paths)")
     parser.add_argument("--bench", default=None, metavar="DIR", help="a directory of bench_*.json documents")
     parser.add_argument("--out", required=True, help="directory to write timing.md and inference.md to")
     parser.add_argument("--blank", action="store_true", help="ignore the sources; write the blank forms")
     args = parser.parse_args(argv)
     try:
+        swa_doc = None
         if args.blank:
             timing_doc, bench_docs = None, []
         else:
             timing_doc = tp.read_timing_pass(args.timing_pass) if args.timing_pass else None
             bench_docs = load_bench_documents(args.bench) if args.bench else []
+            swa_doc = sp.read_swa_paths(args.swa_paths) if args.swa_paths else None
         if timing_doc is not None:
             check_timing_document(timing_doc)
         check_bench_documents(bench_docs)
-        mt.check_timing_sources([], timing_doc, bench_docs)
+        mt.check_timing_sources([], timing_doc, bench_docs)  # the record is not cross-checked (decision 247)
         texts = {
-            TIMING_NAME: render_timing(timing_doc),
+            TIMING_NAME: render_timing(timing_doc, swa_paths=swa_doc),
             INFERENCE_NAME: render_inference(bench_docs),
         }
-    except (TimingReportError, mt.TableError, tp.TimingError, bd.BenchError, json.JSONDecodeError) as exc:
+    except (
+        TimingReportError, mt.TableError, tp.TimingError, bd.BenchError, sp.SwaPathsError, json.JSONDecodeError,
+    ) as exc:
         print(exc, file=sys.stderr)
         return 1
     out = Path(args.out)

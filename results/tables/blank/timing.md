@@ -24,3 +24,17 @@ Spread is (max - min) / mean over the track's own repetitions, in percent.
 Plan §8.5 reads: "Prediction: MHA, GQA-4, GQA-2 and MQA within ±3% of each other." Their step times are shown in the ms/step and ratio to MHA opt columns of the rows for MHA, gqa4, gqa2 and mqa.
 Ratio is each track's ms/step over MHA's opt track. Attention share is the measured attention time (forward and backward) over the whole step's time, in percent (plan §8.5).
 Peak memory is torch.cuda.max_memory_allocated; the timing document records no reserved figure.
+
+## SWA's two opt paths (plan §2.3)
+
+Source: GPU —; backend —; torch —; CUDA —; driver —; —; batch —, context —; — repetitions of — calls after — warm-up calls.
+
+| track | attention, ms (median) | attention, ms (min–max) | ratio to MHA |
+|---|---|---|---|
+| mha | — | — | — |
+| swa256/chunked | — | — | — |
+| swa256/flex | — | — | — |
+
+Timed: one forward and one backward of the attention module alone, in opt mode, at the batch and context of the source line. It is not a training step, so these numbers are not the ms/step of the timing table.
+This table selected nothing: SWA trains on flex if FlexAttention runs on the T4 and agrees with the reference, else on chunked (plan §2.3, decision 244). The times are recorded so that the other path's time is known (decision 245).
+The record has its own source line because it is made at the verification step and may come from another session than the timing pass.
