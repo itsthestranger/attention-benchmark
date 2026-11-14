@@ -56,6 +56,7 @@ def _branch(args) -> int:
     config.require_complete(parent)
     budget = args.branch_budget
     branch_cfg = br.branch_resolved(parent, budget)  # BranchError unless budget is one of the trunk's branches
+    rc.require_git_checkout()  # before any work: no step is taken without a commit hash (review M7)
     ops = rc.load_ops(args)
     device = rc.choose_device(args.device)
     rc.reset_peak_memory(device)  # this session's peak starts here, before the model exists (T-41)

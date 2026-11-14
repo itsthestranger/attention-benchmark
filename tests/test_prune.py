@@ -10,6 +10,7 @@ exist afterwards.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import shutil
@@ -25,8 +26,11 @@ from src.training import checkpoint as ck
 from src.utils import manifest as mf
 from tests.test_entry_points import (  # noqa: F401  (fixtures and helpers of the entry-point tests)
     SHORT_LABEL,
+    TRUNK_LABEL,
+    _spec_copy,
     run_branch,
     run_train,
+    short_resolved,
     snapshot,
     specs,
     synthetic,
@@ -457,3 +461,153 @@ def test_a_trunk_step_file_that_is_not_a_branch_point_of_the_run_is_left_alone(f
         f"{trunk}/step00000032.pt", f"{trunk}/trunk-step00000010.pt", f"{trunk}/{CURVE}", f"{trunk}/{SESSIONS}", f"{trunk}/{PEAK}",
         f"{branch}/step00000024.pt", f"{branch}/{CURVE}", f"{branch}/{SESSIONS}", f"{branch}/{PEAK}",
     }
+
+
+# --- --final-short: branches and short runs lose their finals, the primary budget's final stays ---
+
+
+@pytest.fixture
+def primary_is_the_trunk_budget(monkeypatch):
+    """Make the primary budget the tiny trunk's token label. prune reads it with config.load_prereg(), so the
+    patch is what the code sees: the tests need no run named 300M."""
+    real = config.load_prereg
+
+    def patched():
+        doc = copy.deepcopy(real())
+        doc["primary"]["budget"] = TRUNK_LABEL
+        return doc
+
+    monkeypatch.setattr(config, "load_prereg", patched)
+
+
+@pytest.fixture(scope="module")
+def campaign(full, specs, synthetic, tmp_path_factory):
+    """The trunk at 32M with its 24M branch, plus a finished standalone 24M run (a short run, not a branch)."""
+    out = tmp_path_factory.mktemp("prune_campaign")
+    shutil.copytree(full, out, dirs_exist_ok=True)
+    assert run_train(specs.short, out, synthetic.root) == 0
+    return out
+
+
+@pytest.fixture(scope="module")
+def campaign_with_unfinished_short(campaign, specs, synthetic, tmp_path_factory):
+    """The campaign plus a 24M run with another init seed, stopped at step 12: unfinished, not a result."""
+    out = tmp_path_factory.mktemp("prune_campaign_unfinished")
+    shutil.copytree(campaign, out, dirs_exist_ok=True)
+    spec = _spec_copy(specs.short, out.parent / "short_seed2.yaml", init_seed=2)
+    assert run_train(spec, out, synthetic.root, extra=["--until", "12"]) == 0
+    return out
+
+
+def test_the_primary_budget_is_read_from_the_prereg_config(campaign, trunk_resolved):
+    p = prune.plan(campaign, "opt", final_short=True)
+    assert p.primary == config.load_prereg()["primary"]["budget"] == "300M"
+    assert prune.plan(campaign, "opt").primary is None  # not read without the flag
+
+
+def test_final_short_drops_the_branch_and_short_run_finals_and_keeps_the_primary_final(
+    campaign, trunk_resolved, short_resolved, tmp_path, capsys, primary_is_the_trunk_budget
+):
+    out = _copy(campaign, tmp_path)
+    trunk = _dir(out, trunk_resolved)
+    branch = _dir(out, _branch_resolved(trunk_resolved))
+    short = _dir(out, short_resolved)
+    assert short != trunk and short != branch
+    trunk_final = f"{trunk}/step00000032.pt"
+    assert trunk_final in _files(out)
+    code, dry = _prune(out, "--final-short", capsys=capsys)
+    assert code == 0
+    listed = _listed(dry)
+    assert f"{branch}/step00000024.pt" in listed and f"{short}/step00000024.pt" in listed
+    assert trunk_final not in listed
+    assert f"keep {trunk_final}: final checkpoint kept: a run at the primary budget is loaded by evaluation " \
+           "(--final removes it)" in dry
+    before_apply = _files(out)
+    assert prune.main(["--out", str(out), "--apply", "--final-short"]) == 0
+    assert set(before_apply) - _files(out) == listed
+    assert trunk_final in _files(out)
+    assert f"{branch}/step00000024.pt" not in _files(out) and f"{short}/step00000024.pt" not in _files(out)
+
+
+def test_final_short_on_the_campaign_removes_exactly_the_branch_and_short_run_finals_and_their_others(
+    campaign, trunk_resolved, short_resolved, tmp_path, primary_is_the_trunk_budget
+):
+    out = _copy(campaign, tmp_path)
+    trunk = _dir(out, trunk_resolved)
+    branch = _dir(out, _branch_resolved(trunk_resolved))
+    short = _dir(out, short_resolved)
+    before = _files(out)
+    assert prune.main(["--out", str(out), "--apply", "--final-short"]) == 0
+    after = _files(out)
+    assert before - after == {
+        f"{trunk}/step00000024.pt", f"{trunk}/trunk-step00000019.pt",
+        f"{branch}/step00000022.pt", f"{branch}/step00000024.pt",
+        f"{short}/step00000016.pt", f"{short}/step00000024.pt",
+    }
+    assert f"{trunk}/step00000032.pt" in after
+    assert {f for f in after if "/" + CURVE in f or "/" + SESSIONS in f or "/" + PEAK in f} == {
+        f for f in before if "/" + CURVE in f or "/" + SESSIONS in f or "/" + PEAK in f
+    }
+
+
+def test_without_flags_no_final_checkpoint_is_listed_and_the_final_kept_reason_is_unchanged(
+    campaign, trunk_resolved, short_resolved, tmp_path, capsys
+):
+    out = _copy(campaign, tmp_path)
+    p = prune.plan(out, "opt")
+    finals = [f"{_dir(out, r)}/step{total:08d}.pt" for r, total in ((trunk_resolved, 32), (short_resolved, 24))]
+    finals.append(f"{_dir(out, _branch_resolved(trunk_resolved))}/step00000024.pt")
+    deleted = {_rel(out, d.path) for d in p.deletions}
+    assert not deleted & set(finals)
+    for f in finals:
+        assert _kept_reason(p, out / f) == "final checkpoint kept (evaluation loads it; --final removes it)"
+
+
+def test_final_then_final_short_is_the_same_plan_as_final(campaign, tmp_path, primary_is_the_trunk_budget):
+    out = _copy(campaign, tmp_path)
+    both = prune.plan(out, "opt", final=True, final_short=True)
+    assert both == prune.plan(out, "opt", final=True)
+    assert both.deletions  # not vacuously empty
+
+
+def test_final_short_plus_final_equals_final_alone_on_the_listed_output(
+    campaign, tmp_path, capsys, primary_is_the_trunk_budget
+):
+    out = _copy(campaign, tmp_path)
+    _, text_both = _prune(out, "--final", "--final-short", capsys=capsys)
+    _, text_final = _prune(out, "--final", capsys=capsys)
+    assert text_both == text_final
+
+
+def test_an_unfinished_short_run_loses_nothing_under_final_short(
+    campaign_with_unfinished_short, short_resolved, tmp_path, primary_is_the_trunk_budget
+):
+    out = _copy(campaign_with_unfinished_short, tmp_path)
+    seed2 = copy.deepcopy(short_resolved)
+    seed2["run"]["init_seed"] = 2
+    unfinished = _dir(out, seed2)
+    before = {f: h for f, h in snapshot(out).items() if f.startswith(unfinished + "/")}
+    assert before, "the unfinished short run has no files"
+    p = prune.plan(out, "opt", final_short=True)
+    assert not [d for d in p.deletions if _rel(out, d.path).startswith(unfinished + "/")]
+    assert prune.main(["--out", str(out), "--apply", "--final-short"]) == 0
+    assert {f: h for f, h in snapshot(out).items() if f.startswith(unfinished + "/")} == before
+
+
+def test_apply_refuses_a_planned_path_that_is_not_a_checkpoint_under_out(full, trunk_resolved, tmp_path):
+    """The apply step's own check (prune.apply): a planned path that is no step or trunk-step file under
+    OUT/checkpoints/MODE is refused before any file is deleted, even when other planned paths are valid."""
+    out = _copy(full, tmp_path)
+    p = prune.plan(out, "opt", final=True)
+    valid = p.deletions[0]
+    foreign = out / "manifests/opt" / f"{mf.run_name(trunk_resolved)}.json"
+    outside = tmp_path / "elsewhere" / "step00000008.pt"
+    outside.parent.mkdir()
+    outside.write_bytes(b"not ours")
+    before = snapshot(out)
+    for bad in (foreign, outside):
+        q = prune.Plan(out=p.out, mode=p.mode, final=p.final,
+                       deletions=[valid, prune.Deletion(bad, "x", 1)])
+        with pytest.raises(rc.EntryError):
+            prune.apply(q)
+        assert snapshot(out) == before and outside.read_bytes() == b"not ours"
