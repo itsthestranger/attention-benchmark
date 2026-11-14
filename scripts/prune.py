@@ -1,6 +1,6 @@
 """Delete checkpoints that no later command needs (plan §12.3).
 
-    python -m scripts.prune --out OUT [--mode opt|ref] [--final] [--apply]
+    python -m scripts.prune --out OUT [--mode opt|ref] [--final | --final-short] [--apply]
 
 Dry run by default: nothing is deleted unless --apply is given. The plan is built
 completely before anything is deleted, and --apply deletes exactly the files the dry
@@ -14,7 +14,11 @@ What may go, per manifest in OUT/manifests/MODE/:
    and parent name).
 2. A completed, valid branch: the regular checkpoints of the branch's own directory
    except the one at its final step.
-3. With --final, the final-step checkpoint of a completed, valid run or branch.
+3. With --final-short, the final-step checkpoint of a completed, valid branch, and of a completed,
+   valid run whose token budget is not the primary budget (config prereg primary.budget, 300M). The
+   final checkpoint of a run at the primary budget stays: evaluation loads it.
+4. With --final, the final-step checkpoint of every completed, valid run or branch. --final-short
+   is then implied; giving both is the same as --final.
 
 Never deleted: anything of an unfinished, diverged, unreadable or invalid run or
 branch; any directory no manifest accounts for; any file that is not a step or
@@ -60,6 +64,8 @@ class Plan:
     out: Path
     mode: str
     final: bool
+    final_short: bool = False
+    primary: str | None = None  # the primary budget label; read only when final_short is set
     deletions: list[Deletion] = field(default_factory=list)
     kept: list[Kept] = field(default_factory=list)
 
@@ -129,8 +135,25 @@ def _branch_blocker(manifests: dict, bad: dict, parent: dict, budget: str) -> st
 # --- Planning ----------------------------------------------------------------------------------
 
 
-def _plan_checkpoints(result: Plan, name: str, directory: Path, total: int) -> None:
-    """Regular checkpoints of one completed configuration, minus its final one (and the final with --final)."""
+_KEPT_FINAL = "final checkpoint kept (evaluation loads it; --final removes it)"
+_KEPT_PRIMARY_FINAL = ("final checkpoint kept: a run at the primary budget is loaded by evaluation "
+                       "(--final removes it)")
+
+
+def _final_goes(result: Plan, is_branch: bool, tokens: str) -> tuple[bool, str]:
+    """Whether a completed run's or branch's final checkpoint may go, and why it stays when it may not."""
+    if result.final:
+        return True, _KEPT_FINAL
+    if result.final_short:
+        if is_branch or tokens != result.primary:
+            return True, _KEPT_FINAL
+        return False, _KEPT_PRIMARY_FINAL
+    return False, _KEPT_FINAL
+
+
+def _plan_checkpoints(result: Plan, name: str, directory: Path, total: int,
+                      final_goes: bool, kept_reason: str) -> None:
+    """Regular checkpoints of one completed configuration, minus its final one (and the final when final_goes)."""
     files = ck.list_checkpoints(directory)
     final_name = ck._file_name(total, False)  # the project's own name for a regular checkpoint
     final = [f for f in files if f.name == final_name]
@@ -142,10 +165,10 @@ def _plan_checkpoints(result: Plan, name: str, directory: Path, total: int) -> N
     for path in regular:
         result.deletions.append(Deletion(path, name, path.stat().st_size))
     for path in final:
-        if result.final:
+        if final_goes:
             result.deletions.append(Deletion(path, name, path.stat().st_size))
         else:
-            result.kept.append(Kept(name, path, "final checkpoint kept (evaluation loads it; --final removes it)"))
+            result.kept.append(Kept(name, path, kept_reason))
 
 
 def _plan_run(result: Plan, layout: rc.Layout, m: dict, manifests: dict, bad: dict) -> None:
@@ -155,7 +178,9 @@ def _plan_run(result: Plan, layout: rc.Layout, m: dict, manifests: dict, bad: di
         result.kept.append(Kept(name, directory, _not_a_result(m)))
         return
 
-    _plan_checkpoints(result, name, directory, resolved["run"]["steps"])
+    rn = mf.parse_run_name(name)
+    final_goes, kept_reason = _final_goes(result, rn.branch is not None, rn.tokens)
+    _plan_checkpoints(result, name, directory, resolved["run"]["steps"], final_goes, kept_reason)
 
     budget_of = {
         ck._file_name(br.branch_step(resolved, budget), True): budget  # the project's own branch-point name
@@ -180,16 +205,21 @@ def _plan_branch(result: Plan, layout: rc.Layout, m: dict) -> None:
         result.kept.append(Kept(name, directory, _not_a_result(m)))
         return
     total = br.branch_resolved(m["resolved"], m["branch"]["budget"])["run"]["steps"]
-    _plan_checkpoints(result, name, directory, total)
+    final_goes, kept_reason = _final_goes(result, True, mf.parse_run_name(name).tokens)
+    _plan_checkpoints(result, name, directory, total, final_goes, kept_reason)
 
 
-def plan(out, mode: str, *, final: bool = False) -> Plan:
+def plan(out, mode: str, *, final: bool = False, final_short: bool = False) -> Plan:
     """What would be deleted and what is left alone, in OUT/checkpoints/MODE. Reads only; deletes nothing."""
     out = Path(out)
     if not out.is_dir():
         raise rc.EntryError(f"{out} is not a directory; nothing to prune")
     layout = rc.Layout(out, mode)
-    result = Plan(out=out, mode=mode, final=final)
+    final_short = final_short and not final  # --final already covers it
+    result = Plan(
+        out=out, mode=mode, final=final, final_short=final_short,
+        primary=config.load_prereg()["primary"]["budget"] if final_short else None,
+    )
 
     manifests, bad = _read_manifests(layout.manifests)
     for fname, reason in bad.items():
@@ -278,11 +308,14 @@ def main(argv=None) -> int:
     parser.add_argument("--mode", default="opt", help="opt or ref (default opt)")
     parser.add_argument("--final", action="store_true",
                         help="also delete the final-step checkpoints of completed runs and branches")
+    parser.add_argument("--final-short", action="store_true",
+                        help="also delete the final-step checkpoints of completed branches and of completed runs "
+                             "shorter than the primary budget")
     parser.add_argument("--apply", action="store_true", help="delete the files the dry run lists")
     args = parser.parse_args(argv)
 
     def body() -> int:
-        p = plan(args.out, args.mode, final=args.final)
+        p = plan(args.out, args.mode, final=args.final, final_short=args.final_short)
         if not args.apply:
             for line in _lines(p, "would delete"):
                 print(line)

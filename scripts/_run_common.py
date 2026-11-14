@@ -756,6 +756,13 @@ def final_metrics(trainer, job: Job, curve_entries: list[dict]) -> dict:
     }
 
 
+def require_git_checkout() -> None:
+    """Read the commit hash before any work (review M7): a run or branch that cannot record it is refused here,
+    with no step taken and no file written under OUT, not after its last step. write_manifest reads it again
+    at the end, so the manifest holds the hash as it always did."""
+    mf.git_sha()
+
+
 def write_manifest(job: Job, trainer, sessions: list[str], *, completed: bool, final: dict | None) -> Path:
     s = trainer.summary()
     steps = {
