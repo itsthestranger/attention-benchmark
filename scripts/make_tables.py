@@ -2136,7 +2136,14 @@ def _load_bench_documents(directory: str | Path) -> list[dict]:
     return docs
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, commitments: Mapping | None = None) -> int:
+    """The command line. The declarations are read from the repository's configs/commitments.yaml.
+
+    No flag names another file (decision 220; review S5, G1): a declaration counts because it is
+    committed. `commitments` is for callers in Python, which the tests are: a mapping used in place
+    of the file. With --blank the tables are those of a campaign that has declared nothing,
+    whatever the file holds.
+    """
     parser = argparse.ArgumentParser(description="Build the headline table and the secondary reports from run manifests.")
     parser.add_argument("--manifests", default="results/manifests", help="directory of manifests")
     parser.add_argument("--out", default="results/tables", help="directory to write the tables to")
@@ -2145,10 +2152,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--blank", action="store_true", help="ignore --manifests; write the tables for no runs"
-    )
-    parser.add_argument(
-        "--commitments", default=None, metavar="FILE",
-        help="the declarations of configs/commitments.yaml (default: the repository's file)",
     )
     parser.add_argument(
         "--timing-pass", default=None, metavar="FILE",
@@ -2163,7 +2166,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         manifests = [] if args.blank else load_manifests(args.manifests)
         results, skipped = select_results(manifests, skip_unfinished=args.skip_unfinished)
-        commitments = config.load_commitments(args.commitments)
+        if commitments is None:
+            commitments = config.uncommitted() if args.blank else config.load_commitments()
         analysis = analyse(results, commitments=commitments)
         timing_doc = tp.read_timing_pass(args.timing_pass) if args.timing_pass else None
         bench_docs = _load_bench_documents(args.bench) if args.bench else []

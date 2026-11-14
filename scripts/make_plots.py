@@ -1142,7 +1142,12 @@ def load_records(path) -> list:
     return records
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, commitments: Mapping | None = None) -> int:
+    """The command line. The declarations are read from the repository's configs/commitments.yaml.
+
+    As for make_tables: no flag names another file (decision 220; review S5, G1), `commitments` is
+    for callers in Python, and --blank builds the plots of a campaign that has declared nothing.
+    """
     parser = argparse.ArgumentParser(description="Build the ten plots of plan §10.5.")
     parser.add_argument("--manifests", default="results/manifests", help="directory of manifests")
     parser.add_argument("--bench", default="results/bench", help="directory (or file) of bench/2 records")
@@ -1153,15 +1158,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--skip-unfinished", action="store_true", help="leave unfinished runs out, by name"
     )
-    parser.add_argument(
-        "--commitments", default=None, metavar="FILE",
-        help="the declarations of configs/commitments.yaml (default: the repository's file); give it whenever make_tables gets it",
-    )
     args = parser.parse_args(argv)
     try:
-        commitments = config.load_commitments(args.commitments)
+        if commitments is None:
+            commitments = config.uncommitted() if args.blank else config.load_commitments()
         if args.blank:
-            paths = build_all([], [], [], [], args.out)
+            paths = build_all([], [], [], [], args.out, commitments=commitments)
         else:
             paths = build_all(
                 mt.load_manifests(args.manifests),

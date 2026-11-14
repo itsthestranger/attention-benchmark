@@ -19,6 +19,7 @@ import pytest
 import yaml
 
 from src import config
+from tests.fixtures.unfilled import UNSET_RECIPE_KEYS, UNSET_RECIPE_PATHS, unfilled_recipe
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIGS = ROOT / "configs"
@@ -304,11 +305,30 @@ def test_budget_steps_match_plan_and_ceiling_formula():
         assert budgets[f"{millions}M"] == steps
 
 
-def test_unset_recipe_values_are_none():
+def test_the_smoke_run_values_of_the_recipe_are_unset_or_usable():
+    """Plan §7.1, §7.3: the three values are left to the smoke runs, and Phil writes them into the
+    file after them (RUNBOOK §2.2). No test pins them as unset (review S5, H1): each is unset, or a
+    value a run can use."""
     rec = config.load_recipe()
-    assert rec["batch"]["micro_batch"] is None
-    assert rec["grad_scaler"]["init_scale"] is None
-    assert rec["grad_scaler"]["growth_interval"] is None
+    micro = rec["batch"]["micro_batch"]
+    scale = rec["grad_scaler"]["init_scale"]
+    growth = rec["grad_scaler"]["growth_interval"]
+    assert micro is None or (isinstance(micro, int) and not isinstance(micro, bool) and micro >= 1)
+    assert micro is None or rec["batch"]["sequences_per_step"] % micro == 0
+    assert scale is None or (isinstance(scale, (int, float)) and not isinstance(scale, bool) and scale > 0)
+    assert growth is None or (isinstance(growth, int) and not isinstance(growth, bool) and growth >= 1)
+    # All three or none: a recipe that is half filled in is a mistake.
+    assert len({value is None for value in (micro, scale, growth)}) == 1
+
+
+def test_the_unfilled_recipe_of_the_tests_has_exactly_the_three_values_unset(monkeypatch):
+    filled = config.load_recipe()
+    unfilled = unfilled_recipe(monkeypatch)
+    assert config.load_recipe() == unfilled
+    for section, key in UNSET_RECIPE_KEYS:
+        assert unfilled[section][key] is None
+        unfilled[section][key] = filled[section][key]
+    assert unfilled == filled  # nothing else differs from the repository's file
 
 
 # --- prereg.yaml (plan §1.2, §1.4, §8.1, §8.4, §10.3) ------------------------
@@ -606,7 +626,8 @@ def test_overrides_are_applied_and_recorded():
     assert r["overrides"] == {"recipe.grad_scaler.init_scale": 1024.0, "model.d_model": 64}
 
 
-def test_overrides_do_not_mutate_base_files_or_later_resolves():
+def test_overrides_do_not_mutate_base_files_or_later_resolves(monkeypatch):
+    unfilled_recipe(monkeypatch)
     res(overrides={"recipe.grad_scaler.init_scale": 1024.0, "model.d_model": 64})
     fresh = res()
     assert fresh["recipe"]["grad_scaler"]["init_scale"] is None
@@ -642,11 +663,14 @@ UNSET_PATHS = {
 }
 
 
-def test_resolve_never_fails_for_unset_values():
+def test_resolve_never_fails_for_unset_values(monkeypatch):
+    unfilled_recipe(monkeypatch)
     assert res()["recipe"]["batch"]["micro_batch"] is None
 
 
-def test_require_complete_raises_and_lists_the_three_unset_paths():
+def test_require_complete_raises_and_lists_the_three_unset_paths(monkeypatch):
+    unfilled_recipe(monkeypatch)
+    assert UNSET_PATHS == UNSET_RECIPE_PATHS
     with pytest.raises(config.ConfigError) as info:
         config.require_complete(res())
     listed = set(re.findall(r"recipe(?:\.\w+)+", str(info.value)))
@@ -664,7 +688,8 @@ def test_require_complete_passes_when_all_three_are_supplied():
     assert config.require_complete(r) is None
 
 
-def test_require_complete_names_only_the_still_unset_path():
+def test_require_complete_names_only_the_still_unset_path(monkeypatch):
+    unfilled_recipe(monkeypatch)
     r = res(overrides={"recipe.batch.micro_batch": 64, "recipe.grad_scaler.init_scale": 1024.0})
     with pytest.raises(config.ConfigError) as info:
         config.require_complete(r)

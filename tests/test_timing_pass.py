@@ -21,6 +21,7 @@ from src.data.loader import TrainStream
 from src.model import build_model
 from src.training.trainer import Trainer
 from src.utils.reproducibility import synthetic_split
+from tests.fixtures.unfilled import unfilled_recipe
 from tests.fixtures.fake_campaign import fake_campaign
 from tests.fixtures.commitments import analyse_committed
 
@@ -261,8 +262,9 @@ def test_the_pass_runs_end_to_end_on_cpu_and_writes_the_schema(tmp_path):
     }
 
 
-def test_the_pass_refuses_to_run_without_the_recipe_values(tmp_path):
-    # micro_batch and the scaler values are unset in recipe.yaml: fail clearly, before any data is opened.
+def test_the_pass_refuses_to_run_without_the_recipe_values(tmp_path, monkeypatch):
+    # With micro_batch and the scaler values unset in the recipe: fail clearly, before any data is opened.
+    unfilled_recipe(monkeypatch)
     with pytest.raises(SystemExit) as exc:
         tp.main(["--variants", "mha", "--peak-lr", "1e-3", "--data-dir", str(tmp_path), "--out", str(tmp_path / "x.json")])
     assert exc.value.code == 2

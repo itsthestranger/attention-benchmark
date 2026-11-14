@@ -18,6 +18,7 @@ from tests.fixtures.commitments import analyse_committed, tables_main
 from tests.fixtures.fake_manifests import fake_manifest
 from tests.fixtures.fake_secondary import find, secondary_campaign
 from tests.test_lr_sweep import with_skips
+from tests.tolerances import FLOAT64_IDENTITY
 
 ROOT = Path(__file__).resolve().parents[1]
 BLANK_FILE = ROOT / "results" / "tables" / "blank" / "shared_rate.md"
@@ -171,7 +172,7 @@ def test_the_comparison_is_pt_secondary_on_the_same_numbers(which, request):
 def test_tuned_better_than_shared_gives_a_negative_gap(moved):
     # The shared-rate losses are the tuned ones plus SHIFT, and the spread averages to zero over seeds 1-3.
     gap = moved[1].shared_rate[VARIANT].tuned_minus_shared
-    assert gap.mean_gap == pytest.approx(-SHIFT, abs=1e-9)
+    assert gap.mean_gap == pytest.approx(-SHIFT, abs=FLOAT64_IDENTITY)
     assert gap.mean_gap < 0
 
 
@@ -179,7 +180,7 @@ def test_tuned_worse_than_shared_gives_a_positive_gap():
     base = at_rate(secondary_campaign(gaps={VARIANT: 0.05}), VARIANT, OWN_RATE)
     manifests = base + shared_runs(base, VARIANT, shift=-SHIFT)
     gap = analyse_committed(manifests).shared_rate[VARIANT].tuned_minus_shared
-    assert gap.mean_gap == pytest.approx(SHIFT, abs=1e-9)
+    assert gap.mean_gap == pytest.approx(SHIFT, abs=FLOAT64_IDENTITY)
     assert gap.mean_gap > 0
 
 

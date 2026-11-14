@@ -246,7 +246,14 @@ def test_current_environment_names_the_fields_a_resume_compares():
 
 
 def test_a_checkpoint_stores_the_environment_it_was_written_in(tmp_path, monkeypatch):
-    marked = {**ck.current_environment(), "torch": "0.0.1-synthetic", "gpu_name": "Synthetic T4"}
+    # Every field a resume compares gets a value of its own. On CPU the CUDA version, the driver and
+    # the GPU name are all None, so a checkpoint that dropped one of them would look the same
+    # (break B64 of review S5).
+    marked = {
+        **ck.current_environment(), "torch": "0.0.1-synthetic", "cuda": "0.0-synthetic",
+        "driver": "000.00-synthetic", "gpu_name": "Synthetic T4",
+    }
+    assert all(marked[field] is not None for field in ENV_FIELDS)
     monkeypatch.setattr(ck, "current_environment", lambda: dict(marked))
     cfg = resolved_for(steps=20)
     trainer = trainer_for(cfg)
@@ -254,6 +261,7 @@ def test_a_checkpoint_stores_the_environment_it_was_written_in(tmp_path, monkeyp
     for branch_point in (False, True):
         state = ck.load_checkpoint(ck.save_checkpoint(trainer, tmp_path, branch_point=branch_point))
         assert state["environment"] == marked
+        assert {field: state["environment"][field] for field in ENV_FIELDS} == {field: marked[field] for field in ENV_FIELDS}
 
 
 def test_a_checkpoint_without_an_environment_does_not_load(tmp_path):

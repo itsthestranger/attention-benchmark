@@ -35,7 +35,7 @@ from tests.fixtures.fake_campaign import LADDER_PARAMS
 from tests.fixtures.fake_manifests import fake_manifest
 from tests.test_gate_report import losses_of
 from tests.test_lr_sweep import with_skips
-from tests.fixtures.commitments import analyse_committed, committed, tables_main, write_commitments
+from tests.fixtures.commitments import analyse_committed, committed, tables_main
 
 PREREG = config.load_prereg()
 BASE_SEEDS = tuple(PREREG["seed_count"]["base_seeds"])
@@ -288,8 +288,8 @@ def test_the_command_line_declares_the_cut(campaign, tmp_path, capsys):
         mf.write_manifest(manifest, directory)
     waiting, cut = tmp_path / "waiting", tmp_path / "cut"
     assert tables_main(["--manifests", str(directory), "--out", str(waiting)]) == 0
-    file = write_commitments(tmp_path / "cut.yaml", {"ladder": "l6_l8", "seed_count": None})
-    assert mt.main(["--manifests", str(directory), "--out", str(cut), "--commitments", str(file)]) == 0
+    declared = {"ladder": "l6_l8", "seed_count": None}
+    assert mt.main(["--manifests", str(directory), "--out", str(cut)], commitments=declared) == 0
     with pytest.raises(SystemExit):
         mt.main(["--manifests", str(directory), "--out", str(cut), "--l10-cut"])  # the flag is gone (decision 220)
     capsys.readouterr()
