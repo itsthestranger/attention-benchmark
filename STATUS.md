@@ -1,6 +1,6 @@
 # STATUS
 
-Last updated: 2026-11-14, end of session 5. Every task of `TASKS.md` is merged except T-52, which changes frozen files and waits for Phil's approval (pull request #59). Phil answered every open question except Kaggle's versions (decisions 215 to 231); T-46 to T-52 apply the answers. A third independent review (`docs/review_s5.md`) looked at everything since the second one; its one blocking finding and its other findings are fixed in T-54 to T-57 or listed below. The `cpu` tier is green on `main` at the merge of T-57: 3,851 tests, about six minutes. The harness is ready for Phil's verification step (`RUNBOOK.md` §1). No GPU job has run.
+Last updated: 2026-11-14, session 6. Phil merged T-52 (pull request #59) and confirmed the five readings of session 5 (decision 245), with two additions: whiskers for the benchmark's range on plots 2 and 8 (T-59), and a record of the attention times of both SWA paths at the verification step (T-60). Both are in progress; a fresh agent re-checks them in T-61, which closes the handover. The `cpu` tier was green on `main` at the merge of T-57 (3,851 tests, about six minutes). No GPU job has run.
 
 ## Done
 
@@ -24,25 +24,25 @@ Merged, with green CI. Pull request numbers in brackets.
 
 ## In progress
 
-- T-52, pull request #59, labelled `needs-phil`: the sweep seed, the confirmed thresholds and corrected comments in `configs/prereg.yaml`; the rule in prose in `README.md`; plan §18 (amendments A1 to A19); the coverage test of the multiplier interval with its allowance in `tests/tolerances.py`; `select_lr` reads the registered seed. It is merged up to `main` and green. Phil approves and merges it; the build loop does not.
-- Nothing else is running. No worker is active.
+- T-58: decisions 245 to 248, the tasks of M9, this file.
+- T-59 (worker): whiskers on plots 2 and 8.
+- T-60 (worker): `scripts/swa_paths.py`, the section of `timing.md`, the runbook command.
+- T-61: the re-check of T-59 and T-60 by a fresh agent, the final status. Not started.
 
 ## Blocked
 
-- T-52 waits for Phil's approval: it changes frozen files. Until it is merged, `main` has no plan §18, the README's rule text is the old one, `select_lr` still takes `--sweep-seed`, and there is no coverage test of the multiplier interval.
+- Nothing.
 
 ## Open questions
 
 - **Kaggle's torch, Python and CUDA versions.** Needed to pin the environment; `RUNBOOK.md` §1.5 has the cell to run. Until then: torch 2.15.0, Python 3.12 in CI.
-- **Five readings and proposals of session 5 for Phil to confirm**: decisions 232, 240, 241, 242 and 244, listed under "Session-5 review" below. None blocks the verification step. Decision 232 (the probe pilot's level and the sizes of block 2) is to settle before the probe pilot of `RUNBOOK.md` §2.3.
-
-Everything else that was open at the end of session 4 was answered by Phil on 2026-11-13: decisions 215 to 231.
+Everything else is answered: decisions 215 to 231 (2026-11-13) and decision 245 (2026-11-14), which confirms decisions 232, 240, 241, 242 and 244.
 
 ## Handover checklist (plan §17.4)
 
 | # | Item | State |
 | --- | --- | --- |
-| 1 | Every task merged, `cpu` tier green in CI | Met except T-52 (#59), which waits for Phil, and T-31, the handover itself, which closes with it. |
+| 1 | Every task merged, `cpu` tier green in CI | T-52 is merged (#59). Open: T-58 to T-61 of session 6; T-31, the handover itself, closes with T-61. |
 | 2 | Every `gpu` and `t4` test written, skipping cleanly, listed as not run | Met; listed below (105 collected: 85 `gpu`, 20 `t4`). |
 | 3 | Headline table and all ten plots generate from fake manifests and blank | Met. `gates.md`, `arm_b.md`, `shared_rate.md`, `context.md`, `rqw.md`, `lr_sweep.md`, `probes.md`, `timing.md` and `inference.md` build blank and from synthetic records too. |
 | 4 | `RUNBOOK.md` gives exact commands for verification and each GPU week, with gates | Met since T-51. Every command parses with its script's own parser; none has run on a GPU. |
@@ -98,9 +98,9 @@ A fresh agent on the full model, which wrote none of the code, reviewed the bran
 
 What the review did not cover, by its own account: anything on a GPU or Kaggle; the probe generators and `train_probe.py` beyond running the pilot commands on CPU; most test files line by line; the plots as images; `measure_reproducibility.py`, `evaluate.py`, `graph_diff.py`, `solve_config.py`, `prepare_data.py` (unchanged since the second review); GitHub.
 
-### For Phil to confirm, from session 5
+### Confirmed by Phil on 2026-11-14 (decision 245)
 
-Each is implemented as described and can be changed in one place.
+Each is implemented as described. Decision 241 gains whiskers on plots 2 and 8 (T-59); decision 244 gains a record of both paths' attention times (T-60).
 
 - **Decision 240**: a variant's 300M results are shown only once the seed count is committed (plan §1.4 says "before any variant result at 300M is read"). Know what still shows without a committed count: `arm_b.md` prints the variants' Arm A 100M branch losses, a ranking and Arm B's gap to MHA, and `shared_rate.md` prints the tuned 100M branch losses, because those two tables are 100M comparisons and do not wait. The branches are the first 1,221 steps of the same 300M trunks, and plot 7 withholds them.
 - **Decision 244**: SWA's `opt` path is `flex` if FlexAttention compiles, runs and agrees with the reference on the T4, else `chunked`, with no timing comparison of the two. The plan states this as an order of preference (§2.3); no script times the two paths side by side.
@@ -191,10 +191,8 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## For Phil
 
-- **Approve and merge pull request #59 (T-52)**, or say what to change in it: plan §18, the README's rule text, `configs/prereg.yaml`, the coverage allowance.
 - Protect `main`: pull requests only, the `cpu` check required, and "Require review from Code Owners" enabled, otherwise CODEOWNERS has no effect. `configs/commitments.yaml` is in CODEOWNERS.
-- The label `needs-phil` exists now (on #59). Create `question` if you want it.
-- Confirm or change the five readings of session 5 (decisions 232, 240, 241, 242, 244).
+- Kaggle's torch, Python and CUDA versions (`RUNBOOK.md` §1.5).
 - The shim notebook in the repository stays a template: fill it in on Kaggle, and do not commit a filled-in copy to git (`RUNBOOK.md` §1.4).
 - `recipe.yaml` leaves `micro_batch`, `init_scale` and `growth_interval` unset until the smoke runs (`RUNBOOK.md` §2.2).
 - After tokenizing the corpus, paste the two hashes into `configs/data.yaml` (§2.1). Consider adding that file to CODEOWNERS then.
@@ -202,11 +200,9 @@ These skip without the hardware. A skip is not a pass. List them with `pytest --
 
 ## Next
 
-1. Phil: approve and merge pull request #59 (T-52). Then T-31 is closed and every item of the checklist is met.
-2. Phil: the verification step, `RUNBOOK.md` §1 (the `gpu` tier on the 1070, the `t4` tier in one Kaggle session, the cold start of the shim, pinning the environment). Expect findings: none of the fp16, GradScaler or kernel code has ever run.
-3. A build session after the verification step, before week 1: fix what the hardware tests find, pin torch to Kaggle's version, apply Phil's answers on the five decisions above. That is still before any result exists.
-
-The build loop stops here (plan §17.4).
+1. T-59 and T-60, in parallel (their files do not overlap).
+2. T-61: the re-check by a fresh agent, the final status, T-31 closed.
+3. Phil: the verification step, `RUNBOOK.md` §1. Expect findings: none of the fp16, GradScaler or kernel code has ever run.
 
 ## Notes for the next session
 

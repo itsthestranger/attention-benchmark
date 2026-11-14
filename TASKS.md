@@ -115,7 +115,7 @@ Phil answered the open questions on 2026-11-13 (decisions 215 to 231 in `docs/de
 | T-49 ✅ | The inference benchmark runs three round-robin repetitions and reports the median with the smallest and largest value (225) | W | T-48 | §8.6, §10.4 | `inference.md` and the headline's decode column read the median; the spread is printed; the blank forms are regenerated |
 | T-50 ✅ | Tuned minus shared: the shared-rate runs of an Arm A variant whose rate differs from MHA's are read, and the difference to its 100M branches is reported with an interval and no verdict (224) | W | T-47 | §7.4 | The table builds blank and from fake manifests; each rule of the collection has a test that fails without it |
 | T-51 ✅ | Runbook: the probe commands of §2.3 with their pilot (215), smoke runs at both ends of the grid (227), the `nvidia-smi` log (217), the shared-rate runs (224), the commitments at the gates (220), Arm C removed (230) | O | T-47 to T-50 | §15 | `tests/test_runbook.py` parses every new command; closes handover item 4 |
-| T-52 | Frozen files, one pull request labelled `needs-phil`: the sweep seed, the confirmed thresholds and the bucket comment in `configs/prereg.yaml`; the rule in prose in `README.md`; the amendments section of `docs/plan_v5.md`; the coverage allowance in `tests/tolerances.py`; `select_lr` reads the seed; the coverage test (219, 221, 228, 229, 231) | O | T-47 to T-51 | §1, §17.3 | Phil approves and merges it |
+| T-52 ✅ | Frozen files, one pull request labelled `needs-phil`: the sweep seed, the confirmed thresholds and the bucket comment in `configs/prereg.yaml`; the rule in prose in `README.md`; the amendments section of `docs/plan_v5.md`; the coverage allowance in `tests/tolerances.py`; `select_lr` reads the seed; the coverage test (219, 221, 228, 229, 231) | O | T-47 to T-51 | §1, §17.3 | Phil approves and merges it |
 | T-53 ✅ | A fresh agent reviews T-39 to T-52 against `docs/review_s4.md`, the plan and decisions 215 to 231; its findings are fixed or listed (the review is `docs/review_s5.md`; its fixes are M8) | O | T-52 | §17.4 | Handover item 6 |
 
 ## M8 — Fixes for the session-5 review
@@ -129,10 +129,21 @@ A third independent review (`docs/review_s5.md`, 2026-11-14) looked at T-39 to T
 | T-56 ✅ | Operations: `prune --final` takes a selector, so that final checkpoints nothing reads again can go alone (G5); a run reads its commit hash before the first step, not after the last (M7); the shim and the runbook write to the same place and the shim's log stops when the run fails (M9) | W | review S5 | §12.3 | Each fix has a test that fails without it |
 | T-57 ✅ | Runbook and text: the two `t4` tests that may fail and what to do then (G4), when `--final` is safe (G5), block 2 is 400 runs and the pointer in §5.3 (M4), "on the same seeds" for the shared-rate interval (M5). In T-52: the same wording in `README.md` and plan §18, the coverage test's bounds in `tests/tolerances.py` (M6). Final `STATUS.md` | O | T-54 to T-56 | §15, §17.4 | Every finding of the review is fixed or listed in `STATUS.md` |
 
+## M9 — Phil's decisions of session 6
+
+Phil merged T-52 and confirmed the five readings of session 5 on 2026-11-14, with two additions (decision 245). Added by the orchestrator on 2026-11-14.
+
+| ID | Task | Owner | Depends on | Plan | Done when |
+| --- | --- | --- | --- | --- | --- |
+| T-58 | Record the decisions of session 6 (245 to 248), this task list and the status | O | T-52 | §17 | Decisions 245 to 248 are in `docs/decisions.md` |
+| T-59 | Plots 2 and 8 draw the smallest and the largest repetition of every benchmark value as whiskers; the caption says so (245, 246) | W | T-58 | §10.4, §10.5 | Each whisker has a test that fails without it; a blank plot draws none |
+| T-60 | `scripts/swa_paths.py` records the attention times of MHA and of both SWA `opt` paths; `timing_report --swa-paths` prints them in `timing.md` with the sentence that they selected nothing; the runbook command in §1.2 (245, 247) | W | T-58 | §2.3, §13.3 | The script runs end to end on CPU with a tiny model; a path that cannot run is recorded, not raised; the blank `timing.md` is regenerated; `tests/test_runbook.py` parses the new command |
+| T-61 | A fresh agent re-checks T-59 and T-60; its findings are fixed or listed; final `STATUS.md`; closes T-31 (248) | O | T-59, T-60 | §17.4 | Handover items 1 and 6 |
+
 ## M5 — Operations and handover
 
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
 | T-29 ✅ | Kaggle shim notebook and the `train.py` / `evaluate.py` entry points | W | T-17, T-20 | §12.3 | A cold start runs on CPU against a synthetic dataset and resumes without human input |
 | T-30 ✅ | `RUNBOOK.md` | O | T-00 to T-35 | §15 | Exact commands for the verification step and each GPU week, in order, with the gate after each block and what Phil checks |
-| T-31 | Handover: audit by a fresh agent against §5 and §13, final `STATUS.md`, `README.md` with an unfilled pre-registration template | O | T-30 ✅, T-39 to T-45 ✅, T-46 to T-57 | §17.4 | The handover checklist in `CLAUDE.md` is complete |
+| T-31 | Handover: audit by a fresh agent against §5 and §13, final `STATUS.md`, `README.md` with an unfilled pre-registration template | O | T-30 ✅, T-39 to T-45 ✅, T-46 to T-57 ✅, T-58 to T-61 | §17.4 | The handover checklist in `CLAUDE.md` is complete |
