@@ -22,9 +22,11 @@ from analysis import primary_test as pt
 from src import config
 from tests.fixtures.synthetic_losses import LADDER_SIZES, synthetic_ladder
 from tests.tolerances import (
+    MULTIPLIER_COVERAGE_MAX_NO_SLOPE_SHARE,
     MULTIPLIER_COVERAGE_N_SIMULATIONS,
     MULTIPLIER_COVERAGE_SIMULATION_SEED,
     MULTIPLIER_COVERAGE_STANDARD_ERRORS,
+    MULTIPLIER_WIDTH_BAND,
 )
 
 PREREG = config.load_prereg()
@@ -82,7 +84,7 @@ def test_the_multiplier_interval_holds_the_true_ratio_as_often_as_it_says(index)
         held += (not m.bounded) or (m.log_ratio_low <= truth <= m.log_ratio_high)
     assert confidence == pt.CONFIDENCE
     # A slope that is not positive is rare on these ladders; if it were common the check would say little.
-    assert no_slope <= 0.01 * MULTIPLIER_COVERAGE_N_SIMULATIONS
+    assert no_slope <= MULTIPLIER_COVERAGE_MAX_NO_SLOPE_SHARE * MULTIPLIER_COVERAGE_N_SIMULATIONS
     standard_error = math.sqrt(confidence * (1.0 - confidence) / total)
     assert held / total >= confidence - MULTIPLIER_COVERAGE_STANDARD_ERRORS * standard_error
 
@@ -100,4 +102,5 @@ def test_the_interval_is_not_just_wide(  # the check above passes for an interva
     # Without any slope uncertainty the interval of gap / b would be about 4 SE of the gap wide,
     # 4 * SIGMA * sqrt(2 / n) / b. The real one is wider than that and of the same order.
     floor = 4.0 * SIGMA * math.sqrt(2.0 / n) / b
-    assert 0.8 * floor < float(np.median(widths)) < 3.0 * floor
+    low, high = MULTIPLIER_WIDTH_BAND
+    assert low * floor < float(np.median(widths)) < high * floor

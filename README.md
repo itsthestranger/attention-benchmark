@@ -89,7 +89,7 @@ The rule reads MHA seeds 1–5, L6 seeds 1–5 and L10 seeds 1–3 at 300M and n
 
 - Every sweep runs on init seed 21, which no arm uses (`lr_sweep.init_seed` in `configs/prereg.yaml`).
 - Arm A runs each variant at one rate: its own if the tie rule lets it differ from MHA's, otherwise MHA's.
-- For each Arm A variant whose rate differs from MHA's, three more runs are made: seeds 1–3, 100M, at MHA's rate. The variant's 100M branches at its own rate minus these runs are reported by seed with an interval. No detection claim is made on that difference (plan §18, A7).
+- For each Arm A variant whose rate differs from MHA's, three more runs are made: seeds 1–3, 100M, at MHA's rate. The variant's 100M branches at its own rate minus these runs, on the same three seeds, are reported with an interval computed with the test chosen at Gate 2: paired by seed under the paired test, two groups of three under Welch's test. No detection claim is made on that difference (plan §18, A7).
 
 ### Context-use metrics (plan §10.3)
 
