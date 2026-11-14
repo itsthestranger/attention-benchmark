@@ -453,8 +453,13 @@ def _swa_from_config(overrides=None):
     return build_model(resolved).layers[0].attn
 
 
-def test_the_config_default_builds_the_chunked_path():
-    assert _swa_from_config().opt_path == "chunked"
+def test_the_config_default_builds_the_path_its_variant_file_names():
+    # `chunked` until the T4 check; Phil may set `flex` after it (RUNBOOK §1.2). No test pins which (review S5, H1).
+    named = config.load_variant("swa256")["attention"]["opt_path"]
+    assert named in ("chunked", "flex")
+    assert _swa_from_config({"model.attention.opt_path": "chunked"}).opt_path == "chunked"
+    if named == "chunked":
+        assert _swa_from_config().opt_path == "chunked"
 
 
 def test_the_config_key_builds_the_flex_path_when_flex_is_provided():

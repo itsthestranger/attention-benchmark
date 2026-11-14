@@ -18,6 +18,7 @@ import pytest
 from scripts import bench as bd
 from scripts import timing_pass as tp
 from scripts import timing_report as report
+from tests.fixtures.unfilled import swa_on_the_chunked_path
 from tests.fixtures.fake_secondary import (
     ENVIRONMENT,
     bench_document,
@@ -551,7 +552,8 @@ def test_the_expected_tracks_are_the_timing_tracks_of_a_pass_with_ref_tracks():
 # --- End to end: the real scripts, in their synthetic modes -----------------------------------
 
 
-def test_both_scripts_in_synthetic_mode_feed_both_tables(tmp_path):
+def test_both_scripts_in_synthetic_mode_feed_both_tables(tmp_path, monkeypatch):
+    swa_on_the_chunked_path(monkeypatch)  # SWA trains on CPU here; see the fixture
     timing_path = tmp_path / "timing" / "timing_pass.json"
     assert tp.main([
         "--synthetic", "--peak-lr", "1e-3", "--steps", "4", "--discarded", "1", "--repetitions", "2",

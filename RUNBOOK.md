@@ -15,6 +15,7 @@ Phil answered the questions this runbook used to list here on 2026-11-13; the an
 | Item | Where | When |
 | --- | --- | --- |
 | The Kaggle image's torch, Python and CUDA versions. | §1.5 | Before the first run |
+| `opt_path` in `configs/variants/swa256.yaml`: `flex` if FlexAttention runs on the T4, else it stays `chunked`. | §1.2 | Before any SWA run |
 | `micro_batch`, `init_scale` and `growth_interval` in `configs/recipe.yaml`. | §2.2 | After the smoke runs |
 | The dataset and tokenizer hashes in `configs/data.yaml`. | §2.1 | After tokenizing |
 | The probe settings the pilot fixes (width, rate, steps per size), and the sizes of block 2 if you run it. | §2.3 | Before block 1 |
@@ -36,12 +37,12 @@ export SWEEP_SEED=21                                   # the init seed of every 
 - A T4 ×2 session runs two independent jobs, one per GPU, each started with `CUDA_VISIBLE_DEVICES=0` or `=1` in front of the command. No DDP (plan §2.2). While two jobs run on one GPU, or when Kaggle co-locates them, set `SHARED=yes`: the manifest records it. Jobs that produce a timing number run alone on the box and refuse a shared GPU.
 - Every `train` and `branch` command is idempotent: run the identical command again after a session dies and it resumes from the newest state the run has. A run stopped with `--until` leaves a checkpoint at that step, so nothing is run twice. A finished run exits 0 and changes nothing. A run recorded as diverged exits 3 and is not retried until you delete its manifest.
 - Start a job again with the same `CUDA_VISIBLE_DEVICES` setting it started with: a checkpoint holds the random state of every visible GPU, and a resume under another number of visible devices is refused.
-- Exit status 2 is a refusal (a hash mismatch, an incomplete recipe, a checkpoint of another mode, a checkpoint written under another torch, CUDA, driver or GPU). Read the message; do not work around it. A run cannot continue after the image changed: pin the environment (§1.5) before the first run.
+- Exit status 2 is a refusal (a hash mismatch, an incomplete recipe, a directory that is not a git checkout, a checkpoint of another mode, a checkpoint written under another torch, CUDA, driver or GPU). Read the message; do not work around it. A run cannot continue after the image changed: pin the environment (§1.5) before the first run.
 - Budgets are in steps: 100M = 1,526, 200M = 3,052, 300M = 4,578. The 100M branch leaves the trunk at step 1,221 and the 200M branch at step 2,442.
 - A learning rate appears in run names without the minus sign: `1.2e3` means 1.2e-3. Type it on the command line as `1.2e-3`.
 - Manifests land in `$OUT/manifests/opt/`. Tables and plots read that directory.
 - After any block: `python -m scripts.make_tables --manifests $OUT/manifests/opt --out $OUT/tables --skip-unfinished` rebuilds every table from what exists. It is safe at any time: it computes only what its inputs and the gates allow, and says in the notes what it skipped and why.
-- The shim notebook calls `scripts.train` with a run spec and nothing else. For a `branch`, a timing pass or the benchmark in a committed run, replace the module and its arguments on the notebook's last line and change nothing else; or run them in an interactive session.
+- The shim notebook writes to `/kaggle/working/out`, the `OUT` of this runbook, so a run started by either is resumed by the other. It calls `scripts.train` with a run spec and nothing else. For a `branch`, a timing pass or the benchmark in a committed run, replace the module and its arguments on the notebook's `try:` line, in your copy on Kaggle, and change nothing else; or run them in an interactive session.
 
 ### GPU utilisation log
 
@@ -64,7 +65,14 @@ python -m scripts.prune --out $OUT
 python -m scripts.prune --out $OUT --apply
 ```
 
-The first command deletes nothing: it lists every file it would delete and every file or directory it leaves alone, with the reason. Read it, then run the second. It removes the non-final checkpoints of completed runs and branches, and a branch-point checkpoint once its branch has a completed, valid manifest and the trunk itself is complete. It never touches an unfinished or diverged run, a directory no manifest accounts for, or a manifest. Final checkpoints stay unless you add `--final`; keep them until the tables are final and Phase 6 is decided, because `evaluate.py` and zero-shot retrieval load them.
+The first command deletes nothing: it lists every file it would delete and every file or directory it leaves alone, with the reason. Read it, then run the second. It removes the non-final checkpoints of completed runs and branches, and a branch-point checkpoint once its branch has a completed, valid manifest and the trunk itself is complete. It never touches an unfinished or diverged run, a directory no manifest accounts for, or a manifest. Final checkpoints stay by default, and they add up: one per completed run and branch is about 44 files after week 1, 78 after week 2 and 108 after week 3, which is 22 GB. After each block's tables are built, also run:
+
+```bash
+python -m scripts.prune --out $OUT --final-short
+python -m scripts.prune --out $OUT --final-short --apply
+```
+
+`--final-short` also removes the final checkpoint of every completed branch and of every completed run shorter than 300M (sweep points, the null control, data-order runs, reruns, Arm B, shared-rate runs). Nothing reads those again: their results are in their manifests. The final checkpoints of the 300M runs stay: 28 files after week 3 (40 if the rule picked 8 seeds) and at most 43 after week 4, about 9 GB; `evaluate.py` and a later Phase 6 load them. `--final` removes those too: use it only when the tables are final and Phase 6 is decided.
 
 ## 1. Verification (the 1070 and one short T4 session, before any reported GPU hour)
 
@@ -74,7 +82,7 @@ The first command deletes nothing: it lists every file it would delete and every
 CUBLAS_WORKSPACE_CONFIG=:4096:8 pytest -m gpu -q
 ```
 
-Check: every test passes; none is skipped. These tests have never run. A failure here is a finding about the harness, not a flake: stop and fix it. `STATUS.md` lists them by file.
+Check: every test passes; none is skipped. These tests have never run. A failure here is a finding about the harness, not a flake: stop and fix it. `STATUS.md` lists them by file. The one exception is `tests/test_sliding_window.py::test_opt_paths_match_ref_on_cuda[flex]`: it fails if FlexAttention does not compile or run on this GPU. On the 1070 that is a result to record, not a defect, and it decides nothing; what counts is the T4 (§1.2).
 
 ### 1.2 The `t4` tier, in one short Kaggle session
 
@@ -82,7 +90,12 @@ Check: every test passes; none is skipped. These tests have never run. A failure
 CUBLAS_WORKSPACE_CONFIG=:4096:8 pytest -m "gpu or t4" -q
 ```
 
-Check: every test passes on the T4, in particular FlexAttention on sm75 (if it does not compile, the chunked path is SWA's `opt` path; record which), the backend selection, SWA attention time below MHA's, and GQA/MQA decode time below MHA's at cache 8k. Record whether the fused kernel copies K and V in decode (plan §2.3); if it does, decode needs the explicit matmul, disclosed.
+Check: every test passes on the T4, with three exceptions that are results, not defects, and do not stop the session:
+
+- `tests/test_sliding_window.py::test_opt_paths_match_ref_on_cuda[flex]` and `tests/test_sliding_window.py::test_swa_attention_time_at_ctx_1024_is_below_mha[flex]` fail if FlexAttention does not compile or run on sm75. Then the chunked path is SWA's `opt` path: leave `opt_path: chunked` in `configs/variants/swa256.yaml` and record it.
+- `tests/test_sliding_window.py::test_swa_attention_time_at_ctx_1024_is_below_mha[chunked]` fails if the chunked path is not faster than MHA at context 1,024, which plan §2.3 itself expects ("treat the fallback's speedup as near zero"). Record both attention times from the failure message. The timing pass of §3.1 will then mark SWA's timings (plan §18, A15).
+
+Which path SWA trains with follows plan §2.3, where FlexAttention is the first choice and the chunked path the fallback, and needs no timing comparison: if `test_opt_paths_match_ref_on_cuda[flex]` passes on the T4 (FlexAttention compiles, runs and agrees with the reference), set `opt_path: flex` by pull request before any SWA run; otherwise leave `chunked`. The value is part of the configuration hash, so it does not change afterwards. No script times the two paths side by side; a passing timing case prints nothing. Any other failure is a finding about the harness: stop and fix it. In particular the backend selection and GQA/MQA decode time below MHA's at cache 8k must pass. Record whether the fused kernel copies K and V in decode (plan §2.3); if it does, decode needs the explicit matmul, disclosed.
 
 ### 1.3 Quota
 
@@ -90,7 +103,7 @@ Start a T4 ×2 session, note the quota counter, wait ten minutes, note it again.
 
 ### 1.4 Cold-start dry run of the shim
 
-Fill the placeholders of `notebooks/kaggle_shim.ipynb` (repository URL, pinned commit, dataset name, run spec, `GPU_SHARED`, `EXPECTED_BACKEND`) and commit the notebook so that it runs from the top in a fresh container. It can only run after §2.1, because nothing starts without the dataset hashes.
+Upload `notebooks/kaggle_shim.ipynb` to Kaggle, fill its placeholders there (repository URL, pinned commit, dataset name, run spec, `GPU_SHARED`, `EXPECTED_BACKEND`) and commit it on Kaggle ("Save & Run All") so that it runs from the top in a fresh container. The notebook in the repository stays the template with its placeholders: do not commit a filled-in copy to git. Its tests pin the template (the call of `scripts.train`, and no word that looks like a credential, which a dataset name such as `...-tokenized` would trip). A run spec for a job is a new file under `configs/runs/`, committed to git like any config. It can only run after §2.1, because nothing starts without the dataset hashes.
 
 Check: the run starts from step 0, writes checkpoints under `$OUT`, and a second commit of the same notebook resumes without input. If `$OUT` does not survive between sessions, fix the storage before anything else.
 
@@ -180,7 +193,7 @@ It trains four identical 200-step runs and writes how far they differ. It judges
 
 ### 2.3 Phase 1 probes, Gate 1 (about 3 GPU-h; block 2 only if quota allows)
 
-The grid (plan §18, A12). Block 1 decides Gate 1: MQAR at 4, 16 and 64 pairs, the seven variants and the recurrence anchor, init seeds 1 to 10, 240 runs. Block 2 is probes 2 to 5 at one size each, the same eight models and seeds, 320 runs; run it only if the week's quota allows. Every model of a point gets the same width, step count and learning rate. `scripts/train_probe.py` trains one model and writes one record; a record that exists is not trained again, so every loop below can be restarted.
+The grid (plan §18, A12). Block 1 decides Gate 1: MQAR at 4, 16 and 64 pairs, the seven variants and the recurrence anchor, init seeds 1 to 10, 240 runs. Block 2 is probes 2 to 5 at one size each, the same eight models and seeds, 400 runs (probe 5 is two tasks, selective copy and induction); run it only if the week's quota allows. Every model of a point gets the same width, step count and learning rate. `scripts/train_probe.py` trains one model and writes one record; a record that exists is not trained again, so every loop below can be restarted.
 
 **Pilot, MHA and the anchor only.** It fixes the width, the rate and the steps per size, and it times a run. Its seeds, 101 and 102, are not part of the grid. Start from the settings that solved 4 pairs on CPU in the test suite (width 64, rate 3e-3) and from a first guess for the steps:
 
@@ -421,7 +434,7 @@ Commit, **before any variant result at 300M is read** and before the first run o
 1. To the pre-registration section of `README.md`: the detectable gap of the chosen design in nats and the seed count (plan §1.3, §1.4).
 2. To `configs/commitments.yaml`, by pull request: `seed_count: 5` or `seed_count: 8`, the number `seeds per primary` shows.
 
-Then build the tables again from a checkout that has that commit: the "seed count not committed" note is gone. Until it is, and whenever the committed number differs from the rule's, the tables compute no primary and no exploratory comparison, and say so. Publish the noise-floor post.
+Then build the tables again from a checkout that has that commit: the "seed count not committed" note is gone. The tables and plots read `configs/commitments.yaml` of the checkout they run from; no flag names another file. Until the seed count is committed, and whenever the committed number differs from the rule's, they compute no primary and no exploratory comparison and withhold every variant's 300M losses (the headline table, `rqw.md`, `context.md` and plots 2, 3, 6 and 7), and say so. Arm B and the shared-rate table are 100M comparisons and do not wait. Publish the noise-floor post.
 
 ## 4. GPU week 3: the primaries (about 21 GPU-h, about 38 if the rule picked 8 seeds)
 
@@ -506,7 +519,7 @@ python -m scripts.timing_report --timing-pass $OUT/timing/timing_pass.json --ben
 
 The benchmark measures every point three times, round-robin over the variants, and reports the median with the smallest and largest value (plan §18, A16); allow three times the time of a single pass.
 
-Check: one file per variant and mode, and `$OUT/tables/inference.md` with a prefill table, a decode table and a KV line for each, every timing with its range over the three repetitions. The benchmark fails if measured and analytic KV bytes differ by more than 5%. The files are written after the last repetition, so an out-of-memory error in any track ends the benchmark with nothing written. `ref` mode at batch 32 and cache 8k may run out of memory: find that out first with one repetition into a scratch directory (the command below), and if it does not fit, narrow `--decode-batches` or `--decode-caches` for the real run and say so. Two things to disclose with the numbers: the sliding-window cache allocates up to twice its 256-token cap, and MLA's absorbed matrices are a fixed cost per cache outside the KV bytes per token.
+Check: one file per variant and mode, and `$OUT/tables/inference.md` with a prefill table, a decode table and a KV line for each, every timing with its range over the three repetitions. The benchmark fails if measured and analytic KV bytes differ by more than 5%. The files are written after the last repetition, so an out-of-memory error in any track ends the benchmark with nothing written. `ref` mode at batch 32 and cache 8k may run out of memory: the trial above is there to find that out, and if it does not fit, narrow `--decode-batches` or `--decode-caches` for the real run and say so. Two things to disclose with the numbers: the sliding-window cache allocates up to twice its 256-token cap, and MLA's absorbed matrices are a fixed cost per cache outside the KV bytes per token.
 
 ### 5.4 Shared-rate runs (3 seeds at 100M for each Arm A variant on its own rate)
 
@@ -535,7 +548,7 @@ python -m scripts.make_plots --manifests $OUT/manifests/opt --bench $OUT/bench -
 
 No `--skip-unfinished` here: an unfinished run at this point is a problem to resolve, not to leave out. A run recorded as diverged is the exception: it is left out and named in the notes of `headline.md` and `gates.md` (plan §7.4 item 5).
 
-Check: `headline.md` has no blank cell and its notes explain every omission; `gates.md` shows the committed seed count equal to `seeds per primary`; `arm_b.md` has both rankings; `context.md` has both metrics for every variant that ran; `shared_rate.md` is complete for every variant on its own rate; `rqw.md` states the estimate and its interpolation; all ten plots built, with the retrieval plot blank.
+Check: `headline.md` has no blank cell and its notes explain every omission; its decode cell is the benchmark's median with the smallest and largest repetition in brackets; `gates.md` shows the committed seed count equal to `seeds per primary`; `arm_b.md` has both rankings; `context.md` has both metrics for every variant that ran; `shared_rate.md` is complete for every variant on its own rate; `rqw.md` states the estimate and its interpolation; all ten plots built, with the retrieval plot blank.
 
 **Gate 4** (plan §9.7): Phase 6 runs only if a primary gap was detected or a late-context gap's interval in `context.md` excludes zero. Phase 6 has generators and a scorer (`src/eval/retrieval.py`) and no run script. If the gate opens, Phase 6 is its own build with its own review, and settles the RoPE extension beyond 1,024 tokens (the plan's open decision 5) then (plan §18, A19).
 

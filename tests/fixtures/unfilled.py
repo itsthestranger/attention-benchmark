@@ -54,3 +54,24 @@ def unpinned_data_config(directory: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
+
+
+_REAL_LOAD_VARIANT = config.load_variant  # the loader itself, before any test replaces it
+
+
+def swa_on_the_chunked_path(monkeypatch) -> None:
+    """Make `config.load_variant("swa256")` name the chunked opt path, whatever the repository's file names.
+
+    `configs/variants/swa256.yaml` says `opt_path: chunked` until the T4 check; Phil may set `flex`
+    after it (RUNBOOK §1.2). FlexAttention refuses a forward with gradients on CPU, so a CPU test
+    that runs SWA built from its variant file would turn red at that commit. Such a test asks for
+    the chunked path here. The flex path has its own tests in tests/test_sliding_window.py.
+    """
+
+    def load(name: str) -> dict:
+        variant = _REAL_LOAD_VARIANT(name)
+        if name == "swa256":
+            variant["attention"]["opt_path"] = "chunked"
+        return variant
+
+    monkeypatch.setattr(config, "load_variant", load)
