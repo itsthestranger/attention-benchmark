@@ -111,11 +111,15 @@ def test_the_script_runs_end_to_end_on_cpu_and_writes_a_checked_document(tmp_pat
         assert doc["tracks"][key]["error"] is None
         assert doc["tracks"][key]["attention_ms"] > 0
         assert len(doc["tracks"][key]["attention_ms_by_repetition"]) == 2
-    # On this torch (2.15.0, CPU) the uncompiled flex path has no backward, so the track is recorded
-    # as unavailable with that error. Pinned here as the CPU behaviour; see the report of T-60.
-    flex_error = doc["tracks"]["swa256/flex"]["error"]
-    assert flex_error is not None and "backward" in flex_error
-    assert doc["tracks"]["swa256/flex"]["attention_ms"] is None
+    # The flex track is a result either way (decision 249): torch 2.15.0 has no backward for the uncompiled
+    # FlexAttention on CPU, so here it is recorded with its error; a torch that has one gives it times.
+    # Neither is pinned: no test depends on a message of torch.
+    flex = doc["tracks"]["swa256/flex"]
+    if flex["error"] is None:
+        assert flex["attention_ms"] > 0 and len(flex["attention_ms_by_repetition"]) == 2
+    else:
+        assert isinstance(flex["error"], str) and flex["error"]
+        assert flex["attention_ms"] is None and flex["attention_ms_by_repetition"] is None
     assert "wrote" in capsys.readouterr().out
 
 
