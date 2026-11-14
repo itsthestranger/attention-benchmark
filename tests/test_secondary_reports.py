@@ -427,14 +427,18 @@ def test_main_fills_the_timing_and_decode_columns_from_the_readers(tmp_path, pai
             analysis,
             train_ms_per_step=tp.read_ms_per_step(timing),
             decode_tok_per_s=bd.read_decode_tok_per_s(bench),
+            decode_range=bd.read_decode_range(bench),
         ),
-        analysis.notes,
+        [*analysis.notes, mt.DECODE_RANGE_NOTE],
         results=results,
     )
     assert (out / "headline.md").read_text(encoding="utf-8") == expected
     cells = _cells((out / "headline.md").read_text(encoding="utf-8"), "mha")
     assert cells[mt.COLUMNS.index("train ms/step")] == f"{TIMING_MS['mha']:.1f}"
-    assert cells[mt.COLUMNS.index("decode tok/s (batch 32, cache 4k)")] == f"{DECODE_TOK_PER_S['mha']:.1f}"
+    # T-55 (decision 225): the decode cell is the median with the smallest and largest repetition in brackets.
+    low, high = bd.read_decode_range(bench)["mha"]
+    expected_cell = f"{DECODE_TOK_PER_S['mha']:.1f} ({low:.1f}{mt.RANGE_DASH}{high:.1f})"
+    assert cells[mt.COLUMNS.index("decode tok/s (batch 32, cache 4k)")] == expected_cell
 
 
 def test_a_shared_gpu_is_refused_for_the_timing_pass(results):

@@ -66,6 +66,9 @@ GATE_WAIT = (
     "comparisons wait for the controls (plan §8.1, §8.4): the null control must be computed and "
     "not detected, and the positive control computed"
 )
+COMMITMENT_WAIT = (
+    "the variants' 300M results wait for the committed seed count (plan §1.4; configs/commitments.yaml)"
+)
 NO_TIMING = "no timing pass was given (--timing-pass)"
 ARM_B_CAPTION = (
     "Arm B (iso-backbone, plan §8.3) is exploratory: no detection claim is made on any gap in this table."
@@ -461,6 +464,15 @@ def _effective_decision(analysis: Analysis):
     return decision
 
 
+def variant_results_shown(analysis: Analysis) -> bool:
+    """True when a variant's 300M results may be shown: the controls allow comparisons and the seed
+    count the rule gives is committed (plan §1.4, §8.1; decision 220; review S5, G2).
+
+    Arm B and the shared-rate table are 100M comparisons: they do not wait for the commitment.
+    """
+    return bool(analysis.comparisons_allowed) and _effective_decision(analysis) is not None
+
+
 class _Collected(NamedTuple):
     losses: dict
     losses_100m: dict
@@ -646,11 +658,14 @@ def _missing(seeds, have: Mapping) -> list[int]:
     return [s for s in seeds if s not in have]
 
 
-def _ladder_fit(by_name: Mapping, examples: Mapping, *, budget: str, prefix: str, notes: list[str]):
+def _ladder_fit(
+    by_name: Mapping, examples: Mapping, *, budget: str, prefix: str, notes: list[str], l10_cut: bool = False
+):
     """The ladder fit of one budget (plan §8.4), or None with the reason in `notes`.
 
     `by_name[name] = {init_seed: loss}` for MHA and the ladder points at that budget.
-    MHA and mha_L6 are required; mha_L10 is used when present.
+    MHA and mha_L6 are required; mha_L10 is used when present. With `l10_cut` (plan §12.2 item 4,
+    a declared cut to L6 and L8) mha_L10 is not read at all.
     """
     if not by_name.get("mha"):
         notes.append(f"{prefix}: MHA {budget} results are missing")
@@ -660,6 +675,8 @@ def _ladder_fit(by_name: Mapping, examples: Mapping, *, budget: str, prefix: str
         return None
     points = {"mha": (_non_embedding_params(examples["mha"]), by_name["mha"])}
     for name in ("mha_L6", "mha_L10"):
+        if name == "mha_L10" and l10_cut:
+            continue
         if by_name.get(name):
             points[name] = (_non_embedding_params(examples[name]), by_name[name])
     try:
@@ -1098,7 +1115,7 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, commitmen
 
     # 2. Ladder fit at 300M (plan §8.4).
     mha_300 = losses.get("mha", {})
-    fit = _ladder_fit(losses, examples, budget="300M", prefix="ladder fit", notes=notes)
+    fit = _ladder_fit(losses, examples, budget="300M", prefix="ladder fit", notes=notes, l10_cut=l10_cut)
     rule_fit = _rule_fit(losses, examples, prereg, notes, l10_cut=l10_cut)
     if l10_cut:
         notes.append(
@@ -1111,10 +1128,11 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, commitmen
 
     # 2c. The same ladder at the two branch budgets (plan §8.4): a fit per budget, read only.
     fit_100m = _ladder_fit(
-        losses_100m, examples, budget="100M", prefix="ladder fit at 100M", notes=notes
+        losses_100m, examples, budget="100M", prefix="ladder fit at 100M", notes=notes, l10_cut=l10_cut
     )
     fit_200m = _ladder_fit(
-        collected.losses_200m, examples, budget=MID_BUDGET, prefix="ladder fit at 200M", notes=notes
+        collected.losses_200m, examples, budget=MID_BUDGET, prefix="ladder fit at 200M", notes=notes,
+        l10_cut=l10_cut,
     )
 
     # The noise components of plan §8.1, from their registered runs only.
@@ -1206,6 +1224,13 @@ def analyse(results: Sequence[dict], prereg: Mapping | None = None, *, commitmen
         notes.append(
             "variant runs are withheld until the controls pass (plan §8.1): the losses, gaps and "
             "verdicts of " + ", ".join(withheld) + " are not shown in the headline table"
+        )
+    # Plan §1.4: with the gate open, a variant's 300M losses wait for the committed seed count too.
+    if gate_open and effective is None and withheld:
+        notes.append(
+            "variant runs are withheld until the seed count is committed (plan §1.4): the 300M losses of "
+            + ", ".join(withheld)
+            + " are not shown"
         )
 
     # 4. The three primary comparisons, Holm-corrected together (plan §1.2).
@@ -1393,6 +1418,22 @@ def _timing(values: Mapping[str, float] | None, variant: str) -> str:
     return f"{values[variant]:.1f}"
 
 
+def _decode_cell(median: Mapping[str, float] | None, span: Mapping[str, tuple[float, float]] | None, variant: str) -> str:
+    """The decode cell: the median, with the smallest and largest repetition in brackets when a range
+    is given (decision 225). Without a range it is the median alone."""
+    if span is None or variant not in span or median is None or median.get(variant) is None:
+        return _timing(median, variant)
+    low, high = span[variant]
+    return f"{median[variant]:.1f} ({low:.1f}{RANGE_DASH}{high:.1f})"
+
+
+RANGE_DASH = "–"  # en dash between the smallest and the largest value of a range
+DECODE_RANGE_NOTE = (
+    "Decode tok/s is the median of the inference benchmark's repetitions, with the smallest and the largest "
+    "repetition in brackets (decision 225)."
+)
+
+
 def _losses_cell(by_seed: Mapping[int, float]) -> str:
     if not by_seed:
         return BLANK
@@ -1419,12 +1460,15 @@ def headline_rows(
     *,
     train_ms_per_step: Mapping[str, float] | None = None,
     decode_tok_per_s: Mapping[str, float] | None = None,
+    decode_range: Mapping[str, tuple[float, float]] | None = None,
     swa_check: tp.SwaCheck | None = None,
 ) -> list[dict]:
     """One row per headline variant, keyed by COLUMNS, every value a string.
 
     `swa_check` is the timing pass's SWA check. When SWA is not faster than MHA, SWA's train ms/step
     cell carries SWA_DENSE_MARK (plan §2.3 item 2, decision 226); the note is the table's, added by `main`.
+    `decode_range` is {variant: (smallest, largest)} tok/s: the decode cell then reads the median with
+    the range in brackets (decision 225).
     """
     reference = "mha"
     reference_present = bool(analysis.losses.get(reference))
@@ -1436,14 +1480,14 @@ def headline_rows(
         static = static_columns(variant) if example is None else _static_text(_run_facts(example))
         # Plan §8.1: while the gate is shut, no cross-variant number is computed or viewed. Only
         # MHA's losses and the static and timing columns are shown; the rest of a variant's row waits.
-        withheld = variant != reference and not analysis.comparisons_allowed
+        withheld = variant != reference and not variant_results_shown(analysis)
         cells = {
             "variant": variant,
             "params": static["params"],
             "d_ff": static["d_ff"],
             "KV bytes/token/layer": static["KV bytes/token/layer"],
             "train ms/step": _timing(train_ms_per_step, variant),
-            "decode tok/s (batch 32, cache 4k)": _timing(decode_tok_per_s, variant),
+            "decode tok/s (batch 32, cache 4k)": _decode_cell(decode_tok_per_s, decode_range, variant),
             "val loss, every seed": BLANK if withheld else _losses_cell(analysis.losses.get(variant, {})),
         }
         if variant == tp.SWA_VARIANT and tp.swa_not_faster(swa_check) and cells["train ms/step"] != BLANK:
@@ -1873,10 +1917,12 @@ def render_arm_b(analysis: Analysis) -> str:
 SHARED_RATE_TITLE = "# Tuned against shared learning rate (plan §7.4 item 5)"
 SHARED_RATE_CAPTION = (
     "For each Arm A variant that runs at its own learning rate, three further standalone 100M runs on "
-    "init seeds 1 to 3 are made at MHA's rate (decision 224). The gap column is the variant's 100M branches "
-    "at its own rate minus those runs, by seed, with its interval; a negative value means the tuned rate gave "
-    "the lower loss. The sweep's own difference between the two rates was selected on, so these are fresh "
-    "seeds. No detection claim is made on this comparison (decision 224)."
+    "init seeds 1 to 3 are made at MHA's rate (decision 224). The two sides are on the same init seeds 1 to 3. "
+    "The gap column is the variant's 100M branches at its own rate minus those runs, and its interval is "
+    "computed with the test chosen at Gate 2 (paired by seed under the paired test, two groups of three runs "
+    "under Welch's test); a negative value means the tuned rate gave the lower loss. The sweep's own "
+    "difference between the two rates was selected on, so these are fresh seeds. No detection claim is made "
+    "on this comparison (decision 224)."
 )
 SHARED_RATE_COLUMNS = (
     "variant",
@@ -1956,6 +2002,8 @@ def render_context(analysis: Analysis) -> str:
     lines = ["# Context use (plan §10.3)", "", CONTEXT_CAPTION, "", SWA_CAPTION, ""]
     if not analysis.comparisons_allowed:
         lines += [f"Not computed: {GATE_WAIT} (see gates.md).", ""]
+    elif not variant_results_shown(analysis):
+        lines += [f"Not computed: {COMMITMENT_WAIT} (see gates.md).", ""]
     rows = []
     for variant in HEADLINE_VARIANTS:
         if variant == "mha":
@@ -2052,6 +2100,8 @@ def _rqw_report(
         return render_rqw(None, NO_TIMING)
     if not analysis.comparisons_allowed:
         return render_rqw(None, GATE_WAIT)
+    if not variant_results_shown(analysis):
+        return render_rqw(None, COMMITMENT_WAIT)
     try:
         estimate = rq.estimate(list(results), dict(ms_per_step))
     except rq.EstimateError as exc:
@@ -2119,7 +2169,8 @@ def check_timing_sources(results: Sequence[dict], timing_doc: dict | None, bench
 
 
 def _load_bench_documents(directory: str | Path) -> list[dict]:
-    """Every bench_*.json document in `directory`, schema-checked. The readers check gpu_shared."""
+    """Every bench_*.json document in `directory`, checked as timing_report checks them (bench.check_documents:
+    the same refusals, so a document the report refuses fills no table and no plot). The readers check gpu_shared."""
     paths = sorted(Path(directory).glob("bench_*.json"))
     if not paths:
         raise TableError(f"{directory}: no bench documents (bench_*.json)")
@@ -2133,6 +2184,10 @@ def _load_bench_documents(directory: str | Path) -> list[dict]:
             found = doc.get("schema") if isinstance(doc, dict) else None
             raise TableError(f"{path.name}: schema {found!r}, expected {bd.SCHEMA!r}")
         docs.append(doc)
+    try:
+        bd.check_documents(docs)
+    except bd.BenchError as exc:
+        raise TableError(str(exc)) from exc
     return docs
 
 
@@ -2175,6 +2230,7 @@ def main(argv: Sequence[str] | None = None, *, commitments: Mapping | None = Non
         ms_per_step = tp.read_ms_per_step(args.timing_pass) if timing_doc is not None else None
         swa_check = tp.swa_check_of(timing_doc) if timing_doc is not None else None
         decode = bd.read_decode_tok_per_s(args.bench) if args.bench else None
+        decode_span = bd.read_decode_range(args.bench) if args.bench else None
     except (TableError, mf.ManifestError, tp.TimingError, bd.BenchError, config.ConfigError, json.JSONDecodeError, OSError) as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -2187,10 +2243,16 @@ def main(argv: Sequence[str] | None = None, *, commitments: Mapping | None = Non
         notes.append("diverged runs on record, not results (plan §7.4 item 5): " + ", ".join(diverged))
     if skipped:
         notes.append("unfinished runs left out: " + ", ".join(skipped))
+    if args.bench:
+        notes.append(DECODE_RANGE_NOTE)
     noted = dataclasses.replace(analysis, notes=tuple(notes))
     texts = {
         "headline.md": render_markdown(
-            headline_rows(analysis, train_ms_per_step=ms_per_step, decode_tok_per_s=decode, swa_check=swa_check), notes,
+            headline_rows(
+                analysis, train_ms_per_step=ms_per_step, decode_tok_per_s=decode, decode_range=decode_span,
+                swa_check=swa_check,
+            ),
+            notes,
             results=results,
         ),
         "gates.md": render_gates(noted),
