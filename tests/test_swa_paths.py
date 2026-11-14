@@ -568,6 +568,14 @@ def test_the_record_does_not_depend_on_the_path_the_variant_file_names(monkeypat
     for track, path in ((sp.TRACKS[1], "chunked"), (sp.TRACKS[2], "flex")):
         attn, _, _ = sp._build(track, setup_for())
         assert attn.opt_path == path
+    # With FlexAttention missing, the chunked track is still built, whatever the file names; only the flex track fails.
+    import src.attention.sliding_window as swmod
+
+    monkeypatch.setattr(swmod, "_flex_importable", lambda: False)
+    attn, _, _ = sp._build(sp.TRACKS[1], setup_for())
+    assert attn.opt_path == "chunked"
+    with pytest.raises(ValueError):
+        sp._build(sp.TRACKS[2], setup_for())
 
 
 def test_a_flex_failure_in_a_later_repetition_drops_the_earlier_values_and_names_the_repetition(capsys):
