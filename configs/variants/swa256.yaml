@@ -3,5 +3,5 @@ attention:
   type: sliding_window
   n_kv_heads: 8
   window: 256
-  opt_path: chunked  # plan §2.3: stays "chunked" unless the GPU check at verification selects "flex"
+  opt_path: flex  # plan §2.3: stays "chunked" unless the GPU check at verification selects "flex"
 d_ff: 1024

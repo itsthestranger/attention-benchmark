@@ -1,7 +1,17 @@
-"""What the cpu tier says after an edit the runbook asks Phil to commit. Applies, runs the whole tier, restores."""
+"""What the cpu tier says after an edit the runbook asks Phil to commit. Applies, runs the whole tier, restores.
+
+Written by the reviewer of session 5 (docs/review_s5.md, H1). The build loop changed two things
+afterwards: the worktree is the checkout this file is in, not the reviewer's own, and case X4 was
+added (SWA's opt path, RUNBOOK §1.2). Run it from a clean checkout whenever a test touches a file
+Phil edits during the campaign:
+
+    python docs/review_s5/phil_edits.py X1 X2 X3 X4
+
+Each case takes one run of the cpu tier, about six minutes. Every case must end with 0 failed.
+"""
 import subprocess, sys, os
 from pathlib import Path
-WT = Path("/home/user/wt/review-s5")
+WT = Path(__file__).resolve().parents[2]
 env = dict(os.environ, OMP_NUM_THREADS="1")
 CASES = {
  "X1 commitments seed_count 5 (RUNBOOK 3.4)": [("configs/commitments.yaml", "\nseed_count: null", "\nseed_count: 5")],
@@ -13,6 +23,7 @@ CASES = {
     ("configs/data.yaml", "dataset_sha256: null ", "dataset_sha256: " + "a" * 64 + " "),
  ],
  "X3 commitments ladder l6_l8 (RUNBOOK 3.4)": [("configs/commitments.yaml", "\nladder: full", "\nladder: l6_l8")],
+ "X4 SWA opt path flex (RUNBOOK 1.2)": [("configs/variants/swa256.yaml", "opt_path: chunked", "opt_path: flex")],
 }
 for label in sys.argv[1:]:
     key = next(k for k in CASES if k.startswith(label))
