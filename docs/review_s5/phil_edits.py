@@ -9,7 +9,7 @@ Phil edits during the campaign:
 
 Each case takes one run of the cpu tier, about six minutes. Every case must end with 0 failed.
 """
-import subprocess, sys, os
+import subprocess, sys, os, tempfile
 from pathlib import Path
 WT = Path(__file__).resolve().parents[2]
 env = dict(os.environ, OMP_NUM_THREADS="1")
@@ -46,5 +46,7 @@ for label in sys.argv[1:]:
         by_file.setdefault(l.split("::")[0].split()[-1], []).append(l)
     for f, ls in sorted(by_file.items()):
         print(f"   {f}: {len(ls)}  e.g. {ls[0][:230]}")
-    (Path(__file__).parent / f"phil_{label}.log").write_text(proc.stdout[-200000:])
+    log = Path(tempfile.gettempdir()) / f"phil_{label}.log"  # outside the checkout: git status stays clean
+    log.write_text(proc.stdout[-200000:])
+    print("   log:", log)
 print("git status:", repr(subprocess.run(["git", "status", "--short"], cwd=WT, capture_output=True, text=True).stdout))

@@ -15,6 +15,7 @@ Phil answered the questions this runbook used to list here on 2026-11-13; the an
 | Item | Where | When |
 | --- | --- | --- |
 | The Kaggle image's torch, Python and CUDA versions. | §1.5 | Before the first run |
+| `opt_path` in `configs/variants/swa256.yaml`: `flex` if FlexAttention runs on the T4, else it stays `chunked`. | §1.2 | Before any SWA run |
 | `micro_batch`, `init_scale` and `growth_interval` in `configs/recipe.yaml`. | §2.2 | After the smoke runs |
 | The dataset and tokenizer hashes in `configs/data.yaml`. | §2.1 | After tokenizing |
 | The probe settings the pilot fixes (width, rate, steps per size), and the sizes of block 2 if you run it. | §2.3 | Before block 1 |
@@ -41,7 +42,7 @@ export SWEEP_SEED=21                                   # the init seed of every 
 - A learning rate appears in run names without the minus sign: `1.2e3` means 1.2e-3. Type it on the command line as `1.2e-3`.
 - Manifests land in `$OUT/manifests/opt/`. Tables and plots read that directory.
 - After any block: `python -m scripts.make_tables --manifests $OUT/manifests/opt --out $OUT/tables --skip-unfinished` rebuilds every table from what exists. It is safe at any time: it computes only what its inputs and the gates allow, and says in the notes what it skipped and why.
-- The shim notebook writes to `/kaggle/working/out`, the `OUT` of this runbook, so a run started by either is resumed by the other. It calls `scripts.train` with a run spec and nothing else. For a `branch`, a timing pass or the benchmark in a committed run, replace the module and its arguments on the notebook's last line and change nothing else; or run them in an interactive session.
+- The shim notebook writes to `/kaggle/working/out`, the `OUT` of this runbook, so a run started by either is resumed by the other. It calls `scripts.train` with a run spec and nothing else. For a `branch`, a timing pass or the benchmark in a committed run, replace the module and its arguments on the notebook's `try:` line, in your copy on Kaggle, and change nothing else; or run them in an interactive session.
 
 ### GPU utilisation log
 
@@ -71,7 +72,7 @@ python -m scripts.prune --out $OUT --final-short
 python -m scripts.prune --out $OUT --final-short --apply
 ```
 
-`--final-short` also removes the final checkpoint of every completed branch and of every completed run shorter than 300M (sweep points, the null control, data-order runs, reruns, Arm B, shared-rate runs). Nothing reads those again: their results are in their manifests. The final checkpoints of the 300M runs stay, 28 files after week 3 and at most 43 after week 4, about 9 GB; `evaluate.py` and a later Phase 6 load them. `--final` removes those too: use it only when the tables are final and Phase 6 is decided.
+`--final-short` also removes the final checkpoint of every completed branch and of every completed run shorter than 300M (sweep points, the null control, data-order runs, reruns, Arm B, shared-rate runs). Nothing reads those again: their results are in their manifests. The final checkpoints of the 300M runs stay: 28 files after week 3 (40 if the rule picked 8 seeds) and at most 43 after week 4, about 9 GB; `evaluate.py` and a later Phase 6 load them. `--final` removes those too: use it only when the tables are final and Phase 6 is decided.
 
 ## 1. Verification (the 1070 and one short T4 session, before any reported GPU hour)
 
@@ -81,7 +82,7 @@ python -m scripts.prune --out $OUT --final-short --apply
 CUBLAS_WORKSPACE_CONFIG=:4096:8 pytest -m gpu -q
 ```
 
-Check: every test passes; none is skipped. These tests have never run. A failure here is a finding about the harness, not a flake: stop and fix it. `STATUS.md` lists them by file.
+Check: every test passes; none is skipped. These tests have never run. A failure here is a finding about the harness, not a flake: stop and fix it. `STATUS.md` lists them by file. The one exception is `tests/test_sliding_window.py::test_opt_paths_match_ref_on_cuda[flex]`: it fails if FlexAttention does not compile or run on this GPU. On the 1070 that is a result to record, not a defect, and it decides nothing; what counts is the T4 (§1.2).
 
 ### 1.2 The `t4` tier, in one short Kaggle session
 
@@ -89,12 +90,12 @@ Check: every test passes; none is skipped. These tests have never run. A failure
 CUBLAS_WORKSPACE_CONFIG=:4096:8 pytest -m "gpu or t4" -q
 ```
 
-Check: every test passes on the T4, with two exceptions that are results, not defects, and do not stop the session:
+Check: every test passes on the T4, with three exceptions that are results, not defects, and do not stop the session:
 
-- `tests/test_sliding_window.py::test_swa_attention_time_at_ctx_1024_is_below_mha[flex]` fails if FlexAttention does not compile or run on sm75. Then the chunked path is SWA's `opt` path: leave `opt_path: chunked` in `configs/variants/swa256.yaml` and record it.
+- `tests/test_sliding_window.py::test_opt_paths_match_ref_on_cuda[flex]` and `tests/test_sliding_window.py::test_swa_attention_time_at_ctx_1024_is_below_mha[flex]` fail if FlexAttention does not compile or run on sm75. Then the chunked path is SWA's `opt` path: leave `opt_path: chunked` in `configs/variants/swa256.yaml` and record it.
 - `tests/test_sliding_window.py::test_swa_attention_time_at_ctx_1024_is_below_mha[chunked]` fails if the chunked path is not faster than MHA at context 1,024, which plan §2.3 itself expects ("treat the fallback's speedup as near zero"). Record both attention times from the failure message. The timing pass of §3.1 will then mark SWA's timings (plan §18, A15).
 
-If the `flex` case passes and is the faster one, set `opt_path: flex` by pull request before any SWA run; it is part of the configuration hash. Any other failure is a finding about the harness: stop and fix it. In particular the backend selection and GQA/MQA decode time below MHA's at cache 8k must pass. Record whether the fused kernel copies K and V in decode (plan §2.3); if it does, decode needs the explicit matmul, disclosed.
+Which path SWA trains with follows plan §2.3, where FlexAttention is the first choice and the chunked path the fallback, and needs no timing comparison: if `test_opt_paths_match_ref_on_cuda[flex]` passes on the T4 (FlexAttention compiles, runs and agrees with the reference), set `opt_path: flex` by pull request before any SWA run; otherwise leave `chunked`. The value is part of the configuration hash, so it does not change afterwards. No script times the two paths side by side; a passing timing case prints nothing. Any other failure is a finding about the harness: stop and fix it. In particular the backend selection and GQA/MQA decode time below MHA's at cache 8k must pass. Record whether the fused kernel copies K and V in decode (plan §2.3); if it does, decode needs the explicit matmul, disclosed.
 
 ### 1.3 Quota
 
@@ -102,7 +103,7 @@ Start a T4 ×2 session, note the quota counter, wait ten minutes, note it again.
 
 ### 1.4 Cold-start dry run of the shim
 
-Fill the placeholders of `notebooks/kaggle_shim.ipynb` (repository URL, pinned commit, dataset name, run spec, `GPU_SHARED`, `EXPECTED_BACKEND`) and commit the notebook so that it runs from the top in a fresh container. It can only run after §2.1, because nothing starts without the dataset hashes.
+Upload `notebooks/kaggle_shim.ipynb` to Kaggle, fill its placeholders there (repository URL, pinned commit, dataset name, run spec, `GPU_SHARED`, `EXPECTED_BACKEND`) and commit it on Kaggle ("Save & Run All") so that it runs from the top in a fresh container. The notebook in the repository stays the template with its placeholders: do not commit a filled-in copy to git. Its tests pin the template (the call of `scripts.train`, and no word that looks like a credential, which a dataset name such as `...-tokenized` would trip). A run spec for a job is a new file under `configs/runs/`, committed to git like any config. It can only run after §2.1, because nothing starts without the dataset hashes.
 
 Check: the run starts from step 0, writes checkpoints under `$OUT`, and a second commit of the same notebook resumes without input. If `$OUT` does not survive between sessions, fix the storage before anything else.
 

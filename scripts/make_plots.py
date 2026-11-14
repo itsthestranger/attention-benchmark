@@ -68,7 +68,8 @@ KERNEL_DISCLOSURE = (
 )
 # Decision 225: the speed values are medians; their ranges are in inference.md.
 SPEED_MEDIAN_CAPTION = (
-    "Speed values are medians of the inference benchmark's repetitions; the range of each is in inference.md (decision 225)."
+    "Speed values are medians of the inference benchmark's repetitions. The ranges of latency and of ms per token are "
+    "in inference.md; the range of the decode tokens/s is in the headline table (decision 225)."
 )
 WITHHELD_CAPTION = (
     "Variant runs are withheld until the controls pass and the seed count is committed (plan §1.4, "

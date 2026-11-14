@@ -232,6 +232,40 @@ def test_the_commitments_are_made_before_the_runs_they_govern():
     assert "detected in the wrong direction" in RUNBOOK  # decision 216, how to read the positive control
 
 
+def test_every_test_the_runbook_names_exists():
+    """Re-check of review S5: §1.1 and §1.2 name the hardware tests that may fail for a reason the plan
+    gives. A renamed test or parameter would leave Phil with an id that matches nothing."""
+    ids = re.findall(r"`(tests/[\w/]+\.py)::(\w+)\[(\w+)\]`", RUNBOOK)
+    assert len(set(ids)) >= 3
+    for path, name, parameter in ids:
+        source = (ROOT / path).read_text(encoding="utf-8")
+        start = source.index(f"def {name}(")
+        decorators = source[source.rfind("\n\n", 0, start):start]
+        assert f'"{parameter}"' in decorators, (path, name, parameter)
+    flex = {name for _, name, parameter in ids if parameter == "flex"}
+    assert flex == {"test_opt_paths_match_ref_on_cuda", "test_swa_attention_time_at_ctx_1024_is_below_mha"}
+
+
+def test_the_probe_run_counts_in_the_text_are_the_loops():
+    """Review S5, M4: block 1 is 3 sizes x 8 models x 10 seeds, block 2 is 5 commands x 8 models x 10 seeds."""
+    block_2 = next(b for b in bash_blocks() if "--task multihop" in b)
+    assert block_2.count("python -m scripts.train_probe") == 5
+    assert "240 runs" in RUNBOOK and "400 runs" in RUNBOOK and "320 runs" not in RUNBOOK
+    assert 3 * 8 * 10 == 240 and 5 * 8 * 10 == 400
+
+
+def test_no_script_reads_a_declaration_from_the_environment():
+    """Review S5, G1, and its re-check: the declarations come from configs/commitments.yaml of the
+    checkout. The tests of the scripts replace the loader, so they would not see a path taken from
+    an environment variable; this one reads the sources."""
+    for path in ("src/config.py", "scripts/make_tables.py", "scripts/make_plots.py", "scripts/select_lr.py"):
+        source = (ROOT / path).read_text(encoding="utf-8")
+        assert "os.environ" not in source and "getenv" not in source, path
+    loader = (ROOT / "src" / "config.py").read_text(encoding="utf-8")
+    body = loader[loader.index("def load_commitments("):loader.index("def uncommitted(")]
+    assert 'CONFIG_DIR / "commitments.yaml"' in body
+
+
 def test_the_sweep_grid_and_the_registered_seeds_are_the_codes():
     grid_line = next(l for l in RUNBOOK.splitlines() if l.strip().startswith("for LR in 3e-4"))
     rates = [float(x) for x in re.findall(r"[\d.]+e-\d+", grid_line)]
