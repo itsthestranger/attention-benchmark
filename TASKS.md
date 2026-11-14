@@ -135,9 +135,9 @@ Phil merged T-52 and confirmed the five readings of session 5 on 2026-11-14, wit
 
 | ID | Task | Owner | Depends on | Plan | Done when |
 | --- | --- | --- | --- | --- | --- |
-| T-58 | Record the decisions of session 6 (245 to 248), this task list and the status | O | T-52 | §17 | Decisions 245 to 248 are in `docs/decisions.md` |
-| T-59 | Plots 2 and 8 draw the smallest and the largest repetition of every benchmark value as whiskers; the caption says so (245, 246) | W | T-58 | §10.4, §10.5 | Each whisker has a test that fails without it; a blank plot draws none |
-| T-60 | `scripts/swa_paths.py` records the attention times of MHA and of both SWA `opt` paths; `timing_report --swa-paths` prints them in `timing.md` with the sentence that they selected nothing; the runbook command in §1.2 (245, 247) | W | T-58 | §2.3, §13.3 | The script runs end to end on CPU with a tiny model; a path that cannot run is recorded, not raised; the blank `timing.md` is regenerated; `tests/test_runbook.py` parses the new command |
+| T-58 ✅ | Record the decisions of session 6 (245 to 248), this task list and the status | O | T-52 | §17 | Decisions 245 to 248 are in `docs/decisions.md` |
+| T-59 ✅ | Plots 2 and 8 draw the smallest and the largest repetition of every benchmark value as whiskers; the caption says so (245, 246) | W | T-58 | §10.4, §10.5 | Each whisker has a test that fails without it; a blank plot draws none |
+| T-60 ✅ | `scripts/swa_paths.py` records the attention times of MHA and of both SWA `opt` paths; `timing_report --swa-paths` prints them in `timing.md` with the sentence that they selected nothing; the runbook command in §1.2 (245, 247) | W | T-58 | §2.3, §13.3 | The script runs end to end on CPU with a tiny model; a path that cannot run is recorded, not raised; the blank `timing.md` is regenerated; `tests/test_runbook.py` parses the new command |
 | T-61 | A fresh agent re-checks T-59 and T-60; its findings are fixed or listed; final `STATUS.md`; closes T-31 (248) | O | T-59, T-60 | §17.4 | Handover items 1 and 6 |
 
 ## M5 — Operations and handover
