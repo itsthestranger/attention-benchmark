@@ -93,13 +93,18 @@ SWA_PATHS_TITLE = "## SWA's two opt paths (plan §2.3)"
 SWA_PATHS_COLUMNS = ("track", "attention, ms (median)", f"attention, ms (min{RANGE_SEP}max)", "ratio to MHA")
 SWA_PATHS_CAPTIONS = (
     "Timed: one forward and one backward of the attention module alone, in opt mode, at the batch and "
-    "context of the source line. It is not a training step, so these numbers are not the ms/step of the timing table.",
+    "context of the source line, with the SDPA backend of the source line enforced. It is not a training "
+    "step, so these numbers are not the ms/step of the timing table.",
     "This table selected nothing: SWA trains on flex if FlexAttention runs on the T4 and agrees with the "
     "reference, else on chunked (plan §2.3, decision 244). The times are recorded so that the other path's "
-    "time is known (decision 245).",
+    "time is known (decision 245). Ratio is each track's median over MHA's median.",
+    "The swa256 rows of the timing table used the path named by opt_path in configs/variants/swa256.yaml "
+    "at the commit of the timing pass; this section does not record which.",
     "The record has its own source line because it is made at the verification step and may come from "
     "another session than the timing pass.",
 )
+# Printed in the source line of a record made with --synthetic: such a record measures nothing.
+SWA_PATHS_SYNTHETIC = " Synthetic test model: these numbers mean nothing."
 # The SWA comparison under timing.md's table (plan §2.3 item 2): both attention times, no verdict word.
 SWA_COMPARISON = "SWA attention time: {swa} ms/step; MHA: {mha} ms/step (attention share × ms/step, plan §2.3 item 2)."
 PREFILL_COLUMNS = ("context", "batch", "latency, ms", "latency, ms (min–max)", "tokens/s", "peak allocated, MiB")
@@ -394,6 +399,7 @@ def _swa_paths_source(record: Mapping | None) -> str:
         f"CUDA {_text(env.get('cuda'))}; driver {_text(env.get('driver'))}; {field('precision')}; "
         f"batch {field('batch')}, context {field('context')}; {field('repetitions')} repetitions of "
         f"{field('repeats')} calls after {field('warmup')} warm-up calls."
+        + (SWA_PATHS_SYNTHETIC if record is not None and record.get("synthetic") else "")
     )
 
 
@@ -410,7 +416,7 @@ def _swa_paths_rows(record: Mapping | None) -> tuple[list[dict], list[str]]:
         entry = tracks[key]
         if entry["error"] is not None:
             rows.append({"track": key, SWA_PATHS_COLUMNS[1]: BLANK, SWA_PATHS_COLUMNS[2]: BLANK, SWA_PATHS_COLUMNS[3]: BLANK})
-            notes.append(f"{key} could not run here: {entry['error']}")
+            notes.append(f"{key} could not run here: {sp.one_line(entry['error'])}")
             continue
         ms = float(entry["attention_ms"])
         rows.append({

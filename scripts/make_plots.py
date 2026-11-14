@@ -540,8 +540,9 @@ def plot_inference_frontier(inp: PlotInputs) -> Figure:
                   linewidth=WHISKER_WIDTH, zorder=2).set_gid(f"range:{variant}")
         _dots(ax, [x] * len(ys), ys, _colour(variant))
         _mean_mark(ax, x, mean, _colour(variant))
-        ax.annotate(DISPLAY[variant], (x, mean), xytext=(7, 0), textcoords="offset points",
-                    fontsize=8, va="center")
+        # Above the whisker, so that the range does not strike the label through (review S6, M6).
+        ax.annotate(DISPLAY[variant], (x, mean), xytext=(7, 5), textcoords="offset points",
+                    fontsize=8, va="bottom")
     ax.margins(x=0.1)
     if not rows:
         _no_data(ax)

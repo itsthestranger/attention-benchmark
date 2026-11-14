@@ -1502,3 +1502,58 @@ def test_every_whisker_has_its_variants_colour(figures):
 
 def test_the_caption_says_a_short_whisker_is_hidden_by_its_marker():
     assert "shorter than its marker is hidden" in " ".join(m.SPEED_MEDIAN_CAPTION.split())
+
+
+# --- Review S6 (docs/review_s6.md): P04, P10, M6 -------------------------------------------------
+
+
+def _lopsided_bench() -> list[dict]:
+    """The synthetic records with every range moved off centre: smallest = median - 1%, largest = median + 7%."""
+    import copy
+
+    records = copy.deepcopy(fpi.bench_records())
+    for record in records:
+        for rows, fields in ((record["prefill"], ("latency_ms", "tok_per_s")), (record["decode"], ("ms_per_token", "tok_per_s"))):
+            for row in rows:
+                for field in fields:
+                    low, high = row[field] * 0.99, row[field] * 1.07
+                    row[f"{field}_min"], row[f"{field}_max"] = low, high
+                    row[f"{field}_by_repetition"] = [high, row[field], low]
+    return records
+
+
+def test_a_lopsided_range_is_drawn_as_it_is_not_mirrored_about_the_median(campaign):
+    bench = _lopsided_bench()
+    inputs_ = make_inputs_committed(campaign, bench, fpi.probe_records(), fpi.retrieval_records())
+    by_key = {(r["variant"], r["mode"]): r for r in bench}
+    ax = m.plot_inference_frontier(inputs_).axes[0]
+    for variant in mt.HEADLINE_VARIANTS:
+        row = _headline_decode_row(by_key[(variant, "opt")])
+        (segment,) = _whisker_segments(_whisker_artists(ax, f"range:{variant}")[0])
+        np.testing.assert_allclose(segment[:, 0], [row["tok_per_s_min"], row["tok_per_s_max"]],
+                                   rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+        assert segment[1, 0] - row["tok_per_s"] > 2 * (row["tok_per_s"] - segment[0, 0])  # the fixture is lopsided
+    panels = m.plot_latency(inputs_).axes
+    record = by_key[("mha", "opt")]
+    prefill = sorted((r["context"], r["latency_ms_min"], r["latency_ms_max"]) for r in record["prefill"] if r["batch"] == 1)
+    segments = _whisker_segments(_whisker_artists(panels[0], "range:opt:mha")[0])
+    np.testing.assert_allclose(segments[:, 0, 1], [lo for _, lo, _ in prefill], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+    np.testing.assert_allclose(segments[:, 1, 1], [hi for _, _, hi in prefill], rtol=FLOAT64_IDENTITY, atol=FLOAT64_IDENTITY)
+
+
+def test_every_whisker_is_drawn_with_a_visible_line(figures):
+    assert m.WHISKER_WIDTH >= 1.0
+    whiskers = [w for name in ("02_inference_frontier.png", "08_latency.png")
+                for ax in figures[name].axes for w in _whisker_artists(ax)]
+    assert whiskers
+    for whisker in whiskers:
+        assert set(np.atleast_1d(whisker.get_linewidths()).tolist()) == {m.WHISKER_WIDTH}, whisker.get_gid()
+        assert whisker.get_visible() and (whisker.get_alpha() is None or whisker.get_alpha() == 1)
+
+
+def test_the_label_of_plot_2_sits_above_its_whisker(figures):
+    ax = figures["02_inference_frontier.png"].axes[0]
+    labels = [t for t in ax.texts if t.get_text() in {m.DISPLAY[v] for v in mt.HEADLINE_VARIANTS}]
+    assert len(labels) == len(mt.HEADLINE_VARIANTS)
+    for label in labels:
+        assert label.get_va() == "bottom" and label.xyann[1] > 0, label.get_text()

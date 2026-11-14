@@ -35,6 +35,7 @@ Source: GPU —; backend —; torch —; CUDA —; driver —; —; batch —, c
 | swa256/chunked | — | — | — |
 | swa256/flex | — | — | — |
 
-Timed: one forward and one backward of the attention module alone, in opt mode, at the batch and context of the source line. It is not a training step, so these numbers are not the ms/step of the timing table.
-This table selected nothing: SWA trains on flex if FlexAttention runs on the T4 and agrees with the reference, else on chunked (plan §2.3, decision 244). The times are recorded so that the other path's time is known (decision 245).
+Timed: one forward and one backward of the attention module alone, in opt mode, at the batch and context of the source line, with the SDPA backend of the source line enforced. It is not a training step, so these numbers are not the ms/step of the timing table.
+This table selected nothing: SWA trains on flex if FlexAttention runs on the T4 and agrees with the reference, else on chunked (plan §2.3, decision 244). The times are recorded so that the other path's time is known (decision 245). Ratio is each track's median over MHA's median.
+The swa256 rows of the timing table used the path named by opt_path in configs/variants/swa256.yaml at the commit of the timing pass; this section does not record which.
 The record has its own source line because it is made at the verification step and may come from another session than the timing pass.
