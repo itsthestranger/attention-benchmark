@@ -6,7 +6,9 @@ plan §1.4). The analysis tests no primary while the seed count is missing or di
 the rule computes. A fake campaign stands for a campaign after its gate, so its tests commit what
 the rule gives for those runs: `committed` computes that, and the wrappers below pass it on.
 
-Tests of the commitment itself (a missing one, a wrong one) call the scripts directly.
+Tests of the commitment itself (a missing one, a wrong one) call the scripts directly. No test
+depends on what the repository's own configs/commitments.yaml holds: Phil fills that file in
+during the campaign (review S5, H1).
 """
 
 from __future__ import annotations
@@ -69,32 +71,29 @@ def write_commitments(path: Path, commitments: dict) -> Path:
     return path
 
 
-def commitment_args(argv, *, ladder: str = LADDER_FULL) -> list[str]:
-    """["--commitments", FILE] for a command line that reads --manifests DIR; [] for --blank.
+def held_for(argv, *, ladder: str = LADDER_FULL) -> dict | None:
+    """What the repository's file would hold after the gate, for a command line that reads --manifests DIR.
 
-    The file is written beside the manifest directory and holds what the rule gives for the
-    finished runs in it. A directory that cannot be read gives an uncommitted file: the command
+    None for --blank and for a command line without --manifests: the command then reads what it
+    reads by itself. A directory that cannot be read gives an uncommitted declaration: the command
     then reports its own error.
     """
     argv = [str(a) for a in argv]
-    if "--blank" in argv or "--commitments" in argv or "--manifests" not in argv:
-        return []
+    if "--blank" in argv or "--manifests" not in argv:
+        return None
     directory = Path(argv[argv.index("--manifests") + 1])
     try:
         manifests = make_tables.load_manifests(directory)
     except (make_tables.TableError, mf.ManifestError, json.JSONDecodeError, OSError):
-        manifests = None
-    held = dict(UNCOMMITTED, ladder=ladder) if manifests is None else _committed_for_manifests(manifests, ladder=ladder)
-    target = directory.parent / f"{directory.name}.commitments.yaml"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    return ["--commitments", str(write_commitments(target, held))]
+        return dict(UNCOMMITTED, ladder=ladder)
+    return _committed_for_manifests(manifests, ladder=ladder)
 
 
 def tables_main(argv) -> int:
     """make_tables.main with the rule's seed count committed for the manifests it reads."""
-    return make_tables.main([*argv, *commitment_args(argv)])
+    return make_tables.main(list(argv), commitments=held_for(argv))
 
 
 def plots_main(argv) -> int:
     """make_plots.main with the rule's seed count committed for the manifests it reads."""
-    return make_plots.main([*argv, *commitment_args(argv)])
+    return make_plots.main(list(argv), commitments=held_for(argv))

@@ -34,7 +34,7 @@ from tests.fixtures.fake_campaign import DATA_ORDER_SEEDS, LADDER_PARAMS, NULL_S
 from tests.fixtures.fake_manifests import fake_manifest
 from tests.tolerances import FLOAT64_IDENTITY
 from tests.fixtures.commitments import (
-    analyse_committed, committed, make_inputs_committed, plots_main, write_commitments,
+    analyse_committed, committed, make_inputs_committed, plots_main,
 )
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -1331,7 +1331,7 @@ def test_without_l10_the_plots_have_no_seed_count_until_the_cut_is_declared(camp
     assert declared.analysis == mt.analyse(list(runs), commitments=cut)
 
 
-def test_the_command_line_passes_the_commitments_file_to_the_analysis(campaign, tmp_path, monkeypatch, capsys):
+def test_the_command_line_passes_the_declarations_to_the_analysis(campaign, tmp_path, monkeypatch, capsys):
     directory = tmp_path / "manifests"
     for manifest in _without_l10(campaign):
         mf.write_manifest(manifest, directory)
@@ -1347,12 +1347,15 @@ def test_the_command_line_passes_the_commitments_file_to_the_analysis(campaign, 
     common = ["--manifests", str(directory), "--bench", str(none), "--probes", str(none / "p.json"),
               "--retrieval", str(none / "r.json")]
     cut = {"ladder": "l6_l8", "seed_count": 5}
-    file = write_commitments(tmp_path / "commitments.yaml", cut)
+    file_holds = {"ladder": "full", "seed_count": 8}
+    monkeypatch.setattr(config, "load_commitments", lambda path=None: dict(file_holds))
     assert m.main([*common, "--out", str(tmp_path / "a")]) == 0
-    assert m.main([*common, "--out", str(tmp_path / "b"), "--commitments", str(file)]) == 0
+    assert m.main([*common, "--out", str(tmp_path / "b")], commitments=cut) == 0
     capsys.readouterr()
-    # Without the flag the plots read configs/commitments.yaml, like the tables.
-    assert seen == [config.load_commitments(), cut]
+    # The plots read the repository's file, like the tables; a mapping given in Python replaces it.
+    assert seen == [file_holds, cut]
+    with pytest.raises(SystemExit):
+        m.main([*common, "--out", str(tmp_path / "c"), "--commitments", "x.yaml"])  # no flag names a file (review S5, G1)
     with pytest.raises(SystemExit):
         m.main([*common, "--out", str(tmp_path / "c"), "--l10-cut"])  # the flag is gone (decision 220)
     capsys.readouterr()

@@ -98,6 +98,14 @@ def load_commitments(path: str | Path | None = None) -> dict:
     return {"ladder": ladder, "seed_count": seed_count}
 
 
+def uncommitted() -> dict:
+    """The declarations of a campaign that has declared nothing yet: the full ladder, no seed count.
+
+    The blank tables and plots are built with this, whatever the repository's file holds by then.
+    """
+    return {"ladder": _COMMITTED_LADDERS[0], "seed_count": None}
+
+
 def _seed_counts() -> list[int]:
     sc = load_prereg()["seed_count"]
     return [len(sc["base_seeds"]), len(sc["base_seeds"]) + len(sc["added_seeds"])]
