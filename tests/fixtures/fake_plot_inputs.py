@@ -246,7 +246,7 @@ def bench_records() -> list[dict]:
                 "backend": "efficient" if mode == "opt" else None,
                 "gpu_shared": False,
                 "repetitions": BENCH_REPETITIONS,
-                "kv_bytes_per_token": {"analytic": 1536, "measured": 1540.0},
+                "kv_bytes_per_token": {"analytic": 1536, "measured": 1540.0, "measured_tokens": None},
                 "prefill": prefill,
                 "decode": decode,
                 "max_batch_at_8k": 64,
