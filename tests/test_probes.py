@@ -25,6 +25,7 @@ from src.eval import synthetic as syn
 from src.eval.synthetic import BLANK, IGNORE, SEP, ProbeStream, accuracy, counts, generate, make_spec, solve
 from src.model import build_model
 from src.training.trainer import Trainer
+from tests.fixtures.unfilled import unfilled_recipe
 
 SPECS = [
     make_spec("mqar", n_pairs=4),
@@ -1053,7 +1054,8 @@ def test_held_out_counts_use_the_run_mode(monkeypatch, mode):
     assert modes_seen and set(modes_seen) == {mode}
 
 
-def test_an_override_reaches_the_resolved_config_and_changes_hash_and_file_name(tmp_path):
+def test_an_override_reaches_the_resolved_config_and_changes_hash_and_file_name(tmp_path, monkeypatch):
+    unfilled_recipe(monkeypatch)  # so that the plain configuration has no init_scale of its own
     spec = make_spec("mqar", n_pairs=4)
     plain = probe_resolved("mha", spec, d_model=64, init_seed=1, steps=3, peak_lr=1e-3,
                            sequences_per_step=4, n_layers=1)
