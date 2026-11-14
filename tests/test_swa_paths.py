@@ -169,6 +169,45 @@ def test_the_tracks_run_round_robin_in_track_order_repetition_major():
     assert calls == ["mha", "swa256/chunked", "swa256/flex"] * 3
 
 
+def test_the_entry_is_the_median_of_three_repetitions_not_their_mean():
+    order = []  # per track: repetition values 1, 2 and 9; the mean would be 4
+
+    def time_fn(track, _setup):
+        order.append(track.key)
+        return [{0: 1.0, 1: 2.0, 2: 9.0}[order.count(track.key) - 1]]
+
+    tracks = sp.run_tracks(setup_for(repetitions=3), time_fn=time_fn)
+    for key in sp.ORDER:
+        assert tracks[key]["attention_ms_by_repetition"] == [1.0, 2.0, 9.0]
+        assert tracks[key]["attention_ms"] == 2.0
+        assert (tracks[key]["attention_ms_min"], tracks[key]["attention_ms_max"]) == (1.0, 9.0)
+
+
+def test_a_repetition_makes_its_warmup_calls_and_its_timed_calls_at_the_batch_of_the_setup(monkeypatch):
+    real_step, shapes = sp._step, []
+
+    def counting(attn, x, freqs, device):
+        shapes.append(tuple(x.shape))
+        real_step(attn, x, freqs, device)
+
+    monkeypatch.setattr(sp, "_step", counting)
+    setup = setup_for(batch=3, repeats=4, warmup=2)
+    durations = sp.time_repetition(sp.TRACKS[0], setup)
+    assert len(durations) == 4
+    assert len(shapes) == 2 + 4  # the warm-up calls are made, and not timed
+    context, d_model = tp.SYNTHETIC_DIMS["model.context_length"], tp.SYNTHETIC_DIMS["model.d_model"]
+    assert set(shapes) == {(3, context, d_model)}
+
+
+@pytest.mark.parametrize("track", sp.TRACKS[:2], ids=lambda track: track.key)
+def test_a_call_is_a_forward_and_a_backward(track):
+    attn, x, freqs = sp._build(track, setup_for())
+    assert x.grad is None and all(p.grad is None for p in attn.parameters())
+    sp._step(attn, x, freqs, CPU)
+    assert x.grad is not None and x.grad.abs().sum() > 0  # the gradient reached the module's input
+    assert any(p.grad is not None for p in attn.parameters())
+
+
 # --- The opt paths the tracks really run -------------------------------------------------------
 
 
