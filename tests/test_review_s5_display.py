@@ -262,6 +262,21 @@ def test_plot_1_has_no_multiplier_when_the_slope_is_not_positive():
     assert _multiplier_mentions(fig) == []
 
 
+def test_plot_1_has_no_multiplier_when_only_the_rules_slope_is_not_positive():
+    """Added by the orchestrator in review: the case review S5 reproduced for M3. With a flat ladder
+    and 8 seeds, synthetic campaign 35 has a rule slope below zero (the registered seeds) and an
+    all-seed slope above zero. Decision 223 keys "no multiplier" on the rule's slope, so the plot
+    draws no multiplier axis although the fit it would use is usable."""
+    campaign = fpi.with_eval_fields(fake_campaign(slope=0.0, n_primary_seeds=8, seed=35))
+    n = committed(campaign)["seed_count"]
+    inp = _inputs(campaign, n)
+    a = inp.analysis
+    assert a.rule_fit.b < 0.0 < a.fit.b, "this synthetic campaign is meant to have the two slopes disagree in sign"
+    assert a.decision.slope_not_positive and n == 8
+    assert a.comparisons and a.multipliers == {}
+    assert _multiplier_mentions(m.plot_primary_gaps(inp)) == []
+
+
 def test_plot_1_has_its_multiplier_axis_when_the_slope_is_positive(campaign, right):
     fig = m.plot_primary_gaps(_inputs(campaign, right))
     assert _multiplier_mentions(fig)
